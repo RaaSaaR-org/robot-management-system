@@ -48,8 +48,11 @@ import {
 export class RecordingError extends Error {
   constructor(
     message: string,
-    /** Machine-readable, stable across rewordings. */
-    readonly code: 'RECORDING_REFUSED' | 'RECORDING_UNAVAILABLE',
+    /**
+     * Machine-readable, stable across rewordings. `CAMERA_NOT_SERVED` is a
+     * refusal whose message names the cameras (TASK-441).
+     */
+    readonly code: 'RECORDING_REFUSED' | 'RECORDING_UNAVAILABLE' | 'CAMERA_NOT_SERVED',
     /** The HTTP status this deserves. 409: you asked for something I will not
      *  do. 503: I cannot do it YET, ask again. */
     readonly status: 409 | 503,
@@ -417,7 +420,13 @@ export class EpisodeRecorder {
   private simulated = true;
   /** The sidecar's write mode as reported at start, for provenance. */
   private writeMode: string | null = null;
-  private imageSize: { width: number; height: number } | null = null;
+  /**
+   * Each camera's picture size, by dataset key, learned from that camera's
+   * first JPEG (TASK-441). One size for every camera was right only while a
+   * session recorded one camera: a 640x480 wrist camera beside a 1280x720 head
+   * would have been declared at the head's size in `info.json`.
+   */
+  private imageSizes = new Map<string, { width: number; height: number }>();
 
   private episodes: LiveEpisode[] = [];
   private current: LiveEpisode | null = null;
@@ -529,7 +538,25 @@ export class EpisodeRecorder {
     if (wanted === undefined) {
       const available = await this.hooks.listCameras().catch(() => [] as string[]);
       wanted = available.includes('head_camera') ? ['head_camera'] : available.slice(0, 1);
+    } else if (wanted.length > 0) {
+      // A camera the robot does not serve would fail every snapshot, and a tick
+      // is all-or-nothing: the session would "record" a column of drops. Named
+      // up front instead, in the order asked, so the operator knows which
+      // camera to look at (TASK-441). A list that cannot be read proves nothing
+      // is served.
+      const available = await this.hooks.listCameras().catch(() => [] as string[]);
+      const missing = wanted.filter((camera) => !available.includes(camera));
+      if (missing.length > 0) {
+        throw new RecordingError(
+          `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not being served — ` +
+            `check the ${missing.length === 1 ? 'camera' : 'cameras'} or start a Head only session`,
+          'CAMERA_NOT_SERVED',
+          409,
+        );
+      }
     }
+    // The requested order is kept: the first video feature is the one the
+    // episode viewer treats as primary, and the session asks head first.
     this.cameras = mapCameras(this.scene, wanted);
 
     // The MEASURED side must be able to fill the layout before the first frame:
@@ -572,6 +599,7 @@ export class EpisodeRecorder {
     this.shadows = req.shadows === true;
     this.inputMode = req.inputMode ?? null;
     this.episodes = [];
+    this.imageSizes = new Map();
     this.acceptedFrames = 0;
     this.totalDropped = 0;
     this.totalRepeated = 0;
@@ -836,11 +864,12 @@ export class EpisodeRecorder {
           n += 1;
         }
       }
+      const size = this.imageSizes.get(cam.key);
       writerCameras.push({
         key: cam.key,
         framesDir: seqDir,
-        width: this.imageSize?.width ?? 640,
-        height: this.imageSize?.height ?? 480,
+        width: size?.width ?? 640,
+        height: size?.height ?? 480,
       });
     }
 
@@ -1097,7 +1126,10 @@ export class EpisodeRecorder {
         for (let i = 0; i < this.cameras.length; i++) {
           const cam = this.cameras[i]!;
           const jpeg = shots[i] as Buffer;
-          if (!this.imageSize) this.imageSize = jpegSize(jpeg);
+          if (!this.imageSizes.has(cam.key)) {
+            const size = jpegSize(jpeg);
+            if (size) this.imageSizes.set(cam.key, size);
+          }
           const path = join(
             this.episodeDir(episode.index),
             cam.key,
@@ -1257,7 +1289,9 @@ export class EpisodeRecorder {
   }
 
   private thumbnailOf(ep: LiveEpisode): EpisodeThumbnail | null {
-    const cam = this.cameras[0];
+    // The head view when it is recorded: a wrist close-up of a gripper says
+    // little about which take this was (TASK-441).
+    const cam = this.cameras.find((c) => c.camera === 'head_camera') ?? this.cameras[0];
     if (!cam) return null;
     const frame = middleFrame(Math.min(ep.frames.length, ep.images.get(cam.key)?.length ?? 0));
     return frame === null ? null : { camera: cam.key, frame };

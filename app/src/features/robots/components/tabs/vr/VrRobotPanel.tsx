@@ -20,6 +20,7 @@ import { VrButton, VR_BUTTON_HEIGHT_M } from './VrButton';
 import {
   SEVERITY_COLOR,
   cameraPanelLine,
+  wristPanelLine,
   composeRobotPanel,
   panelFactsFromTelemetry,
   pickWhyLine,
@@ -27,11 +28,13 @@ import {
   type ServerWhy,
 } from './vrWhy';
 import { useVrCameraStatus } from './vrCameraStatus';
+import { useVrWristCameraStatus } from './vrWristCameraStatus';
 import { vrModeAllowLabel, vrModePromptLine, type VrModePrompt } from './vrModeRequest';
 import { useReadinessStore } from '../../../store/readinessStore';
 import { READINESS_STALE_MS } from '../../../hooks/useRobotReadiness';
 import type { VrRigTelemetry } from './VrTeleopRig';
 import { vrUiDebug } from './vrUiRegistry';
+import { EYE_Y_M } from './vrConstants';
 
 /** Panel size, metres: 0.5 x 0.32 overall, text above a row of buttons. */
 export const ROBOT_PANEL_WIDTH_M = 0.5;
@@ -52,7 +55,6 @@ const BEARING_RAD = SIDE_PANEL_BEARING_RAD;
  * screen's bottom-right corner, looked down at like a desk display.
  */
 const CENTRE_Y_M = 0.08;
-const EYE_Y_M = 0.43;
 
 /**
  * Where a side panel sits and how it is turned, in the yaw group's frame, at
@@ -147,6 +149,8 @@ export function VrRobotPanel({
     if (prompt && !t.estopLatched) lines.splice(1, 0, vrModePromptLine(prompt, now));
     const camera = cameraPanelLine(useVrCameraStatus.getState(), robotId);
     if (camera && !camera.text.startsWith('CAMERA live')) lines.push(camera);
+    const wrists = wristPanelLine(useVrWristCameraStatus.getState().cameras, robotId);
+    if (wrists) lines.push(wrists);
     const title = t.estopLatched ? 'ROBOT — E-STOP LATCHED' : robotPanelTitle(watching?.());
     if (import.meta.env.DEV) {
       vrUiDebug.panel = lines.map((l) => l.text);

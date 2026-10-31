@@ -12,10 +12,15 @@
  *              demo-only control (`POST /api/__demo/sessions/:id/live`) that
  *              sets the recorder's `degraded` flag and the auto-stop, so the
  *              e2e can show a blocker and the auto-stop track.
+ *              TASK-441: `demo-session-wrists`, the VR session recording the
+ *              head and both wrist cameras. Pin the demo G1's camera list
+ *              (`POST /api/__demo/robots/demo-g1-001/cameras`, see
+ *              `cameraDemoHandlers.ts`) to have the robot serve them too.
  * @feature datacollection
  */
 
 import { http, HttpResponse } from 'msw';
+import { DEMO_HEAD_AND_WRISTS } from './cameraDemoHandlers';
 import type {
   EpisodeActor,
   EpisodeSummary,
@@ -27,6 +32,9 @@ import type {
 export const DEMO_TAKES_SESSION_ID = 'demo-session-takes';
 /** The same session as a Quest one (TASK-428). */
 export const DEMO_TAKES_VR_SESSION_ID = 'demo-session-takes-vr';
+/** A Quest session that records the head and both wrist cameras (TASK-441). */
+export const DEMO_WRISTS_SESSION_ID = 'demo-session-wrists';
+const DEMO_SESSION_IDS: readonly string[] = [DEMO_TAKES_SESSION_ID, DEMO_TAKES_VR_SESSION_ID, DEMO_WRISTS_SESSION_ID];
 const ROBOT_ID = 'demo-g1-001';
 const FPS = 30;
 
@@ -52,7 +60,8 @@ interface DemoState {
 
 function freshState(id: string = DEMO_TAKES_SESSION_ID): DemoState {
   const now = Date.now();
-  const vr = id === DEMO_TAKES_VR_SESSION_ID;
+  const wrists = id === DEMO_WRISTS_SESSION_ID;
+  const vr = id === DEMO_TAKES_VR_SESSION_ID || wrists;
   return {
     sessionStartedMs: now,
     takes: [],
@@ -75,6 +84,8 @@ function freshState(id: string = DEMO_TAKES_SESSION_ID): DemoState {
       errorMessage: null,
       createdAt: new Date(now).toISOString(),
       updatedAt: new Date(now).toISOString(),
+      // Only this session names cameras: the others stay head only, absent as on main.
+      ...(wrists ? { cameras: [...DEMO_HEAD_AND_WRISTS] } : {}),
     } as TeleoperationSession,
   };
 }
@@ -84,7 +95,7 @@ const states = new Map<string, DemoState>();
 let state = freshState();
 
 function select(id: unknown): boolean {
-  if (id !== DEMO_TAKES_SESSION_ID && id !== DEMO_TAKES_VR_SESSION_ID) return false;
+  if (typeof id !== 'string' || !DEMO_SESSION_IDS.includes(id)) return false;
   let s = states.get(id);
   if (!s) {
     s = freshState(id);

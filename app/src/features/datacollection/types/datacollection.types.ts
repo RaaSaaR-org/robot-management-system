@@ -52,6 +52,11 @@ export interface TeleoperationSession {
   errorMessage: string | null;
   /** Target episode count for the session (from creation) */
   numEpisodes?: number | null;
+  /**
+   * The cameras every take records, head first (TASK-441). Null or absent =
+   * the head camera only, as every session before the field recorded.
+   */
+  cameras?: string[] | null;
   createdAt: string;
   updatedAt: string;
   operator?: {
@@ -447,6 +452,8 @@ export interface CreateSessionRequest {
   numEpisodes?: number;
   episodeTimeS?: number;
   datasetRepoId?: string;
+  /** Cameras every take records, head first (TASK-441). Omit for head only. */
+  cameras?: string[];
 }
 
 /**
