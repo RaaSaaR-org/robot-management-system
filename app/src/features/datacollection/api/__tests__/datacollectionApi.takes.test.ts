@@ -20,6 +20,19 @@ const BODY = { expectedTake: 1, clientId: 'tab', source: 'desktop' as const };
 
 beforeEach(() => vi.clearAllMocks());
 
+describe('session client', () => {
+  it('waits for the robot to save the takes when ending a session (TASK-450)', async () => {
+    // The shared client aborts at 30 s; the server waits up to 300 s for the
+    // robot's encode.
+    client.post.mockResolvedValue({ status: 200, data: { session: { id: 's1', status: 'completed' } } });
+    await expect(datacollectionApi.endSession('s1')).resolves.toEqual({ id: 's1', status: 'completed' });
+    const [url, body, config] = client.post.mock.calls[0] as [string, unknown, { timeout: number }];
+    expect(url).toBe('/teleoperation/sessions/s1/end');
+    expect(body).toBeUndefined();
+    expect(config.timeout).toBe(330_000);
+  });
+});
+
 describe('take client', () => {
   it('posts start with the guard body and accepts a 409 as an answer', async () => {
     client.post.mockResolvedValue({ status: 200, data: { live: LIVE } });

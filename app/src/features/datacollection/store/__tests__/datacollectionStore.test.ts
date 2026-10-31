@@ -374,6 +374,31 @@ describe('datacollectionStore', () => {
         'Session is not currently recording'
       );
     });
+
+    it('treats a failed End on a session that completed meanwhile as ended (TASK-450)', async () => {
+      useDataCollectionStore.setState({
+        sessions: [makeSession({ id: 'sess-1', status: 'recording' })],
+        activeSession: makeSession({ id: 'sess-1', status: 'recording' }),
+      });
+      vi.mocked(datacollectionApi.endSession).mockRejectedValue(new Error('timeout of 330000ms exceeded'));
+      vi.mocked(datacollectionApi.getSession).mockResolvedValue(makeSession({ id: 'sess-1', status: 'completed' }));
+
+      await expect(useDataCollectionStore.getState().endSession('sess-1')).resolves.toBeUndefined();
+
+      const s = useDataCollectionStore.getState();
+      expect(datacollectionApi.getSession).toHaveBeenCalledWith('sess-1');
+      expect(s.error).toBeNull();
+      expect(s.activeSession).toBeNull();
+      expect(s.selectedSession?.status).toBe('completed');
+      expect(s.sessions[0].status).toBe('completed');
+    });
+
+    it('still fails when the session did not complete', async () => {
+      vi.mocked(datacollectionApi.endSession).mockRejectedValue(new Error('timeout of 330000ms exceeded'));
+      vi.mocked(datacollectionApi.getSession).mockResolvedValue(makeSession({ id: 'sess-1', status: 'recording' }));
+      await expect(useDataCollectionStore.getState().endSession('sess-1')).rejects.toThrow('timeout of 330000ms exceeded');
+      expect(useDataCollectionStore.getState().error).toBe('timeout of 330000ms exceeded');
+    });
   });
 
   // --------------------------------------------------------------------------

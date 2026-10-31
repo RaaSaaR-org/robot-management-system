@@ -139,6 +139,7 @@ vi.mock('../DataQualityService.js', () => ({
 import { TeleoperationService, EpisodeActionError } from '../TeleoperationService.js';
 import type { EpisodeActionContext, TeleoperationEvent } from '../../types/teleoperation.types.js';
 import { AgentRecordingRefused } from '../AgentRecordingService.js';
+import { ConflictError } from '../../utils/errors.js';
 
 // ============================================================================
 // TEST DATA
@@ -847,6 +848,35 @@ describe('TeleoperationService', () => {
       expect(mockPrisma.teleoperationFrame.aggregate).not.toHaveBeenCalled();
     });
 
+    it('answers a refusal as a 409 the route passes through, not "Failed to start session" (TASK-450)', async () => {
+      mockAgentRecording.start.mockRejectedValue(
+        new AgentRecordingRefused('busy recording session other-1', 409, 'RECORDING_REFUSED'),
+      );
+      const err = await service.startSession('session-1').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictError);
+      expect(err).toMatchObject({ statusCode: 409, isOperational: true });
+    });
+
+    it('refuses, with no joints-only fallback, while the robot still writes the last session (TASK-450)', async () => {
+      // The fallback recorded a real robot with no video and nothing said so.
+      mockAgentRecording.start.mockRejectedValue(
+        new AgentRecordingRefused(
+          'The robot is still saving the previous session. Try Start again in a moment.',
+          503,
+          'RECORDING_UNAVAILABLE',
+        ),
+      );
+      const err = await service.startSession('session-1').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictError);
+      // The robot's sentence alone: "Stop the recording" would lose the dataset
+      // it is still writing.
+      expect((err as Error).message).toBe(
+        'The robot is still saving the previous session. Try Start again in a moment.',
+      );
+      expect(mockPrisma.teleoperationFrame.aggregate).not.toHaveBeenCalled();
+      expect(mockPrisma.teleoperationSession.update).not.toHaveBeenCalled();
+    });
+
     it('draws the episode boundary on the robot, where the frames are', async () => {
       mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
         ...CREATED,
@@ -1454,6 +1484,26 @@ describe('TeleoperationService — episode control (TASK-408)', () => {
     await expect(service.discardLast('session-1', { ...CTX, expectedTake: 0 })).rejects.toMatchObject({
       code: 'already_discarded',
     });
+  });
+
+  it('discard-last that the robot did not do fails, and the take stays kept (TASK-450)', async () => {
+    // Marked discarded here but kept on the robot, it would land in the dataset.
+    fakeAgent();
+    await service.startEpisode('session-1', CTX);
+    events = [];
+    mockAgentRecording.discardEpisode.mockResolvedValue(false);
+    await expect(service.discardLast('session-1', { ...CTX, expectedTake: 0 })).rejects.toMatchObject({
+      code: 'recorder_unavailable',
+      status: 502,
+      message: expect.stringMatching(/did not discard take 0/),
+    });
+    expect(mockAgentRecording.discardEpisode).toHaveBeenCalledWith('robot-1', 0);
+    expect(mockPrisma.teleoperationEpisode.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ update: { discarded: true } }),
+    );
+    expect(ofType('episode:discarded')).toEqual([]);
+    // The take was ended first; every client learns that much.
+    expect(ofType('session:live').at(-1)).toMatchObject({ live: expect.objectContaining({ phase: 'between' }) });
   });
 
   it('DELETE of a take emits episode:discarded and keeps the row', async () => {

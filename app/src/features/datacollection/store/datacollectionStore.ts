@@ -455,9 +455,7 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
         state.error = null;
       });
 
-      try {
-        const session = await datacollectionApi.endSession(id);
-
+      const ended = (session: TeleoperationSession) =>
         set((state) => {
           if (state.activeSession?.id === id) {
             state.activeSession = null;
@@ -467,7 +465,23 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
           state.recordingProgress = null;
           updateSessionInList(state, session);
         });
+
+      try {
+        ended(await datacollectionApi.endSession(id));
       } catch (error) {
+        // The request can fail after the server finished — a dropped link while
+        // the robot saved the takes. A session that is completed by now ended;
+        // an error here would invite a second End, which fails (TASK-450).
+        let now: TeleoperationSession | null = null;
+        try {
+          now = await datacollectionApi.getSession(id);
+        } catch {
+          // Unreadable too: the original error below is the one to show.
+        }
+        if (now?.status === 'completed') {
+          ended(now);
+          return;
+        }
         const errorMessage = getErrorMessage(error);
         set((state) => {
           state.error = errorMessage;

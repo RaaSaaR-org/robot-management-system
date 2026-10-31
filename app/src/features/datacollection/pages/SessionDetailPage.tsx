@@ -392,17 +392,24 @@ export function SessionDetailPage() {
 
   const handlePause = () => session && run('pause', () => storePause(session.id), 'Session paused', "Couldn't pause session");
 
+  /** One End at a time: it can run for minutes while the robot saves the takes (TASK-450). A ref, because the E hotkey's handler is bound per status. */
+  const endingRef = useRef(false);
   const handleEnd = async () => {
-    if (!session) return;
-    const ok = await confirm({
-      title: 'End this session?',
-      description: 'Recording stops and the kept takes are saved. You can review them afterwards.',
-      confirmLabel: 'End session',
-      tone: 'danger',
-    });
-    if (ok) {
-      const { kept: keptNow, elapsedS, best } = summaryRef.current;
-      await run('end', () => storeEnd(session.id), 'Session ended', "Couldn't end session", () => sessionSummary(keptNow, elapsedS, best));
+    if (!session || endingRef.current) return;
+    endingRef.current = true;
+    try {
+      const ok = await confirm({
+        title: 'End this session?',
+        description: 'Recording stops and the kept takes are saved. You can review them afterwards.',
+        confirmLabel: 'End session',
+        tone: 'danger',
+      });
+      if (ok) {
+        const { kept: keptNow, elapsedS, best } = summaryRef.current;
+        await run('end', () => storeEnd(session.id), 'Session ended', "Couldn't end session", () => sessionSummary(keptNow, elapsedS, best));
+      }
+    } finally {
+      endingRef.current = false;
     }
   };
 
