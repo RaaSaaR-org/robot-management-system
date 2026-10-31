@@ -100,7 +100,8 @@ export interface ReadinessSnapshot {
     holder: { userId: string | null; displayName: string | null } | null;
     bound: number;
   };
-  camera: { source: string | null; cameras: string[]; detail: string | null };
+  /** `configured`: every camera the robot is set up for, when the sidecar says (TASK-445). */
+  camera: { source: string | null; cameras: string[]; detail: string | null; configured?: string[] };
   telemetrySynthetic: boolean;
   reason: NotFollowingReason;
 }
@@ -166,7 +167,12 @@ export function createReadinessRoutes(
     cameraInFlight ??= d.cameras().then((list): ReadinessSnapshot['camera'] => {
       switch (list.kind) {
         case 'ok':
-          return { source: list.source, cameras: list.cameras, detail: list.detail ?? null };
+          return {
+            source: list.source,
+            cameras: list.cameras,
+            detail: list.detail ?? null,
+            ...(list.configured ? { configured: list.configured } : {}),
+          };
         case 'bad_status':
           return { source: null, cameras: [], detail: `sidecar answered ${list.status} for the camera list` };
         case 'bad_body':

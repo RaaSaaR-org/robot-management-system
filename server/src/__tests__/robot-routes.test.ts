@@ -5,6 +5,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 
 // Mock robotManager
@@ -129,6 +131,53 @@ describe('Robot Routes', () => {
       expect(res.status).toBe(500);
       // And the database's own words do not travel to the caller.
       expect(JSON.stringify(res.body)).not.toContain('database server');
+    });
+  });
+
+  describe('GET /api/robots/:id/cameras (TASK-445)', () => {
+    /** A stand-in agent answering its camera list with `body`. */
+    async function withAgent(body: unknown, run: (baseUrl: string) => Promise<void>) {
+      const agent = http.createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(body));
+      });
+      await new Promise<void>((resolve) => agent.listen(0, '127.0.0.1', () => resolve()));
+      try {
+        await run(`http://127.0.0.1:${(agent.address() as AddressInfo).port}`);
+      } finally {
+        agent.closeAllConnections();
+        await new Promise<void>((resolve) => agent.close(() => resolve()));
+      }
+    }
+
+    it('passes configured through when it is a list of names', async () => {
+      const list = {
+        cameras: ['head_camera', 'right_wrist_camera'],
+        source: 'pc2cam',
+        configured: ['head_camera', 'left_wrist_camera', 'right_wrist_camera'],
+      };
+      await withAgent(list, async (baseUrl) => {
+        mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl });
+        const res = await request(app).get('/api/robots/robot-001/cameras');
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(list);
+      });
+    });
+
+    it('answers a head-only list exactly as before, without configured', async () => {
+      await withAgent({ cameras: ['head_camera'], source: 'pc2cam' }, async (baseUrl) => {
+        mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl });
+        const res = await request(app).get('/api/robots/robot-001/cameras');
+        expect(res.body).toEqual({ cameras: ['head_camera'], source: 'pc2cam' });
+      });
+    });
+
+    it('drops a configured that is not a list of names', async () => {
+      await withAgent({ cameras: [], source: null, configured: 'head_camera' }, async (baseUrl) => {
+        mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl });
+        const res = await request(app).get('/api/robots/robot-001/cameras');
+        expect(res.body).toEqual({ cameras: [], source: null });
+      });
     });
   });
 
