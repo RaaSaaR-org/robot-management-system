@@ -3,7 +3,8 @@
  * @description The session page with explicit takes (TASK-410): the E-STOP
  *              is in the header in every session state and stops the robot;
  *              a recording session with takes offers Start take (no Pause);
- *              the HUD reads the live take; E still ends through a confirm.
+ *              the HUD reads the live take; E still ends through a confirm,
+ *              and opens no second End while one is pending (TASK-450).
  * @feature datacollection
  */
 
@@ -133,5 +134,17 @@ describe('SessionDetailPage takes', () => {
     fireEvent.keyDown(window, { key: 'e' });
     await waitFor(() => expect(endSession).toHaveBeenCalledWith('sess-1'));
     expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ title: 'End this session?' }));
+  });
+
+  it('E opens no second End while the robot is still saving the takes (TASK-450)', async () => {
+    confirmMock.mockResolvedValue(true);
+    endSession.mockReturnValueOnce(new Promise(() => {}));
+    setup('recording', live());
+    await screen.findByTestId('take-primary');
+    fireEvent.keyDown(window, { key: 'e' });
+    await waitFor(() => expect(endSession).toHaveBeenCalledTimes(1));
+    fireEvent.keyDown(window, { key: 'e' });
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(endSession).toHaveBeenCalledTimes(1);
   });
 });

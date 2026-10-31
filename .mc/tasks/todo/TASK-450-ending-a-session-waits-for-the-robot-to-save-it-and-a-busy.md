@@ -108,7 +108,7 @@ take discarded even when the robot did not discard it.
 
 - Server vitest, `AgentRecordingService.test.ts`: start with 503 + `RECORDING_UNAVAILABLE` → refused with the friendly text; 500 + code → refused with the agent's message; 404, network error and timeout → `null`; a coded 5xx on a route other than start → unchanged.
 - Server vitest, `TeleoperationService.test.ts`: startSession with a refusing agent throws a 409 `ConflictError` with the message and starts no SimFrameRecorder; discardLast with `discard` answering `false` throws and leaves the take kept with no `episode:discarded`.
-- App vitest: `endSession` passes `{ timeout: 330_000 }`; the store treats a failed End on a now completed session as a success; `SessionCommandBar` shows the pending label and a disabled End.
+- App vitest: `endSession` passes `{ timeout: 330_000 }`; the store treats a failed End on a now completed session as a success; `SessionCommandBar` shows the pending label and a disabled End; on `SessionDetailPage` a second E while End is pending opens no second confirm.
 
 ## Notes
 
