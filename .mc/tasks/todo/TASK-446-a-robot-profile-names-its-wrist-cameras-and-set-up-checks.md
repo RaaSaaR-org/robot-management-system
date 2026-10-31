@@ -3,7 +3,7 @@ id: "TASK-446"
 aliases: []
 title: "A robot profile names its wrist cameras and Set up checks them"
 slug: "a-robot-profile-names-its-wrist-cameras-and-set-up-checks"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "claude"
 projects: []
