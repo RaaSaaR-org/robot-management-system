@@ -206,3 +206,7 @@ the same robot. Playwright MCP walk of both sessions, including the VR modal und
   regression criterion is the guard.
 - Out of scope: installing anything on PC2 (needs the owner at the time), stereo/binocular
   head, depth from the wrist cameras, recording wrists with Unitree `xr_teleoperate`.
+
+## Follow-ups
+
+- [[TASK-449]] A VLA policy gets its cameras by name, not by list position (found by the integration check; not a child)
