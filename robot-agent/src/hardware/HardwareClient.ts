@@ -1387,6 +1387,12 @@ export class HardwareClient {
    */
   async releaseAction(): Promise<void> {
     if (!this.sidecarReachable) return;
+    // A read-only sidecar has no command path, so there is nothing to hand
+    // back — and its `/estop` is the latched emergency stop. Posting it here
+    // latched the sidecar every time the last teleop socket left while the
+    // robot side was still read-only (a page closing it, a lease expiring),
+    // and the robot showed "E-stop latched" nobody pressed (TASK-438).
+    if (this.armStatus.readOnly) return;
     // On an arm-only sidecar `/estop` LATCHES (it needs `/estop/reset`), so
     // ending a teleop session there is a disarm, never a stop.
     if (this.requiresArming()) {

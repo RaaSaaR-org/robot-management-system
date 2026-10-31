@@ -213,6 +213,26 @@ describe('HardwareClient on an arm-only sidecar', () => {
   });
 });
 
+describe('HardwareClient on a read-only sidecar (TASK-438)', () => {
+  // The supervisor starts every G1 sidecar read-only, the real g1-edu-4 and
+  // the sim-g1-edu-dev rehearsal robot alike. Teleop ends there whenever the
+  // last keyboard-teleop socket leaves — a page closing it, a lease that
+  // expires or is released — before anyone switched to arm control.
+  for (const health of [{ write_mode: 'read_only' }, { read_only: true }]) {
+    it(`ending teleop posts nothing: its /estop is the latched emergency stop (${JSON.stringify(health)})`, async () => {
+      const { c, calls } = await client(health);
+      await c.releaseAction();
+      expect(calls.map((x) => x.path).filter((p) => p !== '/health')).toEqual([]);
+    });
+  }
+
+  it('an E-stop still latches it', async () => {
+    const { c, calls } = await client({ write_mode: 'read_only' });
+    await c.sendEstop();
+    expect(calls.map((x) => x.path)).toContain('/estop');
+  });
+});
+
 describe('HardwareClient on the sim or an older sidecar', () => {
   it('needs no arming and releases with /estop as before', async () => {
     const { c, calls } = await client({ sim: true });
