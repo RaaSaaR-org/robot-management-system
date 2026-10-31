@@ -104,3 +104,81 @@ export function mapCameras(
     return { camera, key };
   });
 }
+
+/**
+ * The dataset keys a policy can be trained on that name a robot-mounted view.
+ * Only these are looked up by name; any other policy camera name (SmolVLA's
+ * `up`/`side`, the apple configs' `ego_view`) has no camera of its own and
+ * gets the head camera.
+ */
+const POLICY_VIEW_KEYS: ReadonlySet<string> = new Set([
+  'cam_right_high',
+  'cam_left_high',
+  'cam_left_wrist',
+  'cam_right_wrist',
+]);
+
+/**
+ * The inverse of {@link datasetCameraKey} for a running policy: which of the
+ * cameras a sidecar lists fills the policy camera `policyKey`.
+ *
+ * - A Unitree view key gets the listed camera that maps to it — `cam_left_high`
+ *   gets `ego_camera`, `cam_left_wrist` only `left_wrist_camera`.
+ * - Everything else, and a view key no listed camera maps to, gets the head
+ *   camera: the camera that maps to `cam_right_high`, or the FIRST listed one
+ *   when none does. That one fallback is the only place list order matters.
+ * - An empty list gives `undefined`; the caller decides what a missing frame is.
+ *
+ * The match is chosen from the cameras in sorted order, so two cameras that
+ * resolve to one key (no scene has that today) still pick the same one
+ * whatever order the sidecar listed them in.
+ */
+export function sceneCameraForPolicyKey(
+  scene: string | null | undefined,
+  policyKey: string,
+  cameras: readonly string[],
+): string | undefined {
+  if (cameras.length === 0) return undefined;
+  const sorted = [...cameras].sort();
+  const byKey = (key: string): string | undefined =>
+    sorted.find((camera) => datasetCameraKey(scene, camera) === key);
+  if (POLICY_VIEW_KEYS.has(policyKey)) {
+    const match = byKey(policyKey);
+    if (match !== undefined) return match;
+  }
+  return byKey('cam_right_high') ?? cameras[0];
+}
+
+/**
+ * Which listed camera fills each of a policy's cameras, for a whole policy.
+ *
+ * A sidecar that lists a robot-mounted view (any camera that maps to a Unitree
+ * view key — `head_camera`, `ego_camera`, a wrist) is filled BY NAME through
+ * {@link sceneCameraForPolicyKey}. A sidecar that lists none — the SO-101 arm's
+ * `['wrist', 'top']` — has no names to match, so it keeps the positional fill
+ * it always had: the k-th policy camera gets the k-th listed camera, the last
+ * one reused when the policy wants more. Without that, a two-camera SmolVLA
+ * policy (`up`, `side`) on an SO-101 would get the wrist frame twice and never
+ * see the top camera.
+ *
+ * An empty list gives `undefined` for every policy camera.
+ */
+export function policyCameraSources(
+  scene: string | null | undefined,
+  policyKeys: readonly string[],
+  cameras: readonly string[],
+): Map<string, string | undefined> {
+  const listsRobotView = cameras.some((camera) =>
+    POLICY_VIEW_KEYS.has(datasetCameraKey(scene, camera)),
+  );
+  const sources = new Map<string, string | undefined>();
+  policyKeys.forEach((policyKey, i) => {
+    sources.set(
+      policyKey,
+      listsRobotView
+        ? sceneCameraForPolicyKey(scene, policyKey, cameras)
+        : cameras[Math.min(i, cameras.length - 1)],
+    );
+  });
+  return sources;
+}
