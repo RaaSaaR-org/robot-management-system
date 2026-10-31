@@ -27,7 +27,7 @@ processes in a fixed order, each behind a readiness gate:
 | --- | --- | --- |
 | `preflight` | Parses the profile; checks ports 6001 / 8767 / 41245; in arm_sdk mode refuses while `xr_teleoperate` or `teleop_hand_and_arm` runs | ports free or held by its own children |
 | `link` | `enp131s0` carrier + operstate up, `192.168.123.222` present, one ping to the robot. A carrier loss is waited out for up to `timeouts.carrierS` (15 s) and the step says how long it waited (TASK-423) | "Robot cable unplugged or robot off … Waited 15 s" when it stays down |
-| `camera` | TCP connect to the PC2 head camera `192.168.123.164:5600` | a **warning** only, never a stop |
+| `camera` | TCP connect to the PC2 head camera `192.168.123.164:5600`, and to each wrist camera the profile names under `wristCameras` (checks `leftWrist` / `rightWrist`) | a **warning** only, never a stop; a wrist that does not answer means takes in a Head + wrists session will not start |
 | `bridge` | `g1_state_bridge_readonly.py --iface enp131s0 --domain 0` | `bridge_probe.py` sees `rt/lowstate` on :6001 |
 | `sidecar` | `g1_sidecar.py`, **read_only by default** | `/health`: `connected`, the expected `write_mode` and `loco.gate`, `dds_domain` (when reported), fresh `base.age_s` under fsm |
 | `agent` | `tsx src/index.ts` with `.env.g1-edu` on **:41245** (not `tsx watch`) | `/api/v1/health` says `healthy` |
@@ -417,6 +417,11 @@ env G1_WRITE_MODE=arm_sdk \
     G1_ARM_SDK_MAX_JOINT_VEL=1.0 \
     ~/anaconda3/envs/unitree_sim_env6/bin/python -u g1_sidecar.py
 ```
+
+With wrist cameras, add
+`G1_WRIST_CAMERAS=left_wrist_camera@<publisher host>:5601,right_wrist_camera@<publisher host>:5602`
+(left first, ports as in "Wrist cameras (TASK-444)"; the supervisor composes the same value from the profile's `wristCameras`).
+Leave it unset for a head-camera-only robot.
 
 `G1_ARM_SDK_MAX_JOINT_VEL=1.0` is a deliberately slow first session; the
 default is 3.0 rad/s. Raise it once the arms have been seen to follow.

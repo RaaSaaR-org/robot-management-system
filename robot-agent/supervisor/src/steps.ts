@@ -47,6 +47,7 @@ import {
   sidecarEnvFor,
   sidecarSpec,
   simSpec,
+  wristCameraEndpoints,
 } from './profile.js';
 import type { Profile, ProcName, SidecarMode } from './profile.js';
 import { SidecarClient } from './sidecarClient.js';
@@ -807,20 +808,42 @@ export class Supervisor {
     const s = this.steps.camera;
     Object.assign(s, { checks: {}, code: null });
     const cam = this.profile.pc2Camera;
-    if (!cam) {
+    const wrists = wristCameraEndpoints(this.profile);
+    if (!cam && wrists.length === 0) {
       Object.assign(s, { state: 'idle', detail: 'no PC2 camera in this profile' });
       return true;
     }
     s.state = 'running';
-    const ok = await this.tcp(cam.host, cam.port, 1000);
-    s.checks.tcp = ok;
-    if (ok) {
-      Object.assign(s, { state: 'ok', detail: `PC2 camera answers at ${cam.host}:${cam.port}` });
+    const parts: string[] = [];
+    let headDown = false;
+    if (cam) {
+      const ok = await this.tcp(cam.host, cam.port, 1000);
+      s.checks.tcp = ok;
+      headDown = !ok;
+      // Without wrists the ok detail keeps its pre-TASK-446 wording, no full stop.
+      parts.push(ok
+        ? `PC2 camera answers at ${cam.host}:${cam.port}${wrists.length > 0 ? '.' : ''}`
+        : `PC2 camera at ${cam.host}:${cam.port} does not answer — the head camera will be missing ` +
+          '(g1-head-cam.service on PC2). The robot side starts without it.');
+    }
+    // TASK-446: each wrist publisher is probed too, and is only ever a warning.
+    const downWrists: string[] = [];
+    for (const w of wrists) {
+      const ok = await this.tcp(w.host, w.port, 1000);
+      s.checks[`${w.side}Wrist`] = ok;
+      const label = `${w.side === 'left' ? 'Left' : 'Right'} wrist camera ${w.host}:${w.port}`;
+      if (ok) parts.push(`${label} answers.`);
+      else {
+        downWrists.push(w.name);
+        parts.push(`${label} not answering — takes in a Head + wrists session will not start.`);
+      }
+    }
+    if (!headDown && downWrists.length === 0) {
+      Object.assign(s, { state: 'ok', detail: parts.join(' ') });
     } else {
       Object.assign(s, {
-        state: 'warn', code: 'camera_unreachable',
-        detail: `PC2 camera at ${cam.host}:${cam.port} does not answer — the head camera will be missing ` +
-          '(g1-head-cam.service on PC2). The robot side starts without it.',
+        state: 'warn', code: headDown ? 'camera_unreachable' : 'wrist_camera_unreachable',
+        detail: parts.join(' '),
       });
     }
     return true; // a warning, never a stop

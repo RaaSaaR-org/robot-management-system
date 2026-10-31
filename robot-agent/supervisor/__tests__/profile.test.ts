@@ -235,4 +235,74 @@ describe('checked-in profiles', () => {
     const simArgs = simSpec(p, {}).args;
     expect(simArgs[simArgs.indexOf('--host') + 1]).toBe('127.0.0.1');
   });
+
+  it('neither checked-in profile names wrist cameras: the sidecar env is unchanged (TASK-446)', () => {
+    for (const file of ['g1-edu-4.yaml', 'sim-g1-edu-dev.yaml']) {
+      const p = loadProfile(join(dir, file), { repoRoot: REPO_ROOT, home: '/home/op' });
+      expect(p.wristCameras).toBeNull();
+      for (const mode of ['read_only', 'arm_sdk'] as const) {
+        const env = sidecarSpec(p, mode, { PATH: '/usr/bin' }).env;
+        expect(env).not.toHaveProperty('G1_WRIST_CAMERAS');
+        expect(env).toMatchSnapshot(`${file} ${mode}`);
+      }
+    }
+  });
+});
+
+describe('wrist cameras (TASK-446)', () => {
+  const WRISTS = 'left_wrist_camera@192.168.123.164:5601,right_wrist_camera@192.168.123.164:5602';
+
+  function withWrists(base: Record<string, unknown>, wrists: unknown): Record<string, unknown> {
+    base.wristCameras = wrists;
+    return base;
+  }
+
+  it('parses left and right as host:port, either one alone, or none', () => {
+    const both = validateProfile(withWrists(realDoc(), { right: '192.168.123.164:5602', left: '192.168.123.164:5601' }), opts);
+    expect(both.wristCameras).toEqual({
+      left: { host: '192.168.123.164', port: 5601 },
+      right: { host: '192.168.123.164', port: 5602 },
+    });
+    expect(validateProfile(withWrists(realDoc(), { right: '10.0.0.2:5602' }), opts).wristCameras)
+      .toEqual({ right: { host: '10.0.0.2', port: 5602 } });
+    expect(validateProfile(realDoc(), opts).wristCameras).toBeNull();
+    expect(validateProfile(withWrists(realDoc(), null), opts).wristCameras).toBeNull();
+    expect(validateProfile(withWrists(realDoc(), {}), opts).wristCameras).toBeNull();
+  });
+
+  it('refuses a malformed value, naming the field', () => {
+    expectRefused(withWrists(realDoc(), { left: '192.168.123.164' }), /profile\.wristCameras\.left must be host:port/);
+    expectRefused(withWrists(realDoc(), { right: 5602 }), /profile\.wristCameras\.right must be host:port/);
+    expectRefused(withWrists(realDoc(), { left: 'h:70000' }), /profile\.wristCameras\.left port must be a TCP port/);
+    expectRefused(withWrists(realDoc(), { middle: 'h:5603' }), /profile\.wristCameras\.middle is not a wrist/);
+    expectRefused(withWrists(realDoc(), 'h:5601'), /profile\.wristCameras must be a map/);
+  });
+
+  it('hands the sidecar G1_WRIST_CAMERAS, left first', () => {
+    const p = validateProfile(withWrists(realDoc(), { right: '192.168.123.164:5602', left: '192.168.123.164:5601' }), opts);
+    for (const mode of ['read_only', 'arm_sdk'] as const) {
+      expect(sidecarSpec(p, mode, {}).env.G1_WRIST_CAMERAS).toBe(WRISTS);
+    }
+    const right = validateProfile(withWrists(realDoc(), { right: '10.0.0.2:5602' }), opts);
+    expect(sidecarSpec(right, 'read_only', {}).env.G1_WRIST_CAMERAS).toBe('right_wrist_camera@10.0.0.2:5602');
+  });
+
+  it('keeps an explicit G1_WRIST_CAMERAS from sidecar.env', () => {
+    const d = withWrists(realDoc(), { left: '192.168.123.164:5601' });
+    (d.sidecar as { env: Record<string, unknown> }).env.G1_WRIST_CAMERAS = 'left_wrist_camera@10.0.0.9:7000';
+    expect(sidecarSpec(validateProfile(d, opts), 'read_only', {}).env.G1_WRIST_CAMERAS)
+      .toBe('left_wrist_camera@10.0.0.9:7000');
+  });
+
+  it('opens no wrist camera when the camera source is none or off', () => {
+    const sim = simDoc();
+    (sim.sidecar as { env: Record<string, unknown> }).env = {};
+    withWrists(sim, { left: '127.0.0.1:5601' });
+    expect(sidecarSpec(validateProfile(sim, opts), 'read_only', {}).env).not.toHaveProperty('G1_WRIST_CAMERAS');
+    for (const source of ['none', 'off', 'OFF']) {
+      const d = withWrists(realDoc(), { left: '192.168.123.164:5601' });
+      (d.sidecar as { env: Record<string, unknown> }).env.G1_CAMERA_SOURCE = source;
+      expect(sidecarSpec(validateProfile(d, opts), 'read_only', {}).env).not.toHaveProperty('G1_WRIST_CAMERAS');
+    }
+  });
 });
