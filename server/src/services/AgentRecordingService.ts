@@ -204,14 +204,25 @@ export class AgentRecordingService {
    * A 404 is the interesting case: it is a 4xx, but it means the agent predates
    * these routes. That is not a configuration error the operator can fix — it
    * is an old robot, and an old robot should fall back silently.
+   *
+   * `refuseServerErrors` (TASK-450): a 5xx whose body carries a `code` is the
+   * agent answering from its own route, most often a 503 while it still writes
+   * the previous session. Falling back there would record a real robot with no
+   * video, so it is a refusal too. Only `start` sets it: it is the one call
+   * where `null` means "use the other recorder".
    */
-  private classify(error: unknown, what: string): null {
+  private classify(error: unknown, what: string, refuseServerErrors = false): null {
     const status = error instanceof HttpClientError ? error.statusCode : undefined;
-    if (status !== undefined && status >= 400 && status < 500 && status !== 404) {
-      const body = (error as HttpClientError).responseBody;
-      const message = isRecord(body) && typeof body.message === 'string' ? body.message : error instanceof Error ? error.message : String(error);
-      const code = isRecord(body) && typeof body.code === 'string' ? body.code : null;
-      throw new AgentRecordingRefused(message, status, code);
+    const body = error instanceof HttpClientError ? error.responseBody : undefined;
+    const code = isRecord(body) && typeof body.code === 'string' ? body.code : null;
+    const answered = status !== undefined && status >= 400 && status < 500 && status !== 404;
+    const busy = refuseServerErrors && status !== undefined && status >= 500 && code !== null;
+    if (answered || busy) {
+      const message =
+        status === 503 && code === 'RECORDING_UNAVAILABLE'
+          ? 'The robot is still saving the previous session. Try Start again in a moment.'
+          : isRecord(body) && typeof body.message === 'string' ? body.message : error instanceof Error ? error.message : String(error);
+      throw new AgentRecordingRefused(message, status as number, code);
     }
     const why = error instanceof Error ? error.message : String(error);
     console.warn(`[AgentRecording] ${what} unavailable: ${why}`);
@@ -223,8 +234,9 @@ export class AgentRecordingService {
    *
    * `null` means this robot cannot record here — no agent URL, an agent that
    * does not know the route, or one that did not answer — and the caller should
-   * fall back. A refusal (409) throws, because the operator asked for something
-   * the robot understood and declined.
+   * fall back. A refusal (409, or a coded 5xx such as 503 "still writing the
+   * previous session") throws, because the operator asked for something the
+   * robot understood and declined.
    */
   async start(robotId: string, dto: StartAgentRecordingDto): Promise<AgentRecordingStatus | null> {
     const client = await this.client(robotId, HTTP_TIMEOUTS.MEDIUM);
@@ -236,7 +248,7 @@ export class AgentRecordingService {
       }
       return answer as unknown as AgentRecordingStatus;
     } catch (error) {
-      return this.classify(error, `start on ${robotId}`);
+      return this.classify(error, `start on ${robotId}`, true);
     }
   }
 
