@@ -3,7 +3,7 @@ id: "TASK-446"
 aliases: []
 title: "A robot profile names its wrist cameras and Set up checks them"
 slug: "a-robot-profile-names-its-wrist-cameras-and-set-up-checks"
-status: "todo"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "low"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # A robot profile names its wrist cameras and Set up checks them
@@ -66,12 +66,12 @@ A profile without them starts exactly as today.
 
 ## Acceptance Criteria
 
-- [ ] `g1-edu-4.yaml` and `sim-g1-edu-dev.yaml` load and produce the same sidecar env and
+- [x] `g1-edu-4.yaml` and `sim-g1-edu-dev.yaml` load and produce the same sidecar env and
       camera step output as on `main`.
-- [ ] A profile with `wristCameras` produces the `G1_WRIST_CAMERAS` value above; a malformed
+- [x] A profile with `wristCameras` produces the `G1_WRIST_CAMERAS` value above; a malformed
       value is a `ProfileError` naming the field.
-- [ ] The camera step reports each wrist endpoint and only warns when one is down.
-- [ ] Supervisor typecheck + vitest green.
+- [x] The camera step reports each wrist endpoint and only warns when one is down.
+- [x] Supervisor typecheck + vitest green.
 
 ## Test Strategy
 

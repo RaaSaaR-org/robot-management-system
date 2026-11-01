@@ -3,7 +3,7 @@ id: "TASK-449"
 aliases: []
 title: "A VLA policy gets its cameras by name, not by list position"
 slug: "a-vla-policy-gets-its-cameras-by-name-not-by-list-position"
-status: "todo"
+status: "done"
 priority: 3
 owner: "claude"
 projects: []
@@ -16,7 +16,7 @@ spe: 2
 effort: "low"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # A VLA policy gets its cameras by name, not by list position
@@ -76,14 +76,14 @@ Replace the positional mapping with a name lookup per vla-server camera name:
 
 ## Acceptance Criteria
 
-- [ ] `g1_dex3_2cam` in the pickplace sim (sidecar lists head + wrist cameras) gets the head
+- [x] `g1_dex3_2cam` in the pickplace sim (sidecar lists head + wrist cameras) gets the head
       frame in both `cam_left_high` and `cam_right_high`, never a wrist frame.
-- [ ] `cam_left_high` gets `ego_camera` when the sidecar lists it.
-- [ ] `cam_left_wrist` / `cam_right_wrist` get only the matching wrist camera, and the head
+- [x] `cam_left_high` gets `ego_camera` when the sidecar lists it.
+- [x] `cam_left_wrist` / `cam_right_wrist` get only the matching wrist camera, and the head
       camera when that wrist is absent.
-- [ ] An unknown policy camera name gets the head camera.
-- [ ] The result does not depend on the order the sidecar lists its cameras.
-- [ ] One-camera configs (apple GR00T/pi05/lingbot/unifolm, `g1_dex3_1cam`) behave exactly
+- [x] An unknown policy camera name gets the head camera.
+- [x] The result does not depend on the order the sidecar lists its cameras.
+- [x] One-camera configs (apple GR00T/pi05/lingbot/unifolm, `g1_dex3_1cam`) behave exactly
       as before.
 
 ## Test Strategy
@@ -95,10 +95,19 @@ Replace the positional mapping with a name lookup per vla-server camera name:
     wrist-camera config;
   - `ego_camera` present vs absent for `cam_left_high`;
   - missing wrist and unknown names fall back to the head camera;
-  - no head camera -> first listed camera; empty list -> synthetic gray JPEG.
+  - no head camera -> first camera in sorted order; empty list -> synthetic gray JPEG.
 - `cd robot-agent && npm run typecheck && npx vitest run src/vla`.
 
 ## Notes
 
 - Found by the TASK-439 integration check on 2026-10-31. Not a child of TASK-439; it only
   needs TASK-440's wrist cameras to be observable in the sim.
+- Decided during implementation (2026-10-31): a sidecar that lists no robot-mounted view at
+  all (no camera maps to a Unitree view key; the SO-101 arm's `['wrist', 'top']`) keeps the
+  positional fill, so a two-camera SmolVLA policy (`up`, `side`) still gets `wrist` and `top`.
+  The no-head-camera fallback applies only to a sidecar that lists some robot view
+  but no head camera; it takes the first camera in sorted order (changed in review on
+  2026-11-01 from "first listed", so AC5 holds there too). `policyCameraSources` in `robot-agent/src/recording/camera-map.ts`.
+- Review on 2026-11-01: the apple configs' `ego_view` still gets the head camera, as AC6
+  requires, although the apple scene has a calibrated `ego_camera` that the sim evaluator
+  feeds as `ego_view`. Filed as TASK-474 rather than changed here.

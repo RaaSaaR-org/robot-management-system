@@ -3,7 +3,7 @@ id: "TASK-444"
 aliases: []
 title: "A wrist camera publisher serves a USB camera in the head camera's wire format"
 slug: "a-wrist-camera-publisher-serves-a-usb-camera-in-the-head"
-status: "todo"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # A wrist camera publisher serves a USB camera in the head camera's wire format
@@ -66,12 +66,12 @@ process on PC2 or on the lab PC, and the sidecar reads it like the head camera.
 
 ## Acceptance Criteria
 
-- [ ] With a fake frame source, a client reading the socket receives frames in the exact
+- [x] With a fake frame source, a client reading the socket receives frames in the exact
       wire format (length, ns timestamp, valid JPEG), two clients get the same frames, no
       encode happens with zero clients, and a read failure is followed by a reopen.
-- [ ] The file imports under Python 3.8 syntax rules (portability test passes) and without
+- [x] The file imports under Python 3.8 syntax rules (portability test passes) and without
       OpenCV installed.
-- [ ] Hardware pytest suite green (`HARDWARE_PYTHON`).
+- [x] Hardware pytest suite green (`HARDWARE_PYTHON`).
 
 ## Test Strategy
 
@@ -80,3 +80,12 @@ that points the sidecar's existing pc2cam reader (`G1_PC2_CAMERA_HOST=127.0.0.1`
 `G1_PC2_CAMERA_PORT=<test port>`) at a running publisher and gets a frame through
 `/cameras/head_camera/snapshot`. If a USB webcam is attached to the lab PC, a manual check
 with the real device (note the result in the PR).
+
+## Notes
+
+- 2026-11-01: review fix — the port now takes connections only while the camera delivers
+  frames (bound once at start to fail fast, listening from the first good frame, closed
+  with the clients during an outage, SO_REUSEADDR for the re-listen), so a TCP connect
+  means "camera up" for the Set up step (TASK-446) and the sidecar's availability check
+  (TASK-445). A single frame that will not encode is skipped; `MAX_BAD_FRAMES` (5) in a
+  row count as a device failure.

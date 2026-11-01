@@ -3,7 +3,7 @@ id: "TASK-440"
 aliases: []
 title: "The sim robot has a left and a right wrist camera"
 slug: "the-sim-robot-has-a-left-and-a-right-wrist-camera"
-status: "todo"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -16,7 +16,7 @@ spe: 2
 effort: "medium"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # The sim robot has a left and a right wrist camera
@@ -63,10 +63,10 @@ exercised end to end without the real cameras. Adding cameras changes no physics
 
 ## Acceptance Criteria
 
-- [ ] `sim_node.py` `/cameras` for the pickplace scene lists `head_camera` first and both
+- [x] `sim_node.py` `/cameras` for the pickplace scene lists `head_camera` first and both
       wrist cameras; each wrist snapshot shows that hand's fingers.
-- [ ] `g1_43dof_planarbase.xml` differs from before only by the two cameras.
-- [ ] The sim pytest suite (`SIM_PYTHON`) passes; no physics value changed in any MJCF.
+- [x] `g1_43dof_planarbase.xml` differs from before only by the two cameras.
+- [x] The sim pytest suite (`SIM_PYTHON`) passes; no physics value changed in any MJCF.
 
 ## Test Strategy
 

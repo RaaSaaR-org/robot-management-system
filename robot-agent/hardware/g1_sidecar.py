@@ -56,7 +56,12 @@ on every interface in read_only mode and on 127.0.0.1 only in arm_sdk mode
                         The names the ACTIVE source can serve, not a fixed list:
                         a lone RealSense D435 is ONE camera (G1_CAMERA_NAME,
                         default head_camera), not three aliases for one frame.
+                        + "configured": every camera the sidecar is set up
+                        to serve, up or not (absent when nothing is). Wrist
+                        cameras come from G1_WRIST_CAMERAS="name@host:port,..."
+                        (TASK-445), each read from its own publisher.
   GET  /cameras/<name>/snapshot → one-shot base64 JPEG
+                        (?format=raw → the same frame as image/jpeg)
   GET  /cameras/<name>/stream   → live MJPEG (multipart/x-mixed-replace), the
                         route app/ + robot-agent's camera proxy expect (TASK-233).
                         Capped by G1_CAMERA_STREAM_FPS (default 15) per stream.
@@ -119,12 +124,14 @@ import base64
 import json
 import math
 import os
+import re
 import socket
 import struct
 import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 
 import g1_loco_mode
 from recorder import recorder
@@ -1465,10 +1472,14 @@ def _teleimager_jpeg_bytes(name: str):
 #
 # Read-only: one outbound TCP connection that never sends a byte. Nothing here
 # joins DDS or can reach a motor.
+#
+# Wrist cameras (TASK-445) speak the same wire format from their own publisher
+# (camera_pub.py, one process and one port per camera), so every endpoint —
+# the head's and each wrist's — gets the same reader, lock and negative
+# cooldown, kept per camera name in `_pc2cam_endpoints`. Nothing is shared
+# between two endpoints: a wrist whose probe hangs for its full connect timeout
+# holds only its own lock, never the head's.
 _PC2CAM_ABSENT_COOLDOWN_S = 5.0
-_pc2cam_absent_until = 0.0
-_pc2cam_reader = None
-_pc2cam_lock = threading.RLock()
 _PC2CAM_HDR = struct.Struct("!IQ")
 #: Refuse absurd frame lengths rather than trusting the header and allocating
 #: whatever it claims. 640x480 JPEG at q80 is ~40 KB; 32 MB is far past any
@@ -1476,11 +1487,118 @@ _PC2CAM_HDR = struct.Struct("!IQ")
 _PC2CAM_MAX_FRAME = 32 * 1024 * 1024
 
 
-def _pc2cam_endpoint() -> "tuple[str, int]":
+class _Pc2CameraEndpoint:
+    """One framed-JPEG publisher's state: its reader, its lock, its cooldown."""
+
+    def __init__(self) -> None:
+        self.reader = None
+        self.absent_until = 0.0
+        self.lock = threading.RLock()
+
+
+#: Camera name → its endpoint state. Entries are created on first use and live
+#: as long as the process, like the single reader they replace.
+_pc2cam_endpoints: "dict[str, _Pc2CameraEndpoint]" = {}
+_pc2cam_endpoints_lock = threading.Lock()
+
+
+def _pc2cam_state(name: str) -> _Pc2CameraEndpoint:
+    with _pc2cam_endpoints_lock:
+        state = _pc2cam_endpoints.get(name)
+        if state is None:
+            state = _pc2cam_endpoints[name] = _Pc2CameraEndpoint()
+        return state
+
+
+def _pc2cam_head_name() -> str:
+    return os.environ.get("G1_PC2_CAMERA_NAME", _REALSENSE_DEFAULT_NAME)
+
+
+def _pc2cam_endpoint(name=None) -> "tuple[str, int]":
+    """`(host, port)` of the head publisher, or of the wrist camera `name`."""
+    if name is not None:
+        wrist = _wrist_camera_endpoints().get(name)
+        if wrist is not None:
+            return wrist
     return (
         os.environ.get("G1_PC2_CAMERA_HOST", ROBOT_IP),
         int(os.environ.get("G1_PC2_CAMERA_PORT", "5600")),
     )
+
+
+# --- Wrist cameras (TASK-445) ------------------------------------------------
+#
+#     G1_WRIST_CAMERAS="left_wrist_camera@192.168.123.164:5601,right_wrist_camera@192.168.123.164:5602"
+#
+# Each entry is a camera name and the endpoint of the publisher that serves it.
+# Unset or empty is a head-only robot, and every camera route then takes the
+# exact path it took before wrist cameras existed. A wrist name is never an
+# alias: an entry that reuses the head camera's name is refused, because a name
+# answering with another camera's frames is the defect TASK-233 removed.
+_WRIST_CAMERA_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_wrist_cameras_parsed: "tuple[str, dict[str, tuple[str, int]]]" = ("", {})
+_wrist_cameras_logged: "set[str]" = set()
+
+
+def _wrist_camera_skip(entry: str, why: str) -> None:
+    """Log a refused G1_WRIST_CAMERAS entry once, not once per request."""
+    if entry in _wrist_cameras_logged:
+        return
+    _wrist_cameras_logged.add(entry)
+    print(f"[G1 Sidecar] G1_WRIST_CAMERAS: skipping '{entry}' ({why}); "
+          "expected name@host:port", flush=True)
+
+
+def _parse_wrist_cameras(raw: str) -> "dict[str, tuple[str, int]]":
+    """`name -> (host, port)` in the order written. Never raises."""
+    head_names = {_pc2cam_head_name(), os.environ.get("G1_CAMERA_NAME", _REALSENSE_DEFAULT_NAME)}
+    cameras: "dict[str, tuple[str, int]]" = {}
+    for part in raw.split(","):
+        entry = part.strip()
+        if not entry:
+            continue
+        name, at, endpoint = entry.partition("@")
+        name = name.strip()
+        host, colon, port_text = endpoint.strip().rpartition(":")
+        host = host.strip()
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]  # [::1]:5601
+        if not at or not colon or not host:
+            _wrist_camera_skip(entry, "not name@host:port")
+            continue
+        if not _WRIST_CAMERA_NAME_RE.match(name):
+            _wrist_camera_skip(entry, "a camera name is letters, digits, '_' and '-'")
+            continue
+        try:
+            port = int(port_text)
+        except ValueError:
+            port = 0
+        if not 0 < port < 65536:
+            _wrist_camera_skip(entry, "the port is not a number from 1 to 65535")
+            continue
+        if name in head_names:
+            _wrist_camera_skip(entry, "that is the head camera's name")
+            continue
+        if name in cameras:
+            _wrist_camera_skip(entry, "the name is already configured")
+            continue
+        cameras[name] = (host, port)
+    return cameras
+
+
+def _wrist_camera_endpoints() -> "dict[str, tuple[str, int]]":
+    """The configured wrist cameras, or `{}` — always `{}` with the cameras off.
+
+    Read at call time like the rest of the camera env, and parsed only when the
+    value changed: a stream asks once per frame.
+    """
+    global _wrist_cameras_parsed
+    if _camera_disabled():
+        return {}
+    raw = os.environ.get("G1_WRIST_CAMERAS", "")
+    if raw != _wrist_cameras_parsed[0]:
+        _wrist_cameras_parsed = (raw, _parse_wrist_cameras(raw))
+    return _wrist_cameras_parsed[1]
 
 
 class _Pc2CameraReader:
@@ -1491,9 +1609,10 @@ class _Pc2CameraReader:
     gave up there would need a restart to see the camera come back.
     """
 
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, label: str = "PC2 head camera"):
         self.host = host
         self.port = port
+        self.label = label
         self._jpeg = None
         self._connected = False
         self._lock = threading.Lock()
@@ -1520,7 +1639,7 @@ class _Pc2CameraReader:
                 with self._lock:
                     self._connected = True
                 backoff = 1.0
-                print(f"[G1 Sidecar] ✅ PC2 head camera stream {self.host}:{self.port}", flush=True)
+                print(f"[G1 Sidecar] ✅ {self.label} stream {self.host}:{self.port}", flush=True)
                 while not self._stop.is_set():
                     header = self._read_exactly(sock, _PC2CAM_HDR.size)
                     if header is None:
@@ -1563,7 +1682,7 @@ class _Pc2CameraReader:
             return self._connected
 
 
-def _pc2cam_available() -> "tuple[bool, bool]":
+def _pc2cam_available(name=None) -> "tuple[bool, bool]":
     """`(reachable, reader_was_just_started)`. Cheap, and caches absence.
 
     A plain TCP connect, not a frame read: the publisher idles until someone
@@ -1571,33 +1690,38 @@ def _pc2cam_available() -> "tuple[bool, bool]":
 
     The second flag is what tells a caller whether waiting for a frame can be
     justified — see `_pc2cam_jpeg_bytes`.
+
+    `name` picks a configured wrist camera's publisher (TASK-445); None is the
+    head camera. Each one is probed, cached and read under its own lock.
     """
-    global _pc2cam_reader, _pc2cam_absent_until
-    with _pc2cam_lock:
-        if _pc2cam_reader is not None:
-            if _pc2cam_reader.connected or _pc2cam_reader.latest() is not None:
+    is_wrist = name is not None and name in _wrist_camera_endpoints()
+    state = _pc2cam_state(name if is_wrist else _pc2cam_head_name())
+    with state.lock:
+        if state.reader is not None:
+            if state.reader.connected or state.reader.latest() is not None:
                 return True, False
-            if time.time() < _pc2cam_absent_until:
+            if time.time() < state.absent_until:
                 return False, False
-        elif time.time() < _pc2cam_absent_until:
+        elif time.time() < state.absent_until:
             return False, False
 
-        host, port = _pc2cam_endpoint()
+        host, port = _pc2cam_endpoint(name if is_wrist else None)
         try:
             with socket.create_connection((host, port), timeout=1.0):
                 pass
         except OSError:
-            _pc2cam_absent_until = time.time() + _PC2CAM_ABSENT_COOLDOWN_S
+            state.absent_until = time.time() + _PC2CAM_ABSENT_COOLDOWN_S
             return False, False
 
-        if _pc2cam_reader is None:
-            _pc2cam_reader = _Pc2CameraReader(host, port)
+        if state.reader is None:
+            state.reader = (_Pc2CameraReader(host, port, label=f"wrist camera '{name}'")
+                            if is_wrist else _Pc2CameraReader(host, port))
             return True, True
         return True, False
 
 
-def _pc2cam_jpeg_bytes():
-    """Newest JPEG from PC2's head camera, or None.
+def _pc2cam_frame(name=None) -> "tuple[bool, bytes | None]":
+    """`(reachable, newest JPEG or None)` for the head, or for wrist `name`.
 
     Only the request that STARTS the reader waits for a frame, the same gate
     `_teleimager_jpeg_bytes` uses. Waiting unconditionally would mean that every
@@ -1607,12 +1731,13 @@ def _pc2cam_jpeg_bytes():
     watcher reading a camera every 3 s, those blocked handlers pile up exactly
     the way the RealSense ones did before the cooldown above was added.
     """
-    reachable, fresh = _pc2cam_available()
+    reachable, fresh = _pc2cam_available(name)
     if not reachable:
-        return None
-    reader = _pc2cam_reader
+        return False, None
+    is_wrist = name is not None and name in _wrist_camera_endpoints()
+    reader = _pc2cam_state(name if is_wrist else _pc2cam_head_name()).reader
     if reader is None:
-        return None
+        return True, None
     jpeg = reader.latest()
     if jpeg is None and fresh:
         # The reader has only just connected, and the publisher encodes nothing
@@ -1622,33 +1747,79 @@ def _pc2cam_jpeg_bytes():
         while jpeg is None and time.time() < deadline:
             time.sleep(0.05)
             jpeg = reader.latest()
-    return jpeg
+    return True, jpeg
+
+
+def _pc2cam_jpeg_bytes(name=None):
+    """Newest JPEG from PC2's head camera (or wrist camera `name`), or None."""
+    return _pc2cam_frame(name)[1]
+
+
+def _live_wrist_names(wrists) -> "tuple[str, ...]":
+    """The configured wrist cameras whose publisher answers, in config order.
+
+    Probed side by side: a publisher whose host is gone costs its full 1 s
+    connect timeout once per cooldown, and two of those must not add up in a
+    /cameras the cockpit polls.
+    """
+    names = list(wrists)
+    up = {}
+
+    def probe(n: str) -> None:
+        up[n] = _pc2cam_available(n)[0]
+
+    if len(names) == 1:
+        probe(names[0])
+    else:
+        threads = [threading.Thread(target=probe, args=(n,), daemon=True) for n in names]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    return tuple(n for n in names if up.get(n))
+
+
+def _wrist_camera_detail(name: str) -> str:
+    """Why wrist camera `name` is not served, naming the box to look at."""
+    host, port = _pc2cam_endpoint(name)
+    return (f"wrist camera '{name}' does not answer on {host}:{port}: check its "
+            f"camera publisher (camera_pub.py) on {host}.")
 
 
 # Why no frame source was found, in the operator's words rather than a stack
 # trace. It reaches the cockpit through /cameras and through the stream's 503
 # body, because "the camera panel is empty" is useless on its own: the operator
 # needs to know whether to plug in a camera or to look at the robot's services.
-def _no_camera_source_detail() -> str:
+def _no_camera_source_detail(missing_wrists=()) -> str:
     """Why no frame source was found, in the operator's words.
 
     Built from the endpoints actually configured rather than the ones this lab
     happens to use: `G1_PC2_CAMERA_HOST`/`_PORT` and `G1_IMAGE_SERVER_HOST`/
     `_PORT` are overridable, and a message that names a machine nobody is
     running sends the operator to the wrong box.
+
+    With wrist cameras configured (TASK-445) this is about the HEAD, and says
+    so, followed by one sentence per wrist in `missing_wrists`. A head-only
+    robot's message is the one it has always been.
     """
     if _camera_disabled():
         return ("no camera: G1_CAMERA_SOURCE is off for this sidecar (a sim profile "
                 "has no head camera), so nothing on the robot's network is probed.")
     pc2_host, pc2_port = _pc2cam_endpoint()
     img_host, img_port = _teleimager_host_port()
-    return (
-        "no camera source available. The robot's head camera is served by PC2 — "
+    lead = ("no head camera source available." if _wrist_camera_endpoints()
+            else "no camera source available.")
+    detail = (
+        f"{lead} The robot's head camera is served by PC2 — "
         f"check `systemctl status g1-head-cam` on {pc2_host} (it publishes on "
         f"port {pc2_port}), or start the teleimager image server on {img_host} "
         f"(port {img_port}). Otherwise: no RealSense on this machine's USB, and "
         "the lerobot driver has no frames (read-only mode never loads it)."
     )
+    for name in missing_wrists:
+        wrist = _wrist_camera_detail(name)
+        detail += " " + wrist[0].upper() + wrist[1:]
+    return detail
 
 
 #: G1_CAMERA_SOURCE values that turn every camera source off (TASK-416). The
@@ -1662,8 +1833,15 @@ def _camera_disabled(env=None) -> bool:
     return (env.get("G1_CAMERA_SOURCE") or "").strip().lower() in _CAMERA_OFF_VALUES
 
 
-def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
-    """(active frame source, camera names it can serve).
+def _head_camera_name() -> str:
+    """The name the head camera is served under, for a robot whose head is down."""
+    if os.environ.get("G1_CAMERA_SOURCE", "auto").lower() == "realsense":
+        return os.environ.get("G1_CAMERA_NAME", _REALSENSE_DEFAULT_NAME)
+    return _pc2cam_head_name()
+
+
+def _head_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
+    """(active frame source, camera names it can serve) — everything but wrists.
 
     Source comes from G1_CAMERA_SOURCE ∈
     {auto|lerobot|teleimager|pc2cam|realsense|none}, the same knob
@@ -1673,6 +1851,9 @@ def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
     `g1_cam_pub.py` on PC2 — and only then a RealSense on this machine's USB.
     That last place is deliberate: the first three are what the robot sees,
     while a D435 plugged into the workstation sees whatever the desk faces.
+
+    This is the whole answer on a robot without wrist cameras, and what a
+    stream of any camera but a wrist resolves and pins.
     """
     if _camera_disabled():
         return None, ()  # `none`/`off`: probe nothing (TASK-416)
@@ -1694,13 +1875,51 @@ def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
             return None, ()
     if cam_source in ("auto", "pc2cam"):
         if _pc2cam_available()[0]:
-            return "pc2cam", (os.environ.get("G1_PC2_CAMERA_NAME", _REALSENSE_DEFAULT_NAME),)
+            return "pc2cam", (_pc2cam_head_name(),)
         if cam_source == "pc2cam":
             return None, ()
     if cam_source in ("auto", "realsense"):
         if _ensure_realsense() is not None:
             return "realsense", (os.environ.get("G1_CAMERA_NAME", _REALSENSE_DEFAULT_NAME),)
     return None, ()
+
+
+def _camera_listing() -> "tuple[str | None, tuple[str, ...], list[str] | None, str | None]":
+    """What /cameras answers: `(source, served names, configured names, detail)`.
+
+    Served is head first, then the wrist cameras whose publisher answers, in
+    the order G1_WRIST_CAMERAS names them. A wrist is listed or not on its own
+    endpoint alone (TASK-445): a down wrist drops only its own name, and a down
+    head does not hide a live wrist. A configured wrist name the head's source
+    also offers (teleimager can) is the configured endpoint's — one name, one
+    camera.
+
+    Configured is every camera the sidecar is set up to serve, up or not —
+    None when no source serves anything and no wrist is configured, so a
+    head-only robot with no camera answers exactly what it always has. Detail
+    is set when the head has no source, as it always was.
+    """
+    head_source, head_names = _head_source_and_names()
+    wrists = _wrist_camera_endpoints()
+    if not wrists:
+        configured = list(head_names) if head_source is not None else None
+        detail = _no_camera_source_detail() if head_source is None else None
+        return head_source, head_names, configured, detail
+    head_names = tuple(n for n in head_names if n not in wrists)
+    live = _live_wrist_names(wrists)
+    source = head_source if head_source is not None else ("pc2cam" if live else None)
+    configured = list(head_names if head_source is not None else (_head_camera_name(),))
+    configured += list(wrists)
+    detail = None
+    if head_source is None:
+        detail = _no_camera_source_detail([n for n in wrists if n not in live])
+    return source, head_names + live, configured, detail
+
+
+def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
+    """(active frame source, camera names it can serve), wrist cameras included."""
+    source, names, _, _ = _camera_listing()
+    return source, names
 
 
 def _grab_camera_jpeg(name: str, resolved=None):
@@ -1712,15 +1931,27 @@ def _grab_camera_jpeg(name: str, resolved=None):
     /cameras advertises is a name a stream will serve.
 
     `resolved` is an already-known `(source, names)` from
-    `_camera_source_and_names()`, and a caller that grabs in a LOOP must pass
+    `_head_source_and_names()`, and a caller that grabs in a LOOP must pass
     it. Resolution is not free: in `auto` order every source ahead of the live
     one gets probed, and a probe that fails only fails cheaply for the length
     of its cooldown. Measured on this lab's rig — pc2cam serving, pyzmq
     installed, no teleimager image server — re-resolving per frame stalled the
     15 fps stream for a full 1.0 s every 5 s, which is a visible freeze in what
     the panel labels LIVE.
+
+    A configured wrist camera (TASK-445) is read from its own publisher and
+    never consults `resolved` or any other source, so a wrist stream touches
+    only its own endpoint and a head stream never touches a wrist's. Without
+    `resolved`, the head's sources are resolved, not the wrists'.
     """
-    source, names = resolved if resolved is not None else _camera_source_and_names()
+    if name in _wrist_camera_endpoints():
+        reachable, jpeg = _pc2cam_frame(name)
+        if jpeg is not None:
+            return jpeg, "pc2cam", None, None
+        if not reachable:
+            return None, "pc2cam", _wrist_camera_detail(name), "no_source"
+        return None, "pc2cam", f"source 'pc2cam' returned no frame for '{name}'", "no_frame"
+    source, names = resolved if resolved is not None else _head_source_and_names()
     if source is None:
         return None, None, _no_camera_source_detail(), "no_source"
     if name not in names:
@@ -3096,7 +3327,10 @@ class Handler(BaseHTTPRequestHandler):
         camera appearing or vanishing mid-stream is /cameras' business — the
         cockpit polls it — not something to pay for on every frame.
         """
-        resolved = _camera_source_and_names()
+        # A wrist camera is pinned by name to its own publisher inside
+        # `_grab_camera_jpeg` (TASK-445); resolving the head's sources for it
+        # would only pay their probes before the first frame.
+        resolved = None if name in _wrist_camera_endpoints() else _head_source_and_names()
         jpeg, source, error, kind = _grab_camera_jpeg(name, resolved)
         if jpeg is None:
             self._send(404 if kind == "unknown_name" else 503,
@@ -3153,17 +3387,33 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/cameras":
             # What the ACTIVE SOURCE can serve, not a fixed list (TASK-233):
             # with a lone D435 attached that is one name, and the two wrist
-            # names are gone rather than aliases for the same frame.
-            source, names = _camera_source_and_names()
+            # names are gone rather than aliases for the same frame. A wrist
+            # camera is listed only from its own configured publisher
+            # (TASK-445), and `configured` names every camera the robot is set
+            # up for, so a client can tell "offline" from "not fitted".
+            source, names, configured, detail = _camera_listing()
             body = {"cameras": list(names), "source": source}
-            if source is None:
-                body["detail"] = _no_camera_source_detail()
+            if detail is not None:
+                body["detail"] = detail
+            if configured is not None:
+                body["configured"] = configured
             self._send(200, body)
         elif self.path.startswith("/cameras/") and self.path.endswith("/stream"):
             self._stream_mjpeg(self.path[len("/cameras/"):-len("/stream")])
         elif self.path.startswith("/cameras/") and self.path.endswith("/snapshot"):
             name = self.path[len("/cameras/"):-len("/snapshot")]
             self._send(200, self._snapshot(name))
+        elif self.path.startswith("/cameras/") and self.path.partition("?")[0].endswith("/snapshot"):
+            # The only route that reads a query (TASK-445). HardwareClient's
+            # snapshotRaw asks `?format=raw` first, and this sidecar used to 404
+            # it — which cost every recorded frame a second request. Other
+            # parameters (the sim's render options) mean nothing here.
+            route, _, query = self.path.partition("?")
+            name = route[len("/cameras/"):-len("/snapshot")]
+            if parse_qs(query).get("format") == ["raw"]:
+                self._snapshot_raw(name)
+            else:
+                self._send(200, self._snapshot(name))
         elif self.path == "/pointcloud/sensors":
             self._send(200, {"sensors": DEPTH_SENSORS})
         elif self.path.startswith("/pointcloud/") and self.path.endswith("/snapshot"):
@@ -3252,6 +3502,24 @@ class Handler(BaseHTTPRequestHandler):
             return {"ok": False, "error": error or f"no camera frame for '{name}'"}
         return {"ok": True, "camera": name,
                 "jpeg_base64": base64.b64encode(jpeg).decode(), "source": source}
+
+    def _snapshot_raw(self, name: str) -> None:
+        """`?format=raw`: the frame as `image/jpeg`, no base64-in-JSON.
+
+        Same as the sim facade's (sim_g1_dds/sim_node.py), so the recorder gets
+        one request per frame against either. A failure keeps the plain route's
+        shape and status — `{"ok": false, "error"}` with a 200 — which
+        HardwareClient already turns into an error naming the camera.
+        """
+        jpeg, _, error, _ = _grab_camera_jpeg(name)
+        if jpeg is None:
+            self._send(200, {"ok": False, "error": error or f"no camera frame for '{name}'"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(jpeg)))
+        self.end_headers()
+        self.wfile.write(jpeg)
 
 
 def _shutdown_arm_sdk() -> None:
