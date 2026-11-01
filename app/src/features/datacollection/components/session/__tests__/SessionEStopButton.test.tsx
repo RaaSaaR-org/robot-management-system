@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SessionEStopButton } from '../SessionEStopButton';
+import { toast } from '@/shared/components/ui';
 
 vi.mock('../../../../safety/api/safetyApi', () => ({ triggerRobotEStop: vi.fn().mockResolvedValue({}) }));
 import { triggerRobotEStop } from '../../../../safety/api/safetyApi';
@@ -22,6 +23,16 @@ describe('SessionEStopButton', () => {
     fireEvent.click(screen.getByTestId('session-estop'));
     await waitFor(() => expect(estop).toHaveBeenCalledWith('g1', expect.objectContaining({ reason: expect.any(String) })));
     expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('keeps a failed stop on screen and points at the hardware stop', async () => {
+    estop.mockRejectedValueOnce(new Error('robot unreachable'));
+    const err = vi.spyOn(toast, 'error');
+    render(<SessionEStopButton robotId="g1" robotName="G1" />);
+    fireEvent.click(screen.getByTestId('session-estop'));
+    await waitFor(() => expect(err).toHaveBeenCalled());
+    const [, opts] = err.mock.calls[0];
+    expect(opts).toMatchObject({ duration: null, description: expect.stringContaining('hardware stop') });
   });
 
   it('fires on Escape twice within a second, not on one Escape', async () => {
