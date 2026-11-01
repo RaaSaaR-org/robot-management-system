@@ -16,7 +16,7 @@ spe: 2
 effort: "medium"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # The keyboard Teleop tab has its own E-STOP and says which robot it drives
@@ -83,13 +83,13 @@ or simulated.
 
 ## Acceptance Criteria
 
-- [ ] The keyboard section on the Teleop tab shows an E-STOP for every robot, real or simulated.
-- [ ] One click on it calls `triggerRobotEStop` for this robot; no confirmation dialog appears.
-- [ ] Escape twice within a second fires it; Escape while typing does not.
-- [ ] It sits alone at the far right of the header, >= 64 px from any other control at 1512 px and >= 48 px at 1280 px.
-- [ ] The header names the robot and says "real robot" for `g1-edu-4` and "simulated" for `sim-g1-edu-dev`.
-- [ ] Space's legend reads "Stop joints (not an E-stop)".
-- [ ] The session page's embedded keyboard section shows no second E-STOP.
+- [x] The keyboard section on the Teleop tab shows an E-STOP for every robot, real or simulated.
+- [x] One click on it calls `triggerRobotEStop` for this robot; no confirmation dialog appears.
+- [x] Escape twice within a second fires it; Escape while typing does not.
+- [x] It sits alone at the far right of the header, >= 64 px from any other control at 1512 px and >= 48 px at 1280 px.
+- [x] The header names the robot and says "real robot" for `g1-edu-4` and "simulated" for `sim-g1-edu-dev`.
+- [x] Space's legend reads "Stop joints (not an E-stop)".
+- [x] The session page's embedded keyboard section shows no second E-STOP.
 
 ## Test Strategy
 
