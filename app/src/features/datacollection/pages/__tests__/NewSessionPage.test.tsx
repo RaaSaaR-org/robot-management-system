@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { screen, within, waitFor } from '@testing-library/react';
+import { act, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '@/test/utils';
 import { useAuthStore } from '@/features/auth/store/authStore';
@@ -336,6 +336,43 @@ describe('NewSessionPage — cameras (TASK-447)', () => {
     expect(screen.getByText(/Like a robot without wrist cameras/)).toBeInTheDocument();
     const request = await submit(user);
     expect(request).not.toHaveProperty('cameras');
+  });
+
+  it('re-reads the cameras as soon as the chosen robot comes online, not on the next poll', async () => {
+    let online = false;
+    let reads = 0;
+    server.use(
+      http.get('*/api/robots/:id/cameras', () => {
+        reads += 1;
+        return HttpResponse.json({ source: 'sidecar', cameras: online ? BOTH : [] });
+      }),
+    );
+    const user = userEvent.setup();
+    render();
+    await user.selectOptions(screen.getAllByRole('combobox')[0], 'sim-1');
+    await waitFor(() => expect(reads).toBeGreaterThan(0));
+    expect(screen.queryByRole('group', { name: 'Cameras' })).not.toBeInTheDocument();
+    online = true;
+    act(() => {
+      useRobotsStore.setState({
+        robots: [robot('sim-1', 'Bench sim', 'online'), robot('g1-edu-4', 'G1 EDU', 'online')],
+      });
+    });
+    expect(await screen.findByRole('group', { name: 'Cameras' }, { timeout: 2000 })).toBeInTheDocument();
+  });
+
+  it('a robot switch starts the next robot on Head + wrists, not on the last choice', async () => {
+    camerasFor({ cameras: BOTH });
+    useRobotsStore.setState({
+      robots: [robot('sim-1', 'Bench sim', 'online'), robot('g1-edu-4', 'G1 EDU', 'online')],
+    });
+    const user = userEvent.setup();
+    render();
+    await user.selectOptions(screen.getAllByRole('combobox')[0], 'g1-edu-4');
+    await user.click(await screen.findByRole('button', { name: 'Head only' }));
+    await user.selectOptions(screen.getAllByRole('combobox')[0], 'sim-1');
+    const group = await screen.findByRole('group', { name: 'Cameras' });
+    expect(within(group).getByRole('button', { name: 'Head + wrists' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('a configured wrist camera that is offline still offers Head + wrists, with a note', async () => {

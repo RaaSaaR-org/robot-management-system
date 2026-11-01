@@ -145,6 +145,18 @@ export function NewSessionPage() {
   const offlineWrists = wristCameras.filter((c) => !robotCameras.cameras.includes(c));
   const sessionCameras =
     wristCameras.length > 0 && cameraChoice === 'head_wrists' ? ['head_camera', ...wristCameras] : undefined;
+  // An offline robot lists no cameras. When it comes online (e.g. started from
+  // here), read its cameras at once instead of on the next poll, so a submit
+  // in between cannot create a Head-only session on a wrist robot by accident.
+  const selectedOnline = selectedRobot ? isOnline(selectedRobot.status) : false;
+  const wasOnline = useRef(selectedOnline);
+  const { refresh: refreshCameras } = robotCameras;
+  useEffect(() => {
+    if (selectedOnline && !wasOnline.current) refreshCameras();
+    wasOnline.current = selectedOnline;
+  }, [selectedOnline, refreshCameras]);
+  // Each robot starts on the default choice, not the previous robot's.
+  useEffect(() => setCameraChoice('head_wrists'), [robotId]);
 
   // Preselect once the list arrives: the remembered robot if it is online,
   // else the only online robot. Never overrides a choice the user made.
