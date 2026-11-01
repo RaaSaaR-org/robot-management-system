@@ -2,6 +2,9 @@
  * @file SessionTypeSelector.tsx
  * @description Teleoperation input picker: a radio-card grid (one column on
  *              phones, two at sm, three at xl), selected = primary border.
+ *              `types` narrows it to a subset — the New session page shows
+ *              the three everyday devices up front and the rest under
+ *              Advanced options (TASK-392).
  * @feature datacollection
  */
 
@@ -17,6 +20,12 @@ export interface SessionTypeSelectorProps {
   className?: string;
   /** Marks the group invalid (e.g. submitted without a choice). */
   invalid?: boolean;
+  /** The devices to offer, in this order (default: all six). */
+  types?: TeleoperationType[];
+  /** Accessible name of the group (default "Teleoperation input"). */
+  label?: string;
+  /** 3 lays the cards out in one row from 768px. */
+  columns?: 2 | 3;
 }
 
 export const TYPE_ICONS: Record<TeleoperationType, LucideIcon> = {
@@ -28,19 +37,25 @@ export const TYPE_ICONS: Record<TeleoperationType, LucideIcon> = {
   gamepad: Gamepad2,
 };
 
-const TYPE_ORDER: TeleoperationType[] = [
+export const TYPE_ORDER: TeleoperationType[] = [
   'vr_quest', 'vr_vision_pro', 'bilateral_aloha', 'kinesthetic', 'keyboard_mouse', 'gamepad',
 ];
 
-export function SessionTypeSelector({ value, onChange, disabled, className, invalid }: SessionTypeSelectorProps) {
+export function SessionTypeSelector({
+  value, onChange, disabled, className, invalid, types = TYPE_ORDER, label = 'Teleoperation input', columns = 2,
+}: SessionTypeSelectorProps) {
   return (
     <div
       role="radiogroup"
-      aria-label="Teleoperation input"
+      aria-label={label}
       aria-invalid={invalid || undefined}
-      className={cn('grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3', className)}
+      className={cn(
+        'grid grid-cols-1 gap-3',
+        columns === 3 ? 'md:grid-cols-3' : 'sm:grid-cols-2 xl:grid-cols-3',
+        className,
+      )}
     >
-      {TYPE_ORDER.map((type) => {
+      {types.map((type) => {
         const Icon = TYPE_ICONS[type];
         const isSelected = value === type;
         return (

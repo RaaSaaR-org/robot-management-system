@@ -87,3 +87,30 @@ export function pickDriveStick(
   }
   return best;
 }
+
+/** What the rig knows when it decides whether a `{move}` goes out this frame. */
+export interface DriveSendInput {
+  /** Seconds since the last `{move}` was sent. */
+  sinceLastS: number;
+  /** The control stream is open (link up, not latched, control held). */
+  streaming: boolean;
+  /**
+   * The agent says the base walks (TASK-398). False on a sidecar that only
+   * changes modes: then NOTHING is sent — no head-follow yaw, no stick, not
+   * even the closing zero, because no velocity was ever accepted.
+   */
+  moveEnabled: boolean;
+  /** There is a velocity to command this frame. */
+  moving: boolean;
+  /** The last `{move}` sent was non-zero, so one zero is owed. */
+  wasDriving: boolean;
+  /** The send interval, seconds. */
+  intervalS: number;
+}
+
+/** Whether the rig sends a `{move}` this frame. */
+export function shouldSendDrive(i: DriveSendInput): boolean {
+  if (!i.streaming || !i.moveEnabled) return false;
+  if (i.sinceLastS < i.intervalS) return false;
+  return i.moving || i.wasDriving;
+}

@@ -26,7 +26,14 @@ const locoMove = vi.hoisted(() =>
   vi.fn(async (): Promise<{ ok: boolean; error?: string; rpcCode?: number }> => ({ ok: true })),
 );
 vi.mock('../../hardware/HardwareClient.js', () => ({
-  hardwareClient: { locoMove },
+  hardwareClient: {
+    locoMove,
+    // TASK-398: a sidecar that reports no gate — moves go out as before.
+    getLocoCapability: () => ({ gate: 'unknown', moveEnabled: null, idsVerified: false, ids: null }),
+    getMeasuredFsmId: () => null,
+    getBaseState: () => null,
+    mayMoveBase: () => true,
+  },
   getSidecarUrl: () => 'http://localhost:0',
 }));
 

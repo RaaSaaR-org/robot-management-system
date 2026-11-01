@@ -8,10 +8,12 @@
  * @status live
  */
 
+import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { RobotStateManager } from '../robot/state.js';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
+import type { BaseModeName } from '../hardware/base-mode.js';
 import { config } from '../config/config.js';
 import { WristTeleop, parseWristPose } from '../teleop/wrist-teleop.js';
 import { FingerRetargeter, gripPose, type HandKeypoints } from '../teleop/dexpilot.js';
@@ -19,11 +21,36 @@ import { G1_ARM_CHAINS, G1_FINGER_CHAINS, type Side } from '../teleop/g1-chains.
 import { markTeleopMode } from '../teleop/teleop-mode.js';
 import { controlLease, type ControlLeaseRegistry, type LeaseEvent } from '../control-lease/control-lease.js';
 import { adjustBoundCount } from '../control-lease/socket-binding.js';
+import { armRegistry as defaultArmRegistry, type ArmRegistry } from '../teleop/arm-registry.js';
+import { ReengageLatch, parseClutch, type ReengageState } from '../teleop/reengage.js';
+import { isG1Family, isG1ForwardableJoint } from '../teleop/forward-joints.js';
 
 /** How fast a held joint moves, in radians per second. */
 const SLEW_RATE_RAD_PER_S = 0.8;
-/** Integration tick for held-key motion (~30 Hz). */
+/** The socket's housekeeping tick: dead-man, latch edges, base ramp (~30 Hz). */
 const TICK_MS = 33;
+/**
+ * Integration tick for held-key JOINT motion (50 Hz), TASK-421.
+ *
+ * The same rate as the forwarder (`TELEOP_FORWARD_MS`) and the sidecar's
+ * publisher, so every target step (0.8 rad/s × 20 ms = 16 mrad) fits inside one
+ * sidecar slew step (1.0 rad/s × 20 ms). Integrated on the 33 ms tick instead,
+ * the target jumped 26 mrad every 33 ms against a 20 mrad-per-frame slew: the
+ * commanded joint velocity alternated between the slew limit and a fraction of
+ * it at the 30/50 Hz beat, which a stiff arm feels as a buzz.
+ */
+const JOINT_TICK_MS = 20;
+/**
+ * How long a held key keeps moving its joint without a fresh clutch-closed
+ * heartbeat, in ms (TASK-421). A client that reports its clutch (the keyboard
+ * does, at 10 Hz) and goes quiet stops its joint after three missed beats
+ * instead of after the full arm dead-man: the arm then HOLDS where it is until
+ * the heartbeat dead-man hands it back. Clients that never report a clutch
+ * (the sim, scripts) are not affected.
+ */
+const HELD_KEY_TTL_MS = 300;
+/** How often a moving joint's pose is echoed to the client, in ms. */
+const STATE_ECHO_MS = 33;
 /**
  * How long a base-velocity command stays alive on the robot, in seconds.
  *
@@ -58,6 +85,17 @@ const MAX_ANGULAR_RAD_S = ((Math.abs(config.agentMode.turnSpeedDps) || 45) * Mat
 const MAX_LINEAR_ACCEL_MPS2 = 0.8;
 /** Ping interval for the socket's own liveness probe, in ms. */
 const KEEPALIVE_MS = 15_000;
+/**
+ * The ARM dead-man (TASK-393), in ms.
+ *
+ * A client that sends `{hb}` frames (the VR rig does, at 10 Hz, from its render
+ * loop) promises to keep sending them while it drives. One second without one —
+ * the headset's render loop stalled, the tab was backgrounded, Wi-Fi went — and
+ * this socket's motion is halted and its arm claim given back, which disarms the
+ * sidecar when it was the last one. The 15 s ping above cannot do this job: it
+ * never checks the pong, and fifteen seconds is a long time for an arm.
+ */
+const HEARTBEAT_TIMEOUT_MS = 1_000;
 /**
  * Largest teleop frame we will accept, in bytes. A 43-joint G1 EDU pose is
  * ~1.5 KB; `ws` defaults to 100 MiB, i.e. an unauthenticated socket on the
@@ -147,9 +185,37 @@ export function clampPlanar(vx: number, vy: number, limit: number): { vx: number
  * - `lease_required` — (`CONTROL_LEASE_REQUIRED` only) a motion frame arrived
  *   on a socket that is not bound to the installed control lease, and was
  *   DISCARDED. Once per socket, reset by a successful `{bind}`.
- * - `lease_invalid` — (`CONTROL_LEASE_REQUIRED` only) a `{bind}` named a
- *   secret or generation the registry does not hold. Sent for EVERY failed
- *   bind: a bind is a deliberate act, not a stream.
+ * - `lease_invalid` — a `{bind}` named a secret or generation the registry
+ *   does not hold. Sent for EVERY failed bind: a bind is a deliberate act, not
+ *   a stream.
+ * - `heartbeat_lost` — (TASK-393) this socket sends `{hb}` and stopped for
+ *   longer than HEARTBEAT_TIMEOUT_MS: its motion was halted and its arm claim
+ *   released. Cleared by the next heartbeat.
+ * - `arm_requires_lease` — the sidecar writes to a real robot's arms
+ *   (`write_mode: arm_sdk`) and this socket is not bound to the control lease.
+ *   The frame was DISCARDED.
+ * - `arm_requires_heartbeat` — same, but the socket sends no live heartbeat.
+ * - `arm_estop_latched` — the sidecar's own E-stop is latched.
+ * - `arm_failed` — the sidecar refused `/arm`; the message carries its words.
+ * - `arm_requires_clutch` — this socket heartbeats but never reported a clutch
+ *   (`{hb, clutch}`), so it can never make the rising edge arming needs. An
+ *   older app or a script: fail closed.
+ * - `arm_reengage_required` — the arms are not this socket's and its clutch
+ *   has not been seen OPEN and then CLOSED since the last disarm the operator
+ *   did not cause (or since the socket opened). See `teleop/reengage.ts`.
+ *   Re-sent after each change of that state.
+ * - `arm_side_unclutched` — a wrist or finger pose arrived for a side whose
+ *   clutch is open. On a real robot that side is not driven: a tracked hand has
+ *   no clutch, so hand tracking never drives the real arms.
+ * - `home_unavailable` — `{preset:'home'}` on an arm-only sidecar. Home is the
+ *   all-zeros pose, which on a real G1 swings both arms forward; the robot's
+ *   own controller is the home there, reached by ending teleop (disarm). Sent
+ *   for every refused press: it is a deliberate act, not a stream.
+ * - `joint_not_drivable` — (TASK-421) a single-joint frame (`direction`,
+ *   `position`, `delta`) named a joint the arm-only write path never commands:
+ *   a leg, the waist, or a finger of a hand the sidecar does not command. It is
+ *   refused BEFORE arming — arming for it would blend the arms in with nothing
+ *   to stream, and the sidecar's dead-man would blend them straight back out.
  */
 export type TeleopErrorCode =
   | 'loco_unavailable'
@@ -163,7 +229,17 @@ export type TeleopErrorCode =
   | 'stand_unavailable'
   | 'stand_failed'
   | 'lease_required'
-  | 'lease_invalid';
+  | 'lease_invalid'
+  | 'heartbeat_lost'
+  | 'arm_requires_lease'
+  | 'arm_requires_heartbeat'
+  | 'arm_estop_latched'
+  | 'arm_failed'
+  | 'arm_requires_clutch'
+  | 'arm_reengage_required'
+  | 'arm_side_unclutched'
+  | 'home_unavailable'
+  | 'joint_not_drivable';
 
 interface DirectionMessage {
   joint: string;
@@ -245,14 +321,33 @@ interface PostureMessage {
 }
 interface BindMessage {
   /**
-   * (`CONTROL_LEASE_REQUIRED` only) Bind this socket to the installed control
-   * lease. `leaseId` is the RAW secret the server handed the lease holder; the
-   * registry compares only its hash. Ignored while the flag is off.
+   * Bind this socket to the installed control lease. `leaseId` is the RAW
+   * secret the server handed the lease holder; the registry compares only its
+   * hash.
+   *
+   * Honoured whether or not `CONTROL_LEASE_REQUIRED` is set (TASK-393). The
+   * server hands leases out by default and the app binds whenever it holds one;
+   * an agent that ignored the frame unless the env flag was on never answered
+   * `bound`, so "Take control" timed out on every robot that had not opted in.
+   * The flag now only decides whether an UNBOUND socket may drive.
    */
   bind: { leaseId?: unknown; generation?: unknown };
 }
+interface HeartbeatMessage {
+  /** Application-level liveness (TASK-393); any value. See HEARTBEAT_TIMEOUT_MS. */
+  hb: unknown;
+  /**
+   * The client's clutch, as it is NOW: `{left, right}` for the VR rig's two
+   * grips, a boolean for a one-clutch client (the keyboard: a move key held).
+   * A tracked hand is never reported clutched. Sent on every beat and at once
+   * on every change. A real robot's arms arm only on a rising edge of it —
+   * see `teleop/reengage.ts`. Absent: the client cannot arm a real robot.
+   */
+  clutch?: unknown;
+}
 type TeleopMessage =
   | BindMessage
+  | HeartbeatMessage
   | DirectionMessage
   | DeltaMessage
   | PositionMessage
@@ -299,6 +394,125 @@ const MOTION_KEYS = [
   'posture', 'preset', 'move', 'wrists', 'hands', 'positions', 'position', 'direction', 'delta',
 ] as const;
 
+/** A `{move}` of all zeros, or `{preset:'stop'}` — a stop is never gated. */
+function isStopFrame(msg: object): boolean {
+  const m = msg as { move?: { vx?: unknown; vy?: unknown; omega?: unknown }; preset?: unknown };
+  if (m.preset === 'stop') return true;
+  if (!m.move || typeof m.move !== 'object') return false;
+  const zero = (v: unknown): boolean => v === undefined || v === 0;
+  return zero(m.move.vx) && zero(m.move.vy) && zero(m.move.omega);
+}
+
+/**
+ * Why a pose frame moved nothing (TASK-407). Every `{wrists}` / `{positions}`
+ * frame is answered — with `{type:'state', positions}` when an arm followed, or
+ * with `{type:'state', held:true, side, reason}` when none did.
+ *
+ * WHY EVERY FRAME. The client measures its LINK from the answers, and every
+ * refusal path used to return in silence: an unclutched side, a closed arm gate,
+ * a side the re-engage latch had not released, an IK solve that held. A refused
+ * arm therefore read as a dead network in the headset — LINK stale, LINK lost,
+ * the link-lost buzz — for as long as the operator held a grip the robot was
+ * refusing. A refusal is an answer, so it is sent as one.
+ *
+ * - `unclutched` — the pose named only sides whose clutch is open (real robot).
+ * - `arm_gate` — the arm gate is closed: no heartbeat, the clutch never
+ *   reported, or the sidecar refused the claim.
+ * - `not_armed` — the gate is open but this console has not made the clutch
+ *   rising edge the re-engage latch needs.
+ * - `side_refused` — the offered side may not drive (its clutch is not engaged).
+ * - `ik_held` — the solver held the previous pose (unusable or unseeded target),
+ *   or this robot has no arm chain to solve.
+ * - `estop` — an E-stop is latched.
+ * - `lease` — this socket is not bound to the control lease.
+ */
+export type TeleopHeldReason =
+  | 'unclutched'
+  | 'arm_gate'
+  | 'not_armed'
+  | 'side_refused'
+  | 'ik_held'
+  | 'estop'
+  | 'lease';
+
+export type TeleopHeldSide = 'left' | 'right' | 'both';
+
+/** `{type:'state', held:true, ...}` — the answer to a pose frame that moved nothing. */
+export interface TeleopHeldFrame {
+  type: 'state';
+  held: true;
+  side: TeleopHeldSide;
+  reason: TeleopHeldReason;
+}
+
+/**
+ * The fastest the held answers go out, per socket, in ms (20 Hz).
+ *
+ * The rig streams at 20 Hz, so this is one answer per pose frame in steady
+ * state. A burst faster than that (two pose frames in one tick) is coalesced:
+ * the newest refusal waits for the slot and goes out on the next tick, so no
+ * frame is left without an answer for longer than one tick.
+ */
+export const HELD_ANSWER_MIN_INTERVAL_MS = 50;
+
+/** Which sides a pose frame offered: the non-null keys, or `both`. */
+export function offeredSide(sides: Record<string, unknown> | null | undefined): TeleopHeldSide {
+  const left = sides?.left != null;
+  const right = sides?.right != null;
+  if (left && !right) return 'left';
+  if (right && !left) return 'right';
+  return 'both';
+}
+
+/** Which sides a `{positions}` frame touches, from its joint names. */
+export function positionsSide(positions: Record<string, unknown>): TeleopHeldSide {
+  const names = Object.keys(positions);
+  const left = names.some((n) => n.startsWith('left_'));
+  const right = names.some((n) => n.startsWith('right_'));
+  if (left && !right) return 'left';
+  if (right && !left) return 'right';
+  return 'both';
+}
+
+/** The `{type:'base'}` frame (TASK-398 adds the measured mode and the gate). */
+export interface BaseFrame {
+  type: 'base';
+  /** The base is in a non-locomoting FSM — measured when fresh, else commanded. */
+  damped: boolean;
+  fsmId: number | null;
+  /** The measured mode, `unknown` when the sidecar has no fresh reading. */
+  mode: BaseModeName;
+  /** `mode`/`fsmId` come from a fresh sidecar reading, not from a command. */
+  measured: boolean;
+  /** The sidecar would execute `{move}`; false = do not send it at all. */
+  moveEnabled: boolean;
+  /** Whether the robot's mode can be changed from NeoDEM (`off` when not). */
+  modeControl: 'off' | 'fsm' | 'full';
+}
+
+/** Build the base frame from the measured mode, the gate and the agent's record. */
+export function baseFrame(agent: { damped: boolean; lastFsmId: number | null }): BaseFrame {
+  const capability = hardwareClient.getLocoCapability();
+  const measuredId = hardwareClient.getMeasuredFsmId();
+  const reading = hardwareClient.getBaseState();
+  const measured = measuredId !== null && reading !== null;
+  const mode: BaseModeName = measured ? reading.mode : 'unknown';
+  return {
+    type: 'base',
+    damped: measured ? mode === 'limp' || mode === 'zero_torque' : agent.damped,
+    fsmId: measured ? measuredId : agent.lastFsmId,
+    mode,
+    measured,
+    moveEnabled: hardwareClient.mayMoveBase(),
+    modeControl: capability.gate === 'fsm' || capability.gate === 'full' ? capability.gate : 'off',
+  };
+}
+
+/** What makes two base frames different enough to send again. */
+function baseFrameKey(f: BaseFrame): string {
+  return `${f.damped}|${f.fsmId}|${f.mode}|${f.measured}|${f.moveEnabled}|${f.modeControl}`;
+}
+
 /** Injected so this module does not import the Agent Mode controller. */
 export interface KeyboardTeleopDeps {
   /**
@@ -316,6 +530,10 @@ export interface KeyboardTeleopDeps {
    * Read once per connection; defaults to `config.controlLease.required`.
    */
   leaseRequired?: () => boolean;
+  /** Who holds the sidecar armed (TASK-393). Defaults to the process singleton. */
+  armRegistry?: ArmRegistry;
+  /** The arm dead-man, in ms. Defaults to HEARTBEAT_TIMEOUT_MS. */
+  heartbeatTimeoutMs?: number;
 }
 
 export function createKeyboardTeleopWebSocket(
@@ -338,6 +556,18 @@ export function createKeyboardTeleopWebSocket(
      */
     const leaseRequired = (deps.leaseRequired ?? (() => config.controlLease.required))();
     const leases = deps.controlLease ?? controlLease;
+    const arms = deps.armRegistry ?? defaultArmRegistry;
+    const heartbeatTimeoutMs = deps.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
+    /** This socket's name in the arm registry. */
+    const armClaimId = `keyboard-teleop:${randomUUID()}`;
+    /**
+     * Whether this socket has ever bound a lease. A socket that took the lease
+     * stays lease-gated after losing it, flag or no flag: an operator whose
+     * control was revoked must not keep driving just because the agent was
+     * started without `CONTROL_LEASE_REQUIRED`.
+     */
+    let everBound = false;
+    const leaseGated = (): boolean => leaseRequired || everBound;
     /** Whether THIS socket holds one `teleop` holder on `controlOwnerLock`. */
     let holdsTeleop = false;
 
@@ -358,8 +588,37 @@ export function createKeyboardTeleopWebSocket(
       positions = robotStateManager.getTeleopPositions();
     }
     const joints = robotStateManager.getActiveJointConfig();
+    /**
+     * Whether a single-joint frame for `name` can reach the robot (TASK-421).
+     * Everything can where nothing needs arming; on an arm-only G1 sidecar
+     * only the arms and the fingers of a hand it commands.
+     */
+    const jointDrivable = (name: string): boolean =>
+      !arms.requiresArming()
+      || !isG1Family(robotStateManager.getState().robotType)
+      || isG1ForwardableJoint(name, arms.view().hands);
+    /**
+     * The drivable set as last told to this client. It changes under an open
+     * socket: the readiness panel takes control (opening this socket) while the
+     * sidecar is still read-only, and only then switches it to arm control, so
+     * the `config` frame alone would advertise all 43 joints as drivable for
+     * the whole session (TASK-421 review).
+     */
+    let drivableKey = '';
+    const drivableMap = (): Record<string, boolean> =>
+      Object.fromEntries(joints.map((j) => [j.name, jointDrivable(j.name)]));
+    /** Push `{type:'drivable'}` when the set differs from what the client has. */
+    const sendDrivableIfChanged = (): void => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const map = drivableMap();
+      const key = JSON.stringify(map);
+      if (key === drivableKey) return;
+      drivableKey = key;
+      ws.send(JSON.stringify({ type: 'drivable', joints: map }));
+    };
 
     // Advertise the embodiment so the client can build controls for any robot.
+    drivableKey = JSON.stringify(drivableMap());
     ws.send(JSON.stringify({
       type: 'config',
       robotType: robotStateManager.getState().robotType,
@@ -368,6 +627,9 @@ export function createKeyboardTeleopWebSocket(
         limitLower: j.limitLower,
         limitUpper: j.limitUpper,
         defaultPosition: j.defaultPosition,
+        // TASK-421: false for a joint the arm-only write path never commands,
+        // so the console can start on (and steer to) one that moves.
+        drivable: jointDrivable(j.name),
       })),
       positions,
     }));
@@ -435,13 +697,19 @@ export function createKeyboardTeleopWebSocket(
      * HUD went on reading `SPEED 0.00`, and the operator was left pushing a
      * stick at a robot that had no intention of walking.
      */
-    let wasDamped = robotStateManager.getAgentSafetyState().damped;
-    const sendBaseState = (damped: boolean): void => {
+    //
+    // TASK-398: the frame also carries the MEASURED mode and what the sidecar
+    // allows — `moveEnabled: false` tells the client to stop sending `{move}`
+    // at all (head turns, thumbsticks) on a robot whose sidecar only changes
+    // modes, and `modeControl` whether the mode panel applies.
+    let lastBaseKey = '';
+    const sendBaseState = (): void => {
       if (ws.readyState !== WebSocket.OPEN) return;
-      const agent = robotStateManager.getAgentSafetyState();
-      ws.send(JSON.stringify({ type: 'base', damped, fsmId: agent.lastFsmId }));
+      const frame = baseFrame(robotStateManager.getAgentSafetyState());
+      lastBaseKey = baseFrameKey(frame);
+      ws.send(JSON.stringify(frame));
     };
-    sendBaseState(wasDamped);
+    sendBaseState();
 
     // Per-joint angular velocity (rad/s) for currently-held keys.
     const velocity = new Map<string, number>();
@@ -466,6 +734,203 @@ export function createKeyboardTeleopWebSocket(
     const unsubscribeTeleopErrors = robotStateManager.onTeleopError((err) => {
       sendError(err.code, err.message);
     });
+
+    // ---- the arm write path (TASK-393) -------------------------------------
+    /**
+     * When this socket last sent `{hb}`, as `Date.now()`. `null` until the
+     * first one: a client that never heartbeats (an older app, a script) keeps
+     * the behaviour it always had — but it cannot ARM a real robot's arms.
+     */
+    let lastHeartbeatAt: number | null = null;
+    /** The dead-man fired and no heartbeat has arrived since. */
+    let heartbeatLost = false;
+    const heartbeatFresh = (): boolean =>
+      lastHeartbeatAt !== null && !heartbeatLost && Date.now() - lastHeartbeatAt <= heartbeatTimeoutMs;
+
+    /**
+     * The clutch rising edge arming needs (see `teleop/reengage.ts`). Every
+     * disarm this socket did not ask for — E-stop, heartbeat loss, lease loss,
+     * the sidecar's own dead-man or 409, a refused `/arm` — sends it back to
+     * `need_release`, so the arms never come back on a grip that was already
+     * held. Enforced HERE, on the agent's side of the socket: a client cannot
+     * talk its way past it by streaming harder.
+     */
+    const reengage = new ReengageLatch();
+    /** Arming is impossible right now; an edge seen meanwhile does not count. */
+    const armBlocked = (): boolean =>
+      robotStateManager.isEStopTriggered()
+      || arms.view().estopLatched
+      || boundGeneration === null
+      || !heartbeatFresh();
+    /** React to a change of the latch: give the arms back, tell the client. */
+    const onEngageChange = (before: ReengageState, reason: string): void => {
+      if (before === 'holding') {
+        // An `/arm` the sidecar refused lands here too (the claim went dead
+        // without arming): its words are the one thing the operator can act on.
+        const refused = arms.view().lastError;
+        if (refused && !arms.isLive()) sendError('arm_failed', `the sidecar refused to arm: ${refused}`);
+        arms.release(armClaimId, reason);
+        console.warn(`[KeyboardTeleop] arms handed back (${reason}) — a fresh clutch press is needed to re-arm`);
+      }
+      // Re-sent per state: "release first" and "now squeeze" are two messages.
+      errorsSent.delete('arm_reengage_required');
+      sendArmState(arms.view());
+    };
+    /** Advance the latch on the current facts. True when it changed. */
+    const syncEngage = (): boolean => {
+      if (!arms.requiresArming()) return false;
+      const before = reengage.update(armBlocked(), arms.has(armClaimId) && arms.isLive());
+      if (before === null) return false;
+      onEngageChange(before, 'the arms were handed back without the operator letting go');
+      return true;
+    };
+    /** A disarm the operator did not cause, raised by a path that knows why. */
+    const latchReengage = (reason: string): void => {
+      const before = reengage.latch();
+      if (before !== null) onEngageChange(before, reason);
+    };
+
+    /**
+     * May a JOINT frame be applied? On a sidecar that needs no arming (the sim,
+     * SO-101, an older sidecar) always yes. On an arm-only sidecar the socket
+     * must hold the control lease, be heartbeating, and have made a clutch
+     * rising edge since the last disarm it did not cause; then it claims the
+     * arms — the first claim arms the sidecar, ramping in from the measured
+     * pose. A refused frame is DISCARDED, not applied to the view: a target
+     * that drifted away while nothing could move the robot would be the first
+     * thing the robot was sent once something could.
+     */
+    /**
+     * Why `armGate` last returned false — what the held answer to that frame
+     * says (TASK-407). Only read right after a false return.
+     */
+    let gateRefusal: TeleopHeldReason = 'arm_gate';
+    const armGate = (): boolean => {
+      gateRefusal = 'arm_gate';
+      if (!arms.requiresArming()) return true;
+      if (boundGeneration === null) {
+        gateRefusal = 'lease';
+        sendError(
+          'arm_requires_lease',
+          'this robot\'s arms only take commands from the console that holds its control lease — take control first',
+        );
+        return false;
+      }
+      if (!heartbeatFresh()) {
+        sendError(
+          'arm_requires_heartbeat',
+          'this console sends no live heartbeat, so it may not drive the real arms — reload the app (or check the link)',
+        );
+        return false;
+      }
+      // Said as itself rather than as "release the grip": no grip fixes a latch.
+      if (arms.view().estopLatched) {
+        gateRefusal = 'estop';
+        sendError(
+          'arm_estop_latched',
+          'the sidecar\'s E-stop is latched — reset the E-stop before driving the arms',
+        );
+        return false;
+      }
+      syncEngage();
+      if (reengage.state === 'holding') {
+        // Already this socket's: a map lookup on an armed sidecar.
+        const result = arms.claim(armClaimId, boundGeneration);
+        if (result.state === 'refused') {
+          sendError(result.code, result.message);
+          latchReengage(`arm refused: ${result.code}`);
+          return false;
+        }
+        return true;
+      }
+      if (reengage.clutch === null) {
+        sendError(
+          'arm_requires_clutch',
+          'this console does not report its grip clutch, so it may not arm the real robot\'s arms — reload the app',
+        );
+        return false;
+      }
+      if (!reengage.mayArm()) {
+        gateRefusal = 'not_armed';
+        sendError(
+          'arm_reengage_required',
+          reengage.state === 'need_release'
+            ? 'release the grip, then squeeze it again to arm — the arms never re-arm on a grip that was already held'
+            : 'squeeze the grip to arm the robot\'s arms',
+        );
+        return false;
+      }
+      const result = arms.claim(armClaimId, boundGeneration);
+      if (result.state === 'refused') {
+        sendError(result.code, result.message);
+        latchReengage(`arm refused: ${result.code}`);
+        return false;
+      }
+      reengage.held();
+      errorsSent.delete('arm_reengage_required');
+      sendArmState(arms.view());
+      return true;
+    };
+
+    /**
+     * Refuse a single-joint frame for a joint the arm-only write path never
+     * commands (TASK-421), before it can arm anything. Answered on every
+     * refused press, like `home_unavailable`: a press is a deliberate act.
+     */
+    const refuseUndrivable = (joint: unknown): boolean => {
+      if (typeof joint !== 'string' || jointDrivable(joint)) return false;
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'error',
+          code: 'joint_not_drivable' satisfies TeleopErrorCode,
+          message: `${joint} is not driven on this robot — only the arms and the fingers of a hand `
+            + 'with live state take commands; select an arm joint',
+          at: new Date().toISOString(),
+        }));
+      }
+      return true;
+    };
+
+    /**
+     * On a real robot only a side whose clutch is closed is driven. A tracked
+     * hand reports no clutch, so it never drives the real arms or fingers.
+     * Returns whether ANY offered side may drive; tells the client once about a
+     * side that may not.
+     */
+    const clutchedSideOffered = (frame: Record<string, unknown>): boolean => {
+      if (!arms.requiresArming()) return true;
+      const offered = (['left', 'right'] as const).filter((side) => frame[side] != null);
+      if (offered.some((side) => !reengage.sideEngaged(side))) {
+        sendError(
+          'arm_side_unclutched',
+          'a pose arrived for a hand whose grip is not held — tracked hands cannot drive the real robot; use the controllers',
+        );
+      }
+      return offered.some((side) => reengage.sideEngaged(side));
+    };
+    const sideMayDrive = (side: 'left' | 'right'): boolean =>
+      !arms.requiresArming() || reengage.sideEngaged(side);
+
+    /** Push the arm path's state to this client: armed, weight, which hands, its latch. */
+    const sendArmState = (view: ReturnType<ArmRegistry['view']>): void => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      // A refusal is a past fact once the arms are actually up.
+      if (view.armed) {
+        errorsSent.delete('arm_failed');
+        errorsSent.delete('arm_estop_latched');
+      }
+      ws.send(JSON.stringify({
+        type: 'arm',
+        ...view,
+        mine: arms.has(armClaimId),
+        engage: reengage.state,
+        clutch: reengage.clutch,
+      }));
+      // The write mode or the commanded hands may have changed what moves.
+      sendDrivableIfChanged();
+    };
+    const unsubscribeArm = arms.subscribe(sendArmState);
+    sendArmState(arms.view());
 
     // --- base motion -------------------------------------------------------
     // One in-flight `SetVelocity` at a time. The sidecar call is an RPC that can
@@ -604,7 +1069,7 @@ export function createKeyboardTeleopWebSocket(
      * frame that asked is discarded.
      */
     const mayDrive = (): boolean => {
-      if (!leaseRequired) return true;
+      if (!leaseGated()) return true;
       if (boundGeneration === null || boundLeaseId === null) return false;
       return leases.verify(boundLeaseId, boundGeneration);
     };
@@ -646,6 +1111,8 @@ export function createKeyboardTeleopWebSocket(
       boundGeneration = null;
       boundLeaseId = null;
       haltMotion();
+      // Lease lost: the arms go back to the robot's own controller (TASK-393).
+      arms.release(armClaimId, state ? `lease ${state}` : 'lease replaced');
       adjustBound(generation, -1);
       releaseHolder();
       if (state && ws.readyState === WebSocket.OPEN) {
@@ -673,14 +1140,14 @@ export function createKeyboardTeleopWebSocket(
      * `unbind`, so a `move` queued behind an in-flight RPC never goes out —
      * and do NOT rebind: the client has to present the new lease itself.
      */
-    const unsubscribeLease = leaseRequired
-      ? leases.subscribe((event: LeaseEvent) => {
-          if (event.type !== 'fenced' && event.type !== 'expired') return;
-          if (boundGeneration === null || event.generation !== boundGeneration) return;
-          stopBase();
-          unbind(event.type === 'fenced' ? 'revoked' : 'expired');
-        })
-      : () => {};
+    // Subscribed whatever the flag says: a socket that bound voluntarily is
+    // fenced exactly like one that had to (TASK-393). Inert while unbound.
+    const unsubscribeLease = leases.subscribe((event: LeaseEvent) => {
+      if (event.type !== 'fenced' && event.type !== 'expired') return;
+      if (boundGeneration === null || event.generation !== boundGeneration) return;
+      stopBase();
+      unbind(event.type === 'fenced' ? 'revoked' : 'expired');
+    });
 
     const sendLeaseInvalid = (message: string): void => {
       if (ws.readyState !== WebSocket.OPEN) return;
@@ -723,7 +1190,10 @@ export function createKeyboardTeleopWebSocket(
 
       binding = true;
       try {
-        const bindClaim = controlOwnerLock.claim('teleop');
+        // Without `CONTROL_LEASE_REQUIRED` the socket already took a `teleop`
+        // holder on connect; a second one would leave the lock held after it
+        // closes.
+        const bindClaim: { preempted?: string } = holdsTeleop ? {} : controlOwnerLock.claim('teleop');
         holdsTeleop = true;
         if (bindClaim.preempted) {
           console.warn(`[KeyboardTeleop] Bind preempted ${bindClaim.preempted} — human teleop takes over`);
@@ -741,9 +1211,11 @@ export function createKeyboardTeleopWebSocket(
         }
         boundGeneration = generation;
         boundLeaseId = leaseId;
+        everBound = true;
         adjustBound(generation, +1);
         const bindPositions = robotStateManager.enableTeleop();
         errorsSent.delete('lease_required');
+        errorsSent.delete('arm_requires_lease');
         if (ws.readyState !== WebSocket.OPEN) return;
         ws.send(JSON.stringify({ type: 'lease', state: 'bound', generation }));
         ws.send(JSON.stringify({
@@ -758,6 +1230,17 @@ export function createKeyboardTeleopWebSocket(
     };
 
     const drive = async (vx: number, vy: number, omega: number, ttlS: number): Promise<void> => {
+      // TASK-398: a sidecar that only changes modes (G1_LOCO_ENABLED=fsm) or
+      // has locomotion off refuses every velocity. Treat it as idle: no HTTP
+      // call, no log line, one sticky error per socket — head turns and
+      // thumbsticks in a headset would otherwise post ten refusals a second.
+      if (!hardwareClient.mayMoveBase()) {
+        sendError(
+          'loco_disabled',
+          'base walking is disabled on this robot (the sidecar changes modes only) — head turns and thumbsticks do not move it',
+        );
+        return;
+      }
       if (moveInFlight) {
         pendingMove = { velocity: { vx, vy, omega }, ttlS };
         return;
@@ -846,14 +1329,61 @@ export function createKeyboardTeleopWebSocket(
       return true;
     };
 
+    // ---- held answers (TASK-407) -------------------------------------------
+    /** When the last held answer went out, as `Date.now()`. */
+    let lastHeldAt = -Infinity;
+    /** A refusal waiting for the 20 Hz slot; flushed by the tick. */
+    let pendingHeld: TeleopHeldFrame | null = null;
+
     const sendState = () => {
+      // A real answer supersedes a refusal still waiting for its slot.
+      pendingHeld = null;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'state', positions: robotStateManager.getTeleopPositions() }));
       }
     };
 
+    const flushHeld = (frame: TeleopHeldFrame): void => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      lastHeldAt = Date.now();
+      ws.send(JSON.stringify(frame));
+    };
+    /**
+     * Answer a pose frame that moved nothing. See `TeleopHeldReason`: without
+     * this the client cannot tell a refused arm from a dead link.
+     */
+    const answerHeld = (side: TeleopHeldSide, reason: TeleopHeldReason): void => {
+      const frame: TeleopHeldFrame = { type: 'state', held: true, side, reason };
+      if (Date.now() - lastHeldAt >= HELD_ANSWER_MIN_INTERVAL_MS) {
+        pendingHeld = null;
+        flushHeld(frame);
+        return;
+      }
+      pendingHeld = frame;
+    };
+
     // Integrate held-key motion, and advance the base ramp, at a fixed tick.
     const timer = setInterval(() => {
+      // A coalesced held answer goes out as soon as its slot opens (TASK-407).
+      if (pendingHeld && Date.now() - lastHeldAt >= HELD_ANSWER_MIN_INTERVAL_MS) {
+        const frame = pendingHeld;
+        pendingHeld = null;
+        flushHeld(frame);
+      }
+      // The arm dead-man runs before everything else in the tick, latch or not.
+      if (lastHeartbeatAt !== null && !heartbeatLost && Date.now() - lastHeartbeatAt > heartbeatTimeoutMs) {
+        heartbeatLost = true;
+        haltMotion();
+        arms.release(armClaimId, 'heartbeat lost');
+        if (hasDriven) stopBase();
+        console.warn(`[KeyboardTeleop] no heartbeat for ${heartbeatTimeoutMs} ms — motion halted, arm claim released`);
+        sendError(
+          'heartbeat_lost',
+          `no heartbeat from this console for ${(heartbeatTimeoutMs / 1000).toFixed(1)} s — the arms were handed back `
+            + 'to the robot. Once the link is back, release the grip and squeeze it again to re-arm.',
+        );
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'heartbeat', state: 'lost' }));
+      }
       // Edge-detect the latch in both directions, so a client that is sitting
       // still still learns the robot stopped, and learns when it may drive
       // again without having to poke it to find out.
@@ -861,16 +1391,19 @@ export function createKeyboardTeleopWebSocket(
       if (latched !== wasEStopped) {
         wasEStopped = latched;
         sendEStopState(latched);
+        // Stopped from anywhere: this socket no longer holds the arms.
+        if (latched) arms.release(armClaimId, 'E-stop latched');
       }
+      // The re-engage latch (TASK-393): every blocker and every disarm the
+      // operator did not cause lands here within one tick.
+      syncEngage();
       // Read every tick, not only around `{posture}`: the base can be damped by
       // an E-Stop raised anywhere, by Agent Mode, or by another console, and a
       // client that only learned about its own commands would show a stale
       // "walking is fine" to an operator whose robot had been damped from the
       // fleet page.
-      const damped = robotStateManager.getAgentSafetyState().damped;
-      if (damped !== wasDamped) {
-        wasDamped = damped;
-        sendBaseState(damped);
+      if (baseFrameKey(baseFrame(robotStateManager.getAgentSafetyState())) !== lastBaseKey) {
+        sendBaseState();
       }
       if (latched) {
         velocity.clear();
@@ -889,18 +1422,11 @@ export function createKeyboardTeleopWebSocket(
       errorsSent.delete('estop_latched');
       // A held key or a ramp still catching up is motion too: under a lease
       // it runs only while the binding still verifies (lazy expiry included).
-      if (leaseRequired && (velocity.size > 0 || rampTarget) && !mayDrive()) {
+      if (leaseGated() && (velocity.size > 0 || rampTarget) && !mayDrive()) {
         haltMotion();
         return;
       }
-      let moved = false;
-      for (const [joint, vel] of velocity) {
-        if (vel !== 0) {
-          robotStateManager.applyTeleopDelta(joint, vel * dt);
-          moved = true;
-        }
-      }
-      if (moved) sendState();
+      // Held-key joint motion is integrated by `jointTimer` below (TASK-421).
 
       // The ramp rides the tick that already exists rather than a second timer.
       // It runs only while the commanded speed is still below the stick — at
@@ -930,6 +1456,49 @@ export function createKeyboardTeleopWebSocket(
         }
       }
     }, TICK_MS);
+
+    /** When the client last reported a CLOSED clutch, as `Date.now()` (TASK-421). */
+    let lastClutchClosedAt = 0;
+    /** When a moving joint's pose was last echoed to the client. */
+    let lastEchoAt = -Infinity;
+
+    /**
+     * Integrate held-key joint motion at the forwarder's rate (TASK-421, see
+     * JOINT_TICK_MS). Every gate the housekeeping tick enforces is checked here
+     * as well, because this runs between its beats; the housekeeping tick
+     * remains the one that clears state and tells the client.
+     */
+    const jointTimer = setInterval(() => {
+      if (velocity.size === 0) return;
+      if (robotStateManager.isEStopTriggered() || heartbeatLost) return;
+      if (lastHeartbeatAt !== null && Date.now() - lastHeartbeatAt > heartbeatTimeoutMs) return;
+      if (leaseGated() && !mayDrive()) return;
+      // A held key on an arm-only sidecar that disarmed itself (its dead-man,
+      // a 409 `not_armed`) would keep integrating a target nothing is sending,
+      // and the next frame's re-arm would ship the whole drift at once — the
+      // arm swinging toward a joint limit after the key was let go. The key is
+      // dropped instead; pressing it again re-arms from the measured pose.
+      if (!arms.isLive()) {
+        velocity.clear();
+        return;
+      }
+      // A client that reports its clutch moves a joint only while it keeps
+      // saying the key is held: a tab that froze or a link that dropped stops
+      // the joint after HELD_KEY_TTL_MS, and the arm holds where it is.
+      if (reengage.clutch !== null
+        && (!reengage.engaged || Date.now() - lastClutchClosedAt > HELD_KEY_TTL_MS)) return;
+      let moved = false;
+      for (const [joint, vel] of velocity) {
+        if (vel !== 0) {
+          robotStateManager.applyTeleopDelta(joint, (vel * JOINT_TICK_MS) / 1000);
+          moved = true;
+        }
+      }
+      if (moved && Date.now() - lastEchoAt >= STATE_ECHO_MS) {
+        lastEchoAt = Date.now();
+        sendState();
+      }
+    }, JOINT_TICK_MS);
 
     /**
      * Liveness probe. Nothing is sent while an operator holds still, so without
@@ -971,15 +1540,21 @@ export function createKeyboardTeleopWebSocket(
         // Anything already queued behind a blocked RPC is cancelled here too,
         // rather than left for the drain to deliver after the stop.
         pendingMove = null;
-        // DIRECT, deliberately bypassing `drive`'s in-flight guard and its
-        // pending slot. Everything else may be coalesced; this may not be
-        // delayed behind an RPC that is allowed to block for seconds, and it is
-        // the one message that must never be dropped.
-        void hardwareClient.locoMove(0, 0, 0, 0);
-        // `triggeredBy: 'remote'` — the human is at a headset somewhere else,
-        // the same source the fleet's `POST /safety/estop` records. This is the
-        // durable latch: it survives a reboot and needs a deliberate reset.
-        robotStateManager.triggerEmergencyStop('remote', reason);
+        // TASK-398 order. FIRST the latch, whose actuation sends the sidecar's
+        // `/estop` synchronously — the sidecar latches, starts the arm disarm
+        // ramp and THEN damps the robot, in one process. `triggeredBy:
+        // 'remote'` — the human is at a headset somewhere else, the same source
+        // the fleet's `POST /safety/estop` records. This is the durable latch:
+        // it survives a reboot and needs a deliberate reset.
+        void robotStateManager.triggerEmergencyStop('remote', reason);
+        // Zero the base velocity only where the sidecar walks (the sim): DIRECT,
+        // bypassing `drive`'s in-flight guard and its pending slot, because it
+        // must not wait behind an RPC that may block for seconds. A sidecar
+        // that only changes modes gets no call.
+        if (hardwareClient.mayMoveBase()) void hardwareClient.locoMove(0, 0, 0, 0);
+        // Then this agent's own arm bookkeeping (the sidecar is already
+        // disarming): the registry drops every holder.
+        arms.releaseAll('operator E-stop');
         robotStateManager.disableTeleop();
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'estop', active: true, reason }));
@@ -988,15 +1563,53 @@ export function createKeyboardTeleopWebSocket(
       }
 
       if ('bind' in msg) {
-        // Flag off: ignored, exactly as any unknown frame always was.
-        if (leaseRequired) void handleBind(msg.bind);
+        void handleBind(msg.bind);
+        return;
+      }
+
+      // Never gated: liveness is what un-gates everything else.
+      if ('hb' in msg) {
+        lastHeartbeatAt = Date.now();
+        errorsSent.delete('arm_requires_heartbeat');
+        if (heartbeatLost) {
+          heartbeatLost = false;
+          errorsSent.delete('heartbeat_lost');
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'heartbeat', state: 'live' }));
+        }
+        const clutch = parseClutch((msg as HeartbeatMessage).clutch);
+        if (clutch !== null && (clutch.left || clutch.right)) lastClutchClosedAt = Date.now();
+        // A clutch reported open lets go of every held joint (TASK-421 review):
+        // a key-up that named the wrong joint, or never arrived, must not leave
+        // a velocity behind for the next press to set moving again.
+        if (clutch !== null && !clutch.left && !clutch.right) velocity.clear();
+        const clutchChanged = clutch !== null && reengage.report(clutch);
+        if (clutch !== null) errorsSent.delete('arm_requires_clutch');
+        // A beat that recovers a lost link is not an edge: `syncEngage` saw the
+        // stale heartbeat as a blocker, so the latch is already `need_release`.
+        if (!syncEngage() && clutchChanged && arms.requiresArming()) sendArmState(arms.view());
         return;
       }
 
       // Admission (TASK-315): every motion frame is checked HERE, when it is
       // processed — never against a binding cached at some earlier point.
-      if (leaseRequired && MOTION_KEYS.some((k) => k in msg) && !mayDrive()) {
+      const isMotion = MOTION_KEYS.some((k) => k in msg);
+      // The side a pose frame offered, for its held answer (TASK-407).
+      const poseSide: TeleopHeldSide | null =
+        'wrists' in msg && msg.wrists && typeof msg.wrists === 'object'
+          ? offeredSide(msg.wrists as Record<string, unknown>)
+          : 'positions' in msg && msg.positions && typeof msg.positions === 'object'
+            ? positionsSide(msg.positions as Record<string, unknown>)
+            : null;
+      if (leaseGated() && isMotion && !mayDrive()) {
         sendError('lease_required', 'this socket is not bound to the robot\'s control lease — acquire one and send {bind}');
+        if (poseSide) answerHeld(poseSide, 'lease');
+        return;
+      }
+      // A heartbeating client that went quiet does not get to drive on the
+      // frames that still trickle in (TASK-393). A `move` zero is a stop and is
+      // let through below like it always was.
+      if (isMotion && heartbeatLost && !isStopFrame(msg)) {
+        if (poseSide) answerHeld(poseSide, 'arm_gate');
         return;
       }
 
@@ -1026,10 +1639,9 @@ export function createKeyboardTeleopWebSocket(
             sendError('stand_failed', result.error ?? 'the locomotion sidecar refused to stand the base');
             return;
           }
-          // Report the OUTCOME, not the request. `wasDamped` is updated here so
-          // the tick's edge detector does not send a second, identical frame.
-          wasDamped = robotStateManager.getAgentSafetyState().damped;
-          sendBaseState(wasDamped);
+          // Report the OUTCOME, not the request. `lastBaseKey` is updated here
+          // so the tick's edge detector does not send a second, identical frame.
+          sendBaseState();
         }).catch((error: unknown) => {
           sendError('stand_failed', error instanceof Error ? error.message : String(error));
         });
@@ -1055,6 +1667,20 @@ export function createKeyboardTeleopWebSocket(
         // a wire value is not a type.
         if (msg.preset !== 'home') return;
         if (refusedByEStop()) return;
+        // A real G1's arms (TASK-393): the all-zeros "home" is a large swing
+        // forward, not a rest pose. Refused on every press, never deduplicated.
+        if (arms.requiresArming()) {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'error',
+              code: 'home_unavailable',
+              message: 'Home is disabled on the real robot\'s arms — end teleop to hand them back to the robot\'s own controller',
+              at: new Date().toISOString(),
+            }));
+          }
+          return;
+        }
+        if (!armGate()) return;
         // Homing is a large commanded motion, so it is gated like any other.
         robotStateManager.homeTeleopJoints();
         sendState();
@@ -1085,15 +1711,30 @@ export function createKeyboardTeleopWebSocket(
 
       // ---- wrist poses: solve arm IK here (TASK-216) ----------------------
       if ('wrists' in msg && msg.wrists && typeof msg.wrists === 'object') {
-        if (refusedByEStop()) return;
+        const offered = poseSide ?? 'both';
+        if (refusedByEStop()) {
+          answerHeld(offered, 'estop');
+          return;
+        }
+        if (!clutchedSideOffered(msg.wrists as Record<string, unknown>)) {
+          answerHeld(offered, 'unclutched');
+          return;
+        }
+        if (!armGate()) {
+          answerHeld(offered, gateRefusal);
+          return;
+        }
         if (!canSolveArms()) {
           sendError(
             'ik_unsupported',
             'this robot has no G1 arm chain — stream {positions} instead of {wrists}',
           );
+          answerHeld(offered, 'ik_held');
           return;
         }
         let solved = false;
+        /** Sides that moved nothing, and why — for the held answer. */
+        const refusedSides: Array<{ side: 'left' | 'right'; reason: TeleopHeldReason }> = [];
         for (const side of ['left', 'right'] as const) {
           const target = parseWristPose(msg.wrists[side]);
           // A missing side is a hand that is not driving, and an UNUSABLE side
@@ -1103,8 +1744,14 @@ export function createKeyboardTeleopWebSocket(
           // previous pose, and never quietly reverts to orientation mapping
           // in the middle of a recorded demonstration.
           if (!target) continue;
+          // A real robot's arm follows only a clutched side (TASK-393).
+          if (!sideMayDrive(side)) {
+            refusedSides.push({ side, reason: 'side_refused' });
+            continue;
+          }
           const report = wristTeleop.solve(side, target);
           if (!report.held) solved = true;
+          else refusedSides.push({ side, reason: 'ik_held' });
 
           // The trigger, as one grasp axis. Only when finger tracking is not
           // driving this hand — otherwise the two would fight over the same
@@ -1121,6 +1768,13 @@ export function createKeyboardTeleopWebSocket(
         if (solved) {
           markTeleopMode('ik');
           sendState();
+        } else {
+          // Nothing moved: say why rather than going silent (TASK-407).
+          const side: TeleopHeldSide = refusedSides.length === 1 ? refusedSides[0]!.side : offered;
+          const reason: TeleopHeldReason = refusedSides.some((r) => r.reason === 'side_refused')
+            ? 'side_refused'
+            : 'ik_held';
+          answerHeld(side, reason);
         }
         return;
       }
@@ -1128,6 +1782,8 @@ export function createKeyboardTeleopWebSocket(
       // ---- tracked fingertips: DexPilot retargeting here -------------------
       if ('hands' in msg && msg.hands && typeof msg.hands === 'object') {
         if (refusedByEStop()) return;
+        if (!clutchedSideOffered(msg.hands as Record<string, unknown>)) return;
+        if (!armGate()) return;
         if (!canSolveFingers()) {
           sendError(
             'ik_unsupported',
@@ -1139,6 +1795,7 @@ export function createKeyboardTeleopWebSocket(
         for (const side of ['left', 'right'] as const) {
           const keypoints = parseHandKeypoints(msg.hands[side]);
           if (!keypoints) continue;
+          if (!sideMayDrive(side)) continue;
           let retargeter = fingers.get(side);
           if (!retargeter) {
             retargeter = new FingerRetargeter(side);
@@ -1163,7 +1820,15 @@ export function createKeyboardTeleopWebSocket(
       }
 
       if ('positions' in msg && msg.positions && typeof msg.positions === 'object') {
-        if (refusedByEStop()) return;
+        const offered = poseSide ?? 'both';
+        if (refusedByEStop()) {
+          answerHeld(offered, 'estop');
+          return;
+        }
+        if (!armGate()) {
+          answerHeld(offered, gateRefusal);
+          return;
+        }
         // Pose stream (e.g. WebXR / Meta Quest): absolute targets for many joints.
         const unknown: string[] = [];
         for (const [joint, position] of Object.entries(msg.positions)) {
@@ -1189,6 +1854,8 @@ export function createKeyboardTeleopWebSocket(
 
       if ('position' in msg && typeof msg.position === 'number') {
         if (refusedByEStop()) return;
+        if (refuseUndrivable(msg.joint)) return;
+        if (!armGate()) return;
         // Absolute target for a single joint (radians).
         robotStateManager.setTeleopJoint(msg.joint, msg.position);
         markTeleopMode('manual');
@@ -1198,14 +1865,29 @@ export function createKeyboardTeleopWebSocket(
 
       if ('direction' in msg && typeof msg.direction === 'number') {
         if (refusedByEStop()) return;
+        // A key let go is a stop, and a stop never needs the arms.
+        if (msg.direction !== 0 && refuseUndrivable(msg.joint)) return;
+        if (msg.direction !== 0 && !armGate()) return;
         // Held-key motion: set (or clear) the joint's velocity.
         markTeleopMode('manual');
-        velocity.set(msg.joint, msg.direction * SLEW_RATE_RAD_PER_S);
+        if (msg.direction === 0) {
+          velocity.delete(msg.joint);
+        } else {
+          // A clutch-reporting console (the keyboard) holds one key on one
+          // joint (TASK-421 review): a press drops whatever an earlier press
+          // left moving, whose key-up may have named another joint after the
+          // selection moved mid-hold. A console without a clutch (the gamepad)
+          // drives several joints at once and keeps them.
+          if (reengage.clutch !== null) velocity.clear();
+          velocity.set(msg.joint, msg.direction * SLEW_RATE_RAD_PER_S);
+        }
         return;
       }
 
       if ('delta' in msg && typeof msg.delta === 'number') {
         if (refusedByEStop()) return;
+        if (refuseUndrivable(msg.joint)) return;
+        if (!armGate()) return;
         // One-shot nudge (radians).
         robotStateManager.applyTeleopDelta(msg.joint, msg.delta);
         markTeleopMode('manual');
@@ -1222,6 +1904,7 @@ export function createKeyboardTeleopWebSocket(
       if (cleanedUp) return;
       cleanedUp = true;
       clearInterval(timer);
+      clearInterval(jointTimer);
       clearInterval(keepalive);
       unsubscribeTeleopErrors();
       // Stop the base before anything else. `MOVE_TTL_S` would get there on its
@@ -1230,6 +1913,9 @@ export function createKeyboardTeleopWebSocket(
       // nobody is watching any more. Direct, for the same reason the E-Stop is:
       // this must not sit in the pending slot behind a blocked RPC.
       if (hasDriven) void hardwareClient.locoMove(0, 0, 0, 0);
+      // The arms too: the last socket out hands them back to the robot.
+      arms.release(armClaimId, 'teleop socket closed');
+      unsubscribeArm();
       unsubscribeLease();
       if (boundGeneration !== null) {
         const generation = boundGeneration;

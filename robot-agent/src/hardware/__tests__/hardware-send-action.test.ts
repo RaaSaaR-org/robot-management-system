@@ -20,7 +20,7 @@ import { G1_APPLE_STATE_JOINT_NAMES } from '../../vla/action-contracts.js';
 
 /**
  * A client that believes a sidecar is there. `sendAction` returns early when it
- * is not, and `sidecarAvailable` is only set by a successful `/health` poll —
+ * is not, and `sidecarReachable` is only set by a successful `/health` poll —
  * so the boot is stubbed rather than reached around.
  */
 async function connectedClient(actionResponse: {

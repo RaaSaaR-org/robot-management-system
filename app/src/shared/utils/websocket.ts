@@ -13,15 +13,17 @@ import { ensureFreshAccessToken, onAccessTokenChange, refreshAccessToken } from 
  * Resolution order:
  *  1. `VITE_WS_URL` — explicit override, returned verbatim.
  *  2. `VITE_API_BASE_URL` — if it is an absolute http(s) URL, the WebSocket
- *     connects to the same host with `path`. This matters under the Vite dev
- *     server: the page origin (:1420) has no WebSocket endpoint of its own,
- *     so a page-origin URL always fails once with a console warning before
- *     any reconnect reaches the API server.
+ *     connects to the same host with `path`.
  *  3. SSR / test environments (no `window`) — `ws://localhost:3001`.
- *  4. Dev without an absolute API base — API server's default dev port
- *     (:3001) on the page's host.
- *  5. Production same-origin deployments — derive from the page origin,
- *     which enables cross-device access via the host the page came from.
+ *  4. Everything else — the PAGE'S OWN ORIGIN, dev included (TASK-393).
+ *
+ * Dev used to target `:3001` on the page's host. That made the API server a
+ * second port every client had to reach — and a Meta Quest on `adb reverse`
+ * reaches exactly one: `localhost:1420` inside the headset is the
+ * workstation, `localhost:3001` is the headset. The Vite dev server proxies
+ * `/api` with `ws: true` (`vite.config.ts`), so the page origin DOES have a
+ * WebSocket endpoint for every `/api/...` path, and on an https page the
+ * socket inherits `wss:` instead of being refused as mixed content.
  *
  * @param path - WebSocket path (default: '/api/a2a/ws')
  * @returns WebSocket URL
@@ -55,14 +57,7 @@ export function getWebSocketUrl(path: string = '/api/a2a/ws'): string {
     return `ws://localhost:3001${path}`;
   }
 
-  // No absolute API base configured. In dev the page origin is the Vite
-  // server, which has no WebSocket endpoint of its own — target the API
-  // server's default dev port on the same host instead.
-  if (import.meta.env.DEV) {
-    return `ws://${window.location.hostname}:3001${path}`;
-  }
-
-  // Production same-origin deployments: dynamic URL based on current host
+  // Same origin: a deployment's reverse proxy, or the Vite dev proxy.
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${protocol}//${window.location.host}${path}`;
 }

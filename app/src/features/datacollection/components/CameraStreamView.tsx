@@ -1,77 +1,255 @@
 /**
  * @file CameraStreamView.tsx
- * @description MJPEG camera stream viewer with recording-aware state
+ * @description MJPEG camera stream viewer with recording-aware state. Opens
+ *              the stream with a camera ticket (TASK-214), takes any camera
+ *              name the robot serves (TASK-392), and reconnects on its own with
+ *              backoff — including while a recording runs (TASK-401).
+ *              TASK-427: `fit` fills a live-view frame — no tile border, the
+ *              picture covering the frame, the name left to the frame's own
+ *              view switch. TASK-430: `compact` for a picture-in-picture — its
+ *              bar names the camera, so the placeholder draws the reconnect
+ *              line and Retry once, below that bar. TASK-448: the stream
+ *              `<img>` empties its `src` when it leaves the page, which is what
+ *              closes the connection.
  * @feature datacollection
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { VideoOff } from 'lucide-react';
 import { Button, StatusTag } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
+import { useCameraStreamUrl } from '../../robots/hooks/useCameraStreamUrl';
+import { isReleasedStreamImage, useStreamImageRef } from '../../robots/hooks/useStreamImageRef';
+import { nextRetryDelayS } from '../../robots/components/tabs/vr/vrCamera';
 
 interface CameraStreamViewProps {
   robotId: string;
-  cameraName: 'wrist' | 'top';
+  /** A camera the robot serves (`head_camera`, `top`, `wrist`, …). */
+  cameraName: string;
   label?: string;
   className?: string;
-  /** When true, shows "Recording" state instead of "offline" on error */
+  /**
+   * A recording is running. Changes the wording only: the view keeps
+   * reconnecting either way, and nothing here ever touches the recording.
+   */
   isRecording?: boolean;
   /** The robot is offline or unknown: show the offline state without requesting the stream */
   offline?: boolean;
+  /**
+   * Fill a live-view frame (TASK-427): no border or tile ground, the picture
+   * covers the frame, and no name tag (the frame's view switch names it).
+   */
+  fit?: boolean;
+  /**
+   * A picture-in-picture (TASK-430): the PiP's own bar, along its top edge,
+   * names the camera. The placeholder drops the name, the icon and the
+   * recording lines, and starts below the bar.
+   */
+  compact?: boolean;
 }
 
 const FRAME =
   'relative flex flex-col items-center justify-center gap-1.5 overflow-hidden rounded-control border border-line-subtle bg-inset p-3 text-center';
 
-export function CameraStreamView({ robotId, cameraName, label, className, isRecording, offline }: CameraStreamViewProps) {
-  const [streamError, setHasError] = useState(false);
-  const hasError = streamError || !!offline;
-  const streamUrl = `/api/robots/${robotId}/camera/${cameraName}`;
-  const retryRef = useRef<ReturnType<typeof setInterval>>(undefined);
+/** How often the last good frame is copied aside while the stream is live, in ms. */
+const SNAPSHOT_INTERVAL_MS = 1000;
+
+/**
+ * One camera tile on the session page.
+ *
+ * It used to auto-retry only while NOT recording, on the theory that a failing
+ * stream during a recording was the recorder holding the camera. On a G1 the
+ * recorder and this view read the same sidecar stream, so a stream that dropped
+ * mid-episode never came back — the operator lost sight of the robot for the
+ * rest of the take. It now retries on the VR panel's backoff (`nextRetryDelayS`:
+ * 1, 2, 4, 8, then every 15 s, without limit) whatever the session is doing,
+ * and shows "Reconnecting in Ns" over the last good frame instead of a blank
+ * tile.
+ *
+ * A camera error never stops or pauses the recording. The recorder records
+ * whatever the agent sees; this is only the operator's window onto it.
+ */
+export function CameraStreamView({
+  robotId, cameraName, label, className, isRecording, offline, fit = false, compact = false,
+}: CameraStreamViewProps) {
+  /**
+   * The stream URL whose `<img>` errored. Keyed on the URL rather than a flag so
+   * a retry cannot remount the `<img>` on the dead URL for the one render before
+   * the new ticket lands — that opened a second doomed request per retry and
+   * counted its error as another failure.
+   */
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  // A fresh ticket per attempt: the last one may have expired.
+  const [attempt, setAttempt] = useState(0);
+  /** Retries since the last decoded frame — what the backoff is indexed by. */
+  const [failures, setFailures] = useState(0);
+  const [retryAt, setRetryAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [hasSnapshot, setHasSnapshot] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
+  // Closes the stream when the `<img>` goes — unmount, offline, an error, a new
+  // ticket (TASK-448). `imgRef` still holds the live element for the snapshot.
+  const streamImageRef = useStreamImageRef(imgRef);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const { url: streamUrl, denied } = useCameraStreamUrl(offline ? null : robotId, offline ? null : cameraName, undefined, attempt);
+  const streamError = !!streamUrl && streamUrl === failedUrl;
+  const hasError = streamError || denied;
   const name = label ?? cameraName;
 
-  // Auto-retry every 3s when recording stops (camera becomes available again)
+  const retry = useCallback(() => {
+    setRetryAt(null);
+    setFailures((n) => n + 1);
+    setAttempt((n) => n + 1);
+  }, []);
+
+  // A different camera is a different picture and a fresh backoff.
   useEffect(() => {
-    if (hasError && !isRecording) {
-      retryRef.current = setInterval(() => setHasError(false), 3000);
+    setFailedUrl(null);
+    setFailures(0);
+    setRetryAt(null);
+    setHasSnapshot(false);
+  }, [robotId, cameraName]);
+
+  // The backoff — scheduled on every failure, recording or not.
+  useEffect(() => {
+    if (!hasError || offline) {
+      setRetryAt(null);
+      return;
     }
-    return () => { if (retryRef.current) clearInterval(retryRef.current); };
-  }, [hasError, isRecording]);
+    const delayMs = nextRetryDelayS(failures) * 1000;
+    const start = Date.now();
+    setNow(start);
+    setRetryAt(start + delayMs);
+    const timer = setTimeout(retry, delayMs);
+    return () => clearTimeout(timer);
+  }, [hasError, offline, failures, retry]);
 
-  // Recording state — camera is busy but that's expected
-  if (hasError && isRecording) {
-    return (
-      <div className={cn(FRAME, className)}>
-        <StatusTag status="recording" dot pulse>Recording</StatusTag>
-        <span className="text-[13px] font-medium text-ink-secondary">{name}</span>
-        <span className="text-xs text-ink-tertiary">Camera captured by the recorder</span>
-      </div>
-    );
-  }
+  // Countdown, once a second while a retry is pending.
+  useEffect(() => {
+    if (retryAt === null) return;
+    setNow(Date.now());
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [retryAt]);
 
-  // Offline — a normal state, not an error
-  if (hasError) {
+  // Keep the last good frame. An `<img>` that errors loses its picture, so it is
+  // copied aside once a second while live — one drawImage, and the canvas is
+  // only ever displayed, never read back, so even a tainting draw is harmless.
+  const live = !!streamUrl && !hasError && !offline;
+  useEffect(() => {
+    if (!live) return;
+    const snap = () => {
+      const img = imgRef.current;
+      const canvas = canvasRef.current;
+      if (!img || !canvas || img.naturalWidth === 0) return;
+      // A decoded frame is what resets the backoff — also here, for browsers
+      // that fire no `load` for a multipart stream's parts.
+      setFailures(0);
+      if (canvas.width !== img.naturalWidth) canvas.width = img.naturalWidth;
+      if (canvas.height !== img.naturalHeight) canvas.height = img.naturalHeight;
+      try {
+        canvas.getContext('2d')?.drawImage(img, 0, 0);
+        setHasSnapshot(true);
+      } catch {
+        // A frame mid-decode or a torn-down image: keep the previous snapshot.
+      }
+    };
+    const timer = setInterval(snap, SNAPSHOT_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [live]);
+
+  // Offline robot — a normal state, not an error, and nothing to retry against.
+  if (offline) {
     return (
-      <div className={cn(FRAME, className)}>
+      <div className={cn(FRAME, fit && 'h-full w-full rounded-none border-0 bg-media', className)}>
         <VideoOff className="h-4 w-4 text-ink-tertiary" strokeWidth={1.75} />
         <span className="text-[13px] font-medium text-ink-secondary">{name} offline</span>
         <span className="text-xs text-ink-tertiary">Start the robot agent to see this stream.</span>
-        {!offline && <Button variant="ghost" size="sm" onClick={() => setHasError(false)}>Retry</Button>}
       </div>
     );
   }
 
+  const retryInS = retryAt === null ? null : Math.max(0, Math.ceil((retryAt - now) / 1000));
+  const reconnectText = retryInS === null ? 'Reconnecting…' : `Reconnecting in ${retryInS}s`;
+  const reconnecting = hasError || (!streamUrl && failures > 0);
+  // On the black media well the light-on-dark texts read in either theme.
+  const onPicture = hasSnapshot || fit;
+
   return (
-    <div className={cn('relative overflow-hidden rounded-control border border-line-subtle bg-inset', className)}>
-      <img
-        src={streamUrl}
-        alt={`${name} camera`}
-        onError={() => setHasError(true)}
-        className="h-full w-full object-contain"
+    <div
+      className={cn(
+        'relative overflow-hidden',
+        fit ? 'h-full w-full bg-media' : 'rounded-control border border-line-subtle bg-inset',
+        className,
+      )}
+      data-testid="camera-stream-view"
+    >
+      {/* The last good frame, under everything; visible only while the live
+          `<img>` is not. */}
+      <canvas
+        ref={canvasRef}
+        aria-hidden
+        className={cn('absolute inset-0 h-full w-full', fit ? 'object-cover' : 'object-contain', (live || !hasSnapshot) && 'invisible')}
       />
-      <div className="absolute left-2 top-2">
-        <StatusTag tone="live" dot>{name}</StatusTag>
-      </div>
+      {live && (
+        <>
+          <img
+            ref={streamImageRef}
+            src={streamUrl}
+            alt={`${name} camera`}
+            onLoad={() => setFailures(0)}
+            onError={(e) => {
+              // The `error` an emptied `src` fires is the stream being closed, not failing.
+              if (isReleasedStreamImage(e.currentTarget)) return;
+              setFailedUrl(streamUrl);
+            }}
+            className={cn('relative h-full w-full', fit ? 'object-cover' : 'object-contain')}
+          />
+          {!fit && (
+            <div className="absolute left-2 top-2">
+              <StatusTag tone="live" dot>{name}</StatusTag>
+            </div>
+          )}
+        </>
+      )}
+      {!live && (
+        <div
+          className={cn(
+            'absolute inset-0 flex flex-col items-center justify-center text-center',
+            // Compact: below the PiP's bar (6 px inset + 24 px), which names the camera.
+            compact ? 'gap-1 px-1.5 pb-1.5 pt-8' : 'gap-1.5 p-3',
+            onPicture && 'bg-black/50',
+          )}
+          data-testid="camera-placeholder"
+        >
+          {reconnecting ? (
+            <>
+              {!compact && (isRecording ? (
+                <StatusTag status="recording" dot pulse>Recording</StatusTag>
+              ) : (
+                <VideoOff className={cn('h-4 w-4', onPicture ? 'text-white/80' : 'text-ink-tertiary')} strokeWidth={1.75} />
+              ))}
+              {!compact && (
+                <span className={cn('text-[13px] font-medium', onPicture ? 'text-white' : 'text-ink-secondary')}>
+                  {name}
+                </span>
+              )}
+              <span role="status" className={cn(compact ? 'text-[11.5px] leading-tight' : 'text-xs', onPicture ? 'text-white/85' : 'text-ink-tertiary')}>
+                {reconnectText}
+              </span>
+              {isRecording && !compact && (
+                <span className={cn('text-xs', onPicture ? 'text-white/70' : 'text-ink-tertiary')}>
+                  The recording continues.
+                </span>
+              )}
+              <Button variant="ghost" size="sm" onClick={retry} className={compact ? 'h-7 px-2 text-[12px]' : undefined}>Retry now</Button>
+            </>
+          ) : (
+            <span className={cn('text-xs', fit ? 'text-white/70' : 'text-ink-tertiary')}>{compact ? 'Connecting…' : `Connecting to ${name}…`}</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

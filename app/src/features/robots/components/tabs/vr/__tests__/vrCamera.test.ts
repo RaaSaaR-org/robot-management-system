@@ -12,6 +12,10 @@ import {
   pollLiveness,
   initialLiveness,
   CAMERA_STALE_AFTER_MS,
+  RETRY_CAP_S,
+  cameraPanelState,
+  nextRetryDelayS,
+  offlinePlateLines,
   type LivenessState,
 } from '../vrCamera';
 
@@ -172,5 +176,74 @@ describe('isRealLoadFailure', () => {
 
   it('a src that is actually there and errored is a failure', () => {
     expect(isRealLoadFailure('/api/robots/g1-01/camera/head?ticket=abc')).toBe(true);
+  });
+});
+
+describe('nextRetryDelayS (TASK-401)', () => {
+  it('backs off 1, 2, 4, 8, then holds at 15 s forever', () => {
+    expect([0, 1, 2, 3, 4, 5, 50, 10_000].map(nextRetryDelayS)).toEqual([1, 2, 4, 8, 15, 15, 15, 15]);
+    expect(RETRY_CAP_S).toBe(15);
+  });
+
+  it('treats a nonsense attempt as the first', () => {
+    expect(nextRetryDelayS(-1)).toBe(1);
+    expect(nextRetryDelayS(Number.NaN)).toBe(1);
+  });
+});
+
+describe('offlinePlateLines (TASK-401)', () => {
+  it('says offline, why, and when it tries again', () => {
+    const lines = offlinePlateLines({ state: 'offline', detail: 'sidecar gone', retryInS: 4, attempt: 2 });
+    expect(lines.map((l) => l.text)).toEqual(['CAMERA OFFLINE', 'sidecar gone', 'retrying in 4s · attempt 3']);
+    expect(lines[0].tone).toBe('bad');
+  });
+
+  it('falls back to "stream failed" when the agent gave no reason', () => {
+    const lines = offlinePlateLines({ state: 'offline', detail: null, retryInS: 1, attempt: 0 });
+    expect(lines.map((l) => l.text)).toEqual(['CAMERA OFFLINE', 'stream failed', 'retrying in 1s · attempt 1']);
+  });
+
+  it('says "retrying now" while the retry is in flight', () => {
+    const lines = offlinePlateLines({ state: 'offline', detail: null, retryInS: null, attempt: 0 });
+    expect(lines[lines.length - 1].text).toBe('retrying now · attempt 1');
+  });
+
+  it('wraps a long agent reason onto two lines', () => {
+    const lines = offlinePlateLines({
+      state: 'offline',
+      detail: 'cannot reach the hardware sidecar on the robot at all',
+      retryInS: 15,
+      attempt: 7,
+    });
+    const detail = lines.filter((l) => l.id.startsWith('detail')).map((l) => l.text);
+    expect(detail).toHaveLength(2);
+    expect(detail.every((t) => t.length <= 36)).toBe(true);
+    expect(detail.join(' ')).toMatch(/^cannot reach the hardware sidecar on the robot/);
+  });
+
+  it('shows the agent reason verbatim when it fits', () => {
+    const lines = offlinePlateLines({ state: 'offline', detail: 'cannot reach the hardware sidecar', retryInS: 2, attempt: 1 });
+    expect(lines[1].text).toBe('cannot reach the hardware sidecar');
+    expect(lines).toHaveLength(3);
+  });
+
+  it('shows a reconnecting plate only once a retry has been made', () => {
+    expect(offlinePlateLines({ state: 'connecting', detail: null, retryInS: null, attempt: 0 })).toEqual([]);
+    const lines = offlinePlateLines({ state: 'connecting', detail: null, retryInS: null, attempt: 3 });
+    expect(lines.map((l) => l.text)).toEqual(['RECONNECTING…', 'attempt 3']);
+  });
+
+  it('draws nothing over a live or stale picture', () => {
+    expect(offlinePlateLines({ state: 'live', detail: 'x', retryInS: 1, attempt: 1 })).toEqual([]);
+    expect(offlinePlateLines({ state: 'stale', detail: 'x', retryInS: 1, attempt: 1 })).toEqual([]);
+  });
+});
+
+describe('cameraPanelState (TASK-401)', () => {
+  it('maps connection phase and staleness onto the four published states', () => {
+    expect(cameraPanelState('connecting', false)).toBe('connecting');
+    expect(cameraPanelState('offline', true)).toBe('offline');
+    expect(cameraPanelState('up', false)).toBe('live');
+    expect(cameraPanelState('up', true)).toBe('stale');
   });
 });

@@ -21,7 +21,14 @@ const locoMove = vi.hoisted(() =>
   vi.fn(async (): Promise<{ ok: boolean; error?: string; locoDisabled?: boolean }> => ({ ok: true })),
 );
 vi.mock('../../hardware/HardwareClient.js', () => ({
-  hardwareClient: { locoMove },
+  hardwareClient: {
+    locoMove,
+    // TASK-398: a sidecar that reports no gate — moves go out as before.
+    getLocoCapability: () => ({ gate: 'unknown', moveEnabled: null, idsVerified: false, ids: null }),
+    getMeasuredFsmId: () => null,
+    getBaseState: () => null,
+    mayMoveBase: () => true,
+  },
   getSidecarUrl: () => 'http://localhost:0',
 }));
 
@@ -271,12 +278,13 @@ describe('keyboard-teleop — held-key tick integration', () => {
     // Direction only registers a velocity — no immediate apply.
     expect(state.applyTeleopDelta).not.toHaveBeenCalled();
 
-    // One tick (~33ms): velocity * dt = 0.8 * (33/1000) ≈ 0.0264 rad.
-    vi.advanceTimersByTime(33);
+    // One 50 Hz joint tick (TASK-421): velocity * dt = 0.8 * 0.020 = 16 mrad,
+    // inside one 20 ms sidecar slew step.
+    vi.advanceTimersByTime(20);
     expect(state.applyTeleopDelta).toHaveBeenCalledTimes(1);
     const [joint, delta] = state.applyTeleopDelta.mock.calls[0];
     expect(joint).toBe('shoulder_pan');
-    expect(delta).toBeCloseTo(0.8 * 0.033, 4);
+    expect(delta).toBeCloseTo(0.8 * 0.02, 4);
   });
 
   it('moves negatively for direction -1', () => {
@@ -291,7 +299,7 @@ describe('keyboard-teleop — held-key tick integration', () => {
     const state = makeStateStub();
     const ws = connect(state);
     sendMsg(ws, { joint: 'shoulder_pan', direction: 1 });
-    vi.advanceTimersByTime(33);
+    vi.advanceTimersByTime(20);
     expect(state.applyTeleopDelta).toHaveBeenCalledTimes(1);
 
     sendMsg(ws, { joint: 'shoulder_pan', direction: 0 });
@@ -315,7 +323,7 @@ describe('keyboard-teleop — held-key tick integration', () => {
     const ws = connect(state);
     sendMsg(ws, { joint: 'elbow_flex', direction: 1 });
 
-    vi.advanceTimersByTime(33 * 3); // 3 ticks
+    vi.advanceTimersByTime(20 * 3); // 3 joint ticks
     expect(state.applyTeleopDelta).toHaveBeenCalledTimes(3);
   });
 });
@@ -403,7 +411,7 @@ describe('keyboard-teleop — a latched E-Stop refuses input', () => {
 });
 
 describe('keyboard-teleop — {estop} is the real stop', () => {
-  it('zeroes the base, latches the stop, leaves teleop, and says so — in that order', async () => {
+  it('latches the stop, zeroes the base, leaves teleop, and says so — in that order', async () => {
     const order: string[] = [];
     const state = makeStateStub();
     locoMove.mockImplementation(async () => {
@@ -417,9 +425,10 @@ describe('keyboard-teleop — {estop} is the real stop', () => {
     sendMsg(ws, { estop: { reason: 'person in the aisle' } });
     await vi.advanceTimersByTimeAsync(0);
 
-    // The base command goes first: it is the half that has to be in flight
-    // before anything slower happens.
-    expect(order).toEqual(['locoMove', 'trigger', 'disableTeleop']);
+    // TASK-398: the latch goes first — its actuation sends the sidecar's
+    // `/estop` (disarm, then damp). The zero velocity follows, where the
+    // sidecar walks at all.
+    expect(order).toEqual(['trigger', 'locoMove', 'disableTeleop']);
     expect(locoMove.mock.calls[0] as unknown as number[]).toEqual([0, 0, 0, 0]);
     expect(state.triggerEmergencyStop).toHaveBeenCalledWith('remote', 'person in the aisle');
     expect(lastEstop(ws)).toEqual({

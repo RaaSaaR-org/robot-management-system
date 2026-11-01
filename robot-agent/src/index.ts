@@ -27,6 +27,7 @@ import { hardwareClient } from './hardware/HardwareClient.js';
 import { controlLease, wireControlLeaseStops } from './control-lease/control-lease.js';
 import { RobotAgentExecutor } from './agent/agent-executor.js';
 import { createRestRoutes } from './api/rest-routes.js';
+import { createReadinessRoutes } from './api/readiness-routes.js';
 import { createTelemetryWebSocket } from './api/websocket.js';
 import { createPointCloudWebSocket } from './api/pointcloud-websocket.js';
 import { createAgentModeWebSocket } from './api/agent-mode-websocket.js';
@@ -370,6 +371,8 @@ async function main() {
 
   // Mount REST API routes (NeoDEM compatible)
   app.use('/api/v1', createRestRoutes(robotStateManager, deviceIdentity, secureBoot));
+  // TASK-405: one readiness snapshot + the "why not following" line (read-only).
+  app.use('/api/v1', createReadinessRoutes({ robot: robotStateManager }));
 
   // Federated learning status endpoint
   app.get('/api/v1/federated/status', (_req, res) => {

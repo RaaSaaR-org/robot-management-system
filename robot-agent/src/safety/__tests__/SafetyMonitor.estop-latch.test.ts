@@ -144,4 +144,52 @@ describe('SafetyMonitor E-stop latch', () => {
     expect(state.currentTaskName).toBeUndefined();
     expect(state.status).toBe('online');
   });
+
+  // TASK-431: a comms-loss protective stop auto-clears when the server comes
+  // back. The latch went, but the status stayed `protective_stop`, was
+  // persisted, and came back on every boot.
+  it('a returning heartbeat clears the comms-loss stop and its status', () => {
+    const { monitor, state } = makeMonitor();
+    monitor.updateServerHeartbeat();
+    monitor.triggerProtectiveStop('communication_timeout', 'Server communication lost');
+    expect(state.status).toBe('protective_stop');
+    // What checkCommunicationTimeout() sets before it triggers the stop.
+    (monitor as unknown as { serverConnected: boolean }).serverConnected = false;
+
+    monitor.updateServerHeartbeat();
+
+    expect(monitor.isEStopTriggered()).toBe(false);
+    expect(state.status).toBe('online');
+    expect(state.currentTaskName).toBeUndefined();
+    expect(state.warnings.some((w) => w.includes('Server communication lost'))).toBe(false);
+  });
+
+  it('a returning heartbeat leaves an E-Stop and its status alone', () => {
+    const { monitor, state } = makeMonitor();
+    monitor.triggerEmergencyStop('remote', 'operator hit the fleet E-Stop');
+    monitor.triggerProtectiveStop('communication_timeout', 'Server communication lost');
+
+    monitor.updateServerHeartbeat();
+
+    expect(monitor.isEStopTriggered()).toBe(true);
+    expect(state.status).toBe('protective_stop');
+  });
+
+  it('a reset with nothing latched sets a leftover protective_stop back to online', () => {
+    const { monitor, state } = makeMonitor();
+    state.status = 'protective_stop';
+    state.currentTaskName = 'Protective stop';
+
+    expect(monitor.resetEmergencyStop()).toBe(true);
+    expect(state.status).toBe('online');
+    expect(state.currentTaskName).toBeUndefined();
+  });
+
+  it('a reset with nothing latched leaves any other status alone', () => {
+    const { monitor, state } = makeMonitor();
+    state.status = 'busy';
+
+    expect(monitor.resetEmergencyStop()).toBe(true);
+    expect(state.status).toBe('busy');
+  });
 });

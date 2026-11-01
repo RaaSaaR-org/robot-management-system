@@ -110,9 +110,44 @@ describe('start', () => {
     expect(await service.start('robot-1', { sessionId: 's1' })).toBeNull();
   });
 
-  it('answers null on a 5xx — the robot is up but broken, and the work did not happen', async () => {
+  it('answers null when the robot times out', async () => {
+    const post = vi.fn(async () => {
+      throw new HttpClientError('Request timeout: /x', undefined, '/x');
+    });
+    const { service } = build({ post });
+    expect(await service.start('robot-1', { sessionId: 's1' })).toBeNull();
+  });
+
+  it('REFUSES while the robot is still writing the previous session (TASK-450)', async () => {
+    // Falling back here recorded a real robot with joints only and no video,
+    // and nothing on screen said so.
+    const post = vi.fn(async () => {
+      throw refusal(503, 'RECORDING_UNAVAILABLE', 'the previous recording is still being written — try again in a moment');
+    });
+    const { service } = build({ post });
+    await expect(service.start('robot-1', { sessionId: 's1' })).rejects.toMatchObject({
+      name: 'AgentRecordingRefused',
+      statusCode: 503,
+      code: 'RECORDING_UNAVAILABLE',
+      message: 'The robot is still saving the previous session. Try Start again in a moment.',
+    });
+  });
+
+  it('refuses on any coded 5xx, in the robot’s own words: the agent knows the route', async () => {
     const post = vi.fn(async () => {
       throw refusal(500, 'RECORDING_FAILED', 'boom');
+    });
+    const { service } = build({ post });
+    await expect(service.start('robot-1', { sessionId: 's1' })).rejects.toMatchObject({
+      statusCode: 500,
+      code: 'RECORDING_FAILED',
+      message: 'boom',
+    });
+  });
+
+  it('answers null on a 5xx with no code — a proxy answered, not the agent', async () => {
+    const post = vi.fn(async () => {
+      throw new HttpClientError('HTTP 502', 502, '/x', undefined, '<html>Bad Gateway</html>');
     });
     const { service } = build({ post });
     expect(await service.start('robot-1', { sessionId: 's1' })).toBeNull();
@@ -178,6 +213,14 @@ describe('discardEpisode', () => {
   it('reports false rather than throwing when the robot is unreachable', async () => {
     const post = vi.fn(async () => {
       throw new HttpClientError('Connection refused', undefined, '/x');
+    });
+    const { service } = build({ post });
+    expect(await service.discardEpisode('robot-1', 0)).toBe(false);
+  });
+
+  it('still reports false on a coded 5xx — only start reads one as a refusal', async () => {
+    const post = vi.fn(async () => {
+      throw refusal(503, 'RECORDING_UNAVAILABLE', 'recording is not available');
     });
     const { service } = build({ post });
     expect(await service.discardEpisode('robot-1', 0)).toBe(false);
@@ -268,5 +311,99 @@ describe('status', () => {
     });
     const { service } = build({ get });
     expect(await service.status('robot-1')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-408: explicit takes and the thumbnail proxy
+// ---------------------------------------------------------------------------
+
+describe('beginEpisode / endEpisode', () => {
+  it('opens a take and hands back its number and start', async () => {
+    const post = vi.fn(async () => ({ ok: true, episodeIndex: 2, phase: 'capturing', startedAtMs: 1234 }));
+    const { service } = build({ post });
+    expect(await service.beginEpisode('robot-1')).toEqual({ ok: true, episodeIndex: 2, startedAtMs: 1234 });
+    expect(post).toHaveBeenCalledWith('/api/v1/robots/robot-1/recording/episodes/begin');
+  });
+
+  it('turns the robot’s 409 into an answer with its code, not a thrown refusal', async () => {
+    const post = vi.fn(async () => {
+      throw refusal(409, 'already_capturing', '');
+    });
+    const { service } = build({ post });
+    expect(await service.beginEpisode('robot-1')).toEqual({ ok: false, code: 'already_capturing' });
+  });
+
+  it('answers null for an agent that predates the route', async () => {
+    const post = vi.fn(async () => {
+      throw refusal(404, 'NOT_FOUND', 'no route');
+    });
+    const { service } = build({ post });
+    expect(await service.beginEpisode('robot-1')).toBeNull();
+  });
+
+  it('ends a take with a reason and returns its report', async () => {
+    const report = { episodeIndex: 1, frames: 90, dropped: 0, durationS: 3, fpsActual: 30 };
+    const post = vi.fn(async () => ({ ok: true, episodeIndex: 1, phase: 'between', report }));
+    const { service } = build({ post });
+    expect(await service.endEpisode('robot-1')).toEqual({ ok: true, episodeIndex: 1, report });
+    expect(post).toHaveBeenCalledWith('/api/v1/robots/robot-1/recording/episodes/end', { reason: 'operator' });
+  });
+
+  it('says not_capturing when there is no open take', async () => {
+    const post = vi.fn(async () => {
+      throw refusal(409, 'not_capturing', '');
+    });
+    const { service } = build({ post });
+    expect(await service.endEpisode('robot-1')).toEqual({ ok: false, code: 'not_capturing' });
+  });
+
+  it('still throws a 409 it does not recognise', async () => {
+    const post = vi.fn(async () => {
+      throw refusal(409, 'RECORDING_REFUSED', 'busy');
+    });
+    const { service } = build({ post });
+    await expect(service.endEpisode('robot-1')).rejects.toBeInstanceOf(AgentRecordingRefused);
+  });
+});
+
+describe('thumbnail', () => {
+  function withFetch(response: Response | Error) {
+    const fetchImpl = vi.fn(async () => {
+      if (response instanceof Error) throw response;
+      return response;
+    });
+    const service = new AgentRecordingService({
+      robots: { getRegisteredRobot: async () => ({ baseUrl: 'http://robot:41246/' }) },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    return { service, fetchImpl };
+  }
+
+  it('fetches the take’s JPEG from the robot', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const { service, fetchImpl } = withFetch(
+      new Response(jpeg, { status: 200, headers: { 'content-type': 'image/jpeg' } }),
+    );
+    const got = await service.thumbnail('robot-1', 3);
+    expect(got?.equals(jpeg)).toBe(true);
+    expect((fetchImpl.mock.calls[0] as unknown[])[0]).toBe(
+      'http://robot:41246/api/v1/robots/robot-1/recording/episodes/3/thumbnail',
+    );
+  });
+
+  it('answers null for a take without one', async () => {
+    const { service } = withFetch(new Response('{"code":"no_thumbnail"}', { status: 404 }));
+    expect(await service.thumbnail('robot-1', 3)).toBeNull();
+  });
+
+  it('answers null when the robot does not answer', async () => {
+    const { service } = withFetch(new Error('ECONNREFUSED'));
+    expect(await service.thumbnail('robot-1', 3)).toBeNull();
+  });
+
+  it('answers null for a reply that is not a JPEG', async () => {
+    const { service } = withFetch(new Response('<html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+    expect(await service.thumbnail('robot-1', 3)).toBeNull();
   });
 });

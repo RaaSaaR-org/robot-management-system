@@ -32,6 +32,24 @@ export interface AgentEpisodeReport {
    * is different from "orientation" and must not be defaulted to it.
    */
   retargetModes?: string[];
+  /** TASK-402: a discarded take stays listed, without frames, so its number stays taken. */
+  discarded?: boolean;
+  /** TASK-402 quick check. Absent from an agent before TASK-402. */
+  jointsMoved?: { name: string; rangeRad: number }[];
+  groupsMoved?: string[];
+  warnings?: string[];
+  /** The take's middle frame, or null. */
+  thumbnail?: { camera: string; frame: number } | null;
+}
+
+/** `estop`: the agent ended and discarded the take itself when an E-stop latched (TASK-416). */
+export type AgentEpisodeEndReason = 'operator' | 'time_limit' | 'next' | 'session_end' | 'estop';
+
+/** The agent's last take boundary (TASK-402). */
+export interface AgentLastStop {
+  episodeIndex: number;
+  reason: AgentEpisodeEndReason;
+  atMs: number;
 }
 
 export interface AgentRecordingStatus {
@@ -50,6 +68,13 @@ export interface AgentRecordingStatus {
   scene: string | null;
   behindS: number | null;
   episodes: AgentEpisodeReport[];
+  // TASK-402 — absent from an older agent.
+  phase?: 'between' | 'capturing' | null;
+  episodeStartedAtMs?: number | null;
+  episodeElapsedS?: number | null;
+  elapsedS?: number | null;
+  autoStopS?: number | null;
+  lastStop?: AgentLastStop | null;
 }
 
 export interface AgentRecordingStopResult {
@@ -64,8 +89,21 @@ export interface AgentRecordingStopResult {
   videoFeatures: string[];
   scene: string | null;
   bootId: string | null;
+  /** TASK-402: whether the sidecar was the simulator. Absent from an older agent. */
+  simulated?: boolean;
+  /** TASK-402: every take and the dataset episode it became (null: not kept). */
+  indexMap?: { take: number; datasetEpisode: number | null }[];
   error?: string;
 }
+
+/** `beginEpisode` / `endEpisode`: the agent's answer, or its reason for refusing. */
+export type AgentBeginResult =
+  | { ok: true; episodeIndex: number; startedAtMs: number }
+  | { ok: false; code: 'already_capturing' | 'not_recording' };
+
+export type AgentEndResult =
+  | { ok: true; episodeIndex: number; report: AgentEpisodeReport | null }
+  | { ok: false; code: 'not_capturing' | 'not_recording' };
 
 export interface StartAgentRecordingDto {
   sessionId: string;
@@ -74,6 +112,16 @@ export interface StartAgentRecordingDto {
   task?: string;
   shadows?: boolean;
   inputMode?: string;
+  /**
+   * Per-take auto-stop in seconds (TASK-406); absent = the operator ends each
+   * take. Agents before TASK-402 ignore it.
+   */
+  episodeTimeS?: number | null;
+  /**
+   * TASK-408 D3: the session opens between takes and the first take begins on
+   * purpose. Agents before TASK-402 ignore it.
+   */
+  startBetweenTakes?: boolean;
 }
 
 /** Minimal robot lookup; `RobotManager` satisfies it. */
@@ -89,6 +137,8 @@ export interface AgentRecordingServiceDeps {
     timeoutMs: number,
     headers?: Record<string, string>
   ) => Pick<HttpClient, 'get' | 'post'>;
+  /** The thumbnail is bytes, not JSON; tests fake this transport too. */
+  fetchImpl?: typeof fetch;
 }
 
 /**
@@ -117,6 +167,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class AgentRecordingService {
   private readonly robots: AgentRecordingRobotLookup;
   private readonly httpClient: NonNullable<AgentRecordingServiceDeps['httpClient']>;
+  private readonly fetchImpl: typeof fetch;
 
   constructor(deps: AgentRecordingServiceDeps = {}) {
     this.robots =
@@ -130,6 +181,7 @@ export class AgentRecordingService {
     this.httpClient =
       deps.httpClient ??
       ((baseUrl, timeoutMs, headers) => new HttpClient(baseUrl, timeoutMs, headers));
+    this.fetchImpl = deps.fetchImpl ?? ((...args) => fetch(...args));
   }
 
   private async client(
@@ -152,14 +204,25 @@ export class AgentRecordingService {
    * A 404 is the interesting case: it is a 4xx, but it means the agent predates
    * these routes. That is not a configuration error the operator can fix — it
    * is an old robot, and an old robot should fall back silently.
+   *
+   * `refuseServerErrors` (TASK-450): a 5xx whose body carries a `code` is the
+   * agent answering from its own route, most often a 503 while it still writes
+   * the previous session. Falling back there would record a real robot with no
+   * video, so it is a refusal too. Only `start` sets it: it is the one call
+   * where `null` means "use the other recorder".
    */
-  private classify(error: unknown, what: string): null {
+  private classify(error: unknown, what: string, refuseServerErrors = false): null {
     const status = error instanceof HttpClientError ? error.statusCode : undefined;
-    if (status !== undefined && status >= 400 && status < 500 && status !== 404) {
-      const body = (error as HttpClientError).responseBody;
-      const message = isRecord(body) && typeof body.message === 'string' ? body.message : error instanceof Error ? error.message : String(error);
-      const code = isRecord(body) && typeof body.code === 'string' ? body.code : null;
-      throw new AgentRecordingRefused(message, status, code);
+    const body = error instanceof HttpClientError ? error.responseBody : undefined;
+    const code = isRecord(body) && typeof body.code === 'string' ? body.code : null;
+    const answered = status !== undefined && status >= 400 && status < 500 && status !== 404;
+    const busy = refuseServerErrors && status !== undefined && status >= 500 && code !== null;
+    if (answered || busy) {
+      const message =
+        status === 503 && code === 'RECORDING_UNAVAILABLE'
+          ? 'The robot is still saving the previous session. Try Start again in a moment.'
+          : isRecord(body) && typeof body.message === 'string' ? body.message : error instanceof Error ? error.message : String(error);
+      throw new AgentRecordingRefused(message, status as number, code);
     }
     const why = error instanceof Error ? error.message : String(error);
     console.warn(`[AgentRecording] ${what} unavailable: ${why}`);
@@ -171,8 +234,9 @@ export class AgentRecordingService {
    *
    * `null` means this robot cannot record here — no agent URL, an agent that
    * does not know the route, or one that did not answer — and the caller should
-   * fall back. A refusal (409) throws, because the operator asked for something
-   * the robot understood and declined.
+   * fall back. A refusal (409, or a coded 5xx such as 503 "still writing the
+   * previous session") throws, because the operator asked for something the
+   * robot understood and declined.
    */
   async start(robotId: string, dto: StartAgentRecordingDto): Promise<AgentRecordingStatus | null> {
     const client = await this.client(robotId, HTTP_TIMEOUTS.MEDIUM);
@@ -184,7 +248,7 @@ export class AgentRecordingService {
       }
       return answer as unknown as AgentRecordingStatus;
     } catch (error) {
-      return this.classify(error, `start on ${robotId}`);
+      return this.classify(error, `start on ${robotId}`, true);
     }
   }
 
@@ -201,6 +265,95 @@ export class AgentRecordingService {
     } catch (error) {
       return this.classify(error, `next-episode on ${robotId}`);
     }
+  }
+
+  /**
+   * Open a take (TASK-402 `episodes/begin`).
+   *
+   * A 409 is an answer, not a failure: the agent says WHY it will not
+   * (`already_capturing`, `not_recording`), and the caller turns that into its
+   * own conflict. `null` is an agent that does not know the route or did not
+   * answer.
+   */
+  async beginEpisode(robotId: string): Promise<AgentBeginResult | null> {
+    const client = await this.client(robotId, HTTP_TIMEOUTS.SHORT);
+    if (!client) return null;
+    try {
+      const answer = await client.post<unknown>(this.path(robotId, '/episodes/begin'));
+      if (!isRecord(answer) || answer.ok !== true || typeof answer.episodeIndex !== 'number') {
+        throw new HttpClientError('robot returned no take', undefined, 'invalid_response');
+      }
+      return {
+        ok: true,
+        episodeIndex: answer.episodeIndex,
+        startedAtMs: typeof answer.startedAtMs === 'number' ? answer.startedAtMs : Date.now(),
+      };
+    } catch (error) {
+      const refused = this.refusalCode(error, ['already_capturing', 'not_recording'] as const);
+      if (refused) return { ok: false, code: refused };
+      return this.classify(error, `episodes/begin on ${robotId}`);
+    }
+  }
+
+  /** Close the open take (TASK-402 `episodes/end`), with the take's report. */
+  async endEpisode(
+    robotId: string,
+    reason: 'operator' | 'time_limit' = 'operator'
+  ): Promise<AgentEndResult | null> {
+    const client = await this.client(robotId, HTTP_TIMEOUTS.SHORT);
+    if (!client) return null;
+    try {
+      const answer = await client.post<unknown>(this.path(robotId, '/episodes/end'), { reason });
+      if (!isRecord(answer) || answer.ok !== true || typeof answer.episodeIndex !== 'number') {
+        throw new HttpClientError('robot returned no take', undefined, 'invalid_response');
+      }
+      return {
+        ok: true,
+        episodeIndex: answer.episodeIndex,
+        report: isRecord(answer.report) ? (answer.report as unknown as AgentEpisodeReport) : null,
+      };
+    } catch (error) {
+      const refused = this.refusalCode(error, ['not_capturing', 'not_recording'] as const);
+      if (refused) return { ok: false, code: refused };
+      return this.classify(error, `episodes/end on ${robotId}`);
+    }
+  }
+
+  /**
+   * The JPEG of a take's middle frame, or `null` when the robot has none (404),
+   * cannot be asked, or did not answer. Only while the robot's session lives —
+   * the agent serves it from its scratch directory.
+   */
+  async thumbnail(robotId: string, take: number): Promise<Buffer | null> {
+    const registered = await this.robots.getRegisteredRobot(robotId);
+    if (!registered?.baseUrl) return null;
+    const url = `${registered.baseUrl.replace(/\/$/, '')}${this.path(robotId, `/episodes/${take}/thumbnail`)}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUTS.SHORT);
+    try {
+      const resp = await this.fetchImpl(url, {
+        headers: agentServiceAuthHeaders(),
+        signal: controller.signal,
+      });
+      if (!resp.ok) return null;
+      const type = resp.headers.get('content-type') ?? '';
+      if (!type.startsWith('image/jpeg')) return null;
+      return Buffer.from(await resp.arrayBuffer());
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      console.warn(`[AgentRecording] thumbnail of take ${take} on ${robotId} unavailable: ${why}`);
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** The agent's 409 code when it is one of `codes`, else null. */
+  private refusalCode<C extends string>(error: unknown, codes: readonly C[]): C | null {
+    if (!(error instanceof HttpClientError) || error.statusCode !== 409) return null;
+    const body = error.responseBody;
+    const code = isRecord(body) && typeof body.code === 'string' ? body.code : null;
+    return code !== null && (codes as readonly string[]).includes(code) ? (code as C) : null;
   }
 
   async discardEpisode(robotId: string, episodeIndex: number): Promise<boolean> {

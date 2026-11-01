@@ -4,8 +4,8 @@
  * @feature robots
  */
 
-import { useRef, useState, useEffect, useMemo } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useRef, useState, useEffect, useMemo, type ReactNode } from 'react';
+import { createPortal, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import URDFLoader, { URDFRobot } from 'urdf-loader';
 import { normalizeRobotType, type RobotType, type JointState } from '../../types/robots.types';
@@ -31,6 +31,14 @@ export interface RobotModelProps {
    * back to the `jointStates` prop from the regular 2 s telemetry cadence.
    */
   robotId?: string;
+  /**
+   * Scene content mounted INSIDE one of the URDF's links (TASK-414), so it
+   * moves with that link and is expressed in its frame (x forward, y left,
+   * z up for a humanoid's `torso_link`). Ignored when the link does not exist.
+   * Meshes with `userData.keepMaterial` keep their material (the model
+   * otherwise restyles every mesh in its tree).
+   */
+  linkOverlay?: { link: string; node: ReactNode };
 }
 
 // ============================================================================
@@ -179,7 +187,8 @@ function URDFModel({
   robotType,
   jointStates,
   isAnimating,
-  robotId
+  robotId,
+  linkOverlay,
 }: RobotModelProps) {
   const groupRef = useRef<THREE.Group>(null);
   const [robot, setRobot] = useState<URDFRobot | null>(null);
@@ -287,6 +296,9 @@ function URDFModel({
     if (robot && time < 3) {
       robot.traverse((child: THREE.Object3D) => {
         const mesh = child as THREE.Mesh;
+        // A `linkOverlay` mesh (TASK-414) keeps its own material: it hangs
+        // inside the robot's tree, so this traverse reaches it too.
+        if (mesh.userData?.keepMaterial) return;
         // Check if mesh needs material update (hasn't been processed yet)
         if (mesh.isMesh && mesh.material) {
           const mat = mesh.material as THREE.Material;
@@ -342,9 +354,11 @@ function URDFModel({
     );
   }
 
+  const overlayLink = linkOverlay ? (robot.links?.[linkOverlay.link] as THREE.Object3D | undefined) : undefined;
   return (
     <group ref={groupRef} rotation={[-Math.PI / 2, 0, 0]}>
       <primitive object={robot} />
+      {linkOverlay && overlayLink && createPortal(linkOverlay.node, overlayLink)}
     </group>
   );
 }

@@ -3,7 +3,9 @@
  * @description Restore semantics of the durable safety state (TASK-196): a
  *              robot that was E-Stopped comes back E-Stopped, the warning and
  *              the latch are never restored apart, and a snapshot older than
- *              PLACE_STALE_MS stops being treated as truth.
+ *              PLACE_STALE_MS stops being treated as truth. TASK-431: a
+ *              saved `protective_stop` comes back only with its latch, and a
+ *              reset with nothing latched clears the status as well.
  * @feature robot
  * @status test
  */
@@ -58,6 +60,7 @@ function makeConfig(): RobotConfig {
 
 function writeState(opts: {
   ageMs?: number;
+  status?: PersistedState['robotState']['status'];
   warnings?: string[];
   agentState?: Partial<PersistedAgentState>;
 }): PersistedState {
@@ -65,7 +68,7 @@ function writeState(opts: {
     version: PERSISTED_STATE_VERSION,
     savedAt: new Date(Date.now() - (opts.ageMs ?? 1000)).toISOString(),
     robotState: {
-      status: 'online',
+      status: opts.status ?? 'online',
       batteryLevel: 37,
       location: { x: 11, y: 22, place: 'AISLE-3', heading: 90, floor: '2' },
       heldObject: 'crate-7',
@@ -131,6 +134,70 @@ describe('RobotStateManager — a rebooted robot remembers it was stopped', () =
     expect(warnings.some((w) => w.includes('Protective stop'))).toBe(false);
     // Unrelated warnings are none of this rule's business.
     expect(warnings).toContain('battery low');
+  });
+
+  // TASK-431: the sim's state file held `protective_stop` with no latch, 809707 s
+  // old (a comms-loss stop saved before it auto-cleared). Every restart restored
+  // it, and nothing could clear it.
+  it.each([
+    ['fresh', 1_000],
+    ['stale', PLACE_STALE_MS + 60_000],
+  ])('restores a %s protective_stop with no latch behind it as online', (_age, ageMs) => {
+    writeState({
+      ageMs,
+      status: 'protective_stop',
+      warnings: ['Protective stop: Server communication lost'],
+      agentState: { estopLatched: false },
+    });
+
+    const mgr = new RobotStateManager(makeConfig());
+
+    expect(mgr.isEStopTriggered()).toBe(false);
+    expect(mgr.getState().status).toBe('online');
+    expect(mgr.getRobotInterface().status).toBe('online');
+    expect(mgr.getState().warnings.some((w) => w.includes('Protective stop'))).toBe(false);
+  });
+
+  it('still restores protective_stop with a latched E-Stop (TASK-382: only a reset lifts it)', () => {
+    writeState({
+      status: 'protective_stop',
+      agentState: {
+        estopLatched: true,
+        estopReason: 'Platform E-Stop: Emergency stop triggered for G1-EDU-4 (real)',
+        estopAt: '2026-10-29T18:00:00.000Z',
+      },
+    });
+
+    const mgr = new RobotStateManager(makeConfig());
+
+    expect(mgr.isEStopTriggered()).toBe(true);
+    expect(mgr.getState().status).toBe('protective_stop');
+    // Nothing but a deliberate reset lifts it: a heartbeat does not.
+    mgr.updateServerHeartbeat();
+    expect(mgr.isEStopTriggered()).toBe(true);
+    expect(mgr.getState().status).toBe('protective_stop');
+    expect(mgr.resetEmergencyStop()).toBe(true);
+    expect(mgr.getState().status).toBe('online');
+    expect(mgr.getAgentSafetyState().estopLatched).toBe(false);
+  });
+
+  it('restores an online robot with a latch as protective_stop', () => {
+    // The latch alone decides: an `online` snapshot next to a durable latch is a
+    // robot that was stopped, whatever the status field said.
+    writeState({ status: 'online', agentState: { estopLatched: true, estopReason: 'fleet-wide stop' } });
+
+    expect(new RobotStateManager(makeConfig()).getState().status).toBe('protective_stop');
+  });
+
+  it('a reset with nothing latched clears a protective_stop status too', () => {
+    const mgr = new RobotStateManager(makeConfig());
+    // A status no latch holds, however it got there.
+    (mgr as unknown as { state: { status: string } }).state.status = 'protective_stop';
+    expect(mgr.isEStopTriggered()).toBe(false);
+
+    mgr.updateServerHeartbeat();
+    expect(mgr.resetEmergencyStop()).toBe(true);
+    expect(mgr.getState().status).toBe('online');
   });
 
   it('restores battery, pose and held object from a FRESH snapshot', () => {

@@ -17,6 +17,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Robot } from '../../robots/types/robots.types';
 import { useInputLeaseGate, type InputLease } from './inputLease';
+import { openTeleopSocket } from '../../robots/components/tabs/vr/vrUrls';
 
 export type SimInputStatus = 'disconnected' | 'connecting' | 'awaiting_control' | 'streaming';
 
@@ -42,10 +43,6 @@ const TICK_MS = 60;
 const ARM_SWING = 0.3;
 const HAND_SWING = 0.45;
 
-function getWsBaseUrl(robot: Robot): string {
-  const agent = robot.a2aAgentUrl?.replace(/\/$/, '') ?? 'http://localhost:41243';
-  return agent.replace(/^http/, 'ws');
-}
 
 /** Deterministic per-joint jitter in [0, 1) so motion looks organic. */
 function jointJitter(name: string): number {
@@ -133,7 +130,10 @@ export function useSimulatedVrInput({ robot, enabled, lease }: UseSimulatedVrInp
     }
 
     setStatus('connecting');
-    const ws = new WebSocket(`${getWsBaseUrl(robot)}/ws/keyboard-teleop`);
+    // Through the server's same-origin proxy (TASK-393). Synthetic motion sends
+    // no heartbeat on purpose: the agent then never arms a real robot's arms for
+    // it, so this switch can only ever drive the simulation.
+    const ws = openTeleopSocket(robot);
     wsRef.current = ws;
 
     let joints: JointConfig[] = [];

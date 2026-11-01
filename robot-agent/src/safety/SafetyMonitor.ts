@@ -526,14 +526,47 @@ export class SafetyMonitor {
     // Clear the latched warning from robot state — this also handles a stale
     // comms-loss warning restored from persisted state after a restart.
     const state = this.stateGetter();
+    let changed = false;
     if (state.warnings.some((w) => w.includes(COMM_REASON))) {
       this.stateUpdater((s) => {
         s.warnings = s.warnings.filter((w) => !w.includes(COMM_REASON));
         if (s.currentTaskName === 'Protective stop') s.currentTaskName = undefined;
         s.updatedAt = new Date().toISOString();
       });
-      this.changeNotifier();
+      changed = true;
     }
+    // TASK-431: and the status the stop wrote, or the robot reports (and
+    // persists) a protective stop that nothing holds any more.
+    if (this.releaseUnlatchedStopStatus()) changed = true;
+    if (changed) this.changeNotifier();
+  }
+
+  /**
+   * Hand back the status a stop wrote once nothing latches it (TASK-431).
+   *
+   * {@link applyStopToState} writes `protective_stop` together with a latch.
+   * A path that drops the latch without an operator reset (a returning
+   * heartbeat, positive geofence clearance) used to leave the status behind:
+   * the robot reported a stop nothing held, persisted it, and every later boot
+   * restored it. A reset that found nothing latched could not clear it either.
+   * Only `protective_stop` is touched, and only while no latch is held, so a
+   * stop with another cause keeps its status until its own reset.
+   *
+   * Does not notify; the caller does, once, for everything it changed.
+   *
+   * @returns whether the status changed.
+   */
+  private releaseUnlatchedStopStatus(): boolean {
+    if (this.estopState.status === 'triggered') return false;
+    if (this.stateGetter().status !== 'protective_stop') return false;
+    this.stateUpdater((s) => {
+      s.status = 'online';
+      if (s.currentTaskName === 'Protective stop' || s.currentTaskName === 'EMERGENCY STOP') {
+        s.currentTaskName = undefined;
+      }
+      s.updatedAt = new Date().toISOString();
+    });
+    return true;
   }
 
   /**
@@ -917,14 +950,18 @@ export class SafetyMonitor {
     // owned by something else: the geofence's own warning must not outlive the
     // condition that wrote it.
     const state = this.stateGetter();
+    let changed = false;
     if (state.warnings.some((w) => w.includes(ZONE_VIOLATION_REASON_PREFIX))) {
       this.stateUpdater((s) => {
         s.warnings = s.warnings.filter((w) => !w.includes(ZONE_VIOLATION_REASON_PREFIX));
         if (s.currentTaskName === 'Protective stop') s.currentTaskName = undefined;
         s.updatedAt = new Date().toISOString();
       });
-      this.changeNotifier();
+      changed = true;
     }
+    // TASK-431: the status follows the latch, as it does on a heartbeat.
+    if (this.releaseUnlatchedStopStatus()) changed = true;
+    if (changed) this.changeNotifier();
   }
 
   // ============================================================================
@@ -1099,6 +1136,7 @@ export class SafetyMonitor {
       // — but a warning nothing can clear is bad enough to keep a second cure
       // for: it is what makes an operator delete the state file.
       const state = this.stateGetter();
+      let changed = false;
       if (state.warnings.some((w) => w.includes('Emergency stop') || w.includes('Protective stop'))) {
         this.stateUpdater((s) => {
           s.warnings = s.warnings.filter(
@@ -1106,8 +1144,12 @@ export class SafetyMonitor {
           );
           s.updatedAt = new Date().toISOString();
         });
-        this.changeNotifier();
+        changed = true;
       }
+      // TASK-431: the same cure for a `protective_stop` status with no latch
+      // behind it. The session page offers this reset for exactly that case.
+      if (this.releaseUnlatchedStopStatus()) changed = true;
+      if (changed) this.changeNotifier();
       return true; // Already reset
     }
 

@@ -9,6 +9,7 @@ import { createServer } from 'http';
 import { createApp } from './app.js';
 import { logger } from './utils/logger.js';
 import { setupWebSocket } from './websocket/index.js';
+import { teleopProxyRoute } from './websocket/teleopProxyRoute.js';
 import { connectDatabase, disconnectDatabase } from './database/index.js';
 import { seedDemoWarehouse } from './database/seedDemoWarehouse.js';
 import { seedStandardRobotTypes } from './database/seedStandardRobotTypes.js';
@@ -219,13 +220,15 @@ async function main() {
   // Create HTTP server
   const server = createServer(app);
 
-  // Setup WebSocket
-  setupWebSocket(server);
+  // Setup WebSocket: the A2A event socket, and the same-origin teleop socket
+  // (TASK-393) on the same port through one upgrade dispatcher.
+  setupWebSocket(server, [teleopProxyRoute()]);
 
   // Start server
   server.listen(PORT, () => {
     logger.info(`A2A Server running on http://localhost:${PORT}`);
     logger.info(`WebSocket available at ws://localhost:${PORT}/api/a2a/ws`);
+    logger.info(`Teleop socket at ws://localhost:${PORT}/api/robots/:id/teleop/ws`);
     logger.info(`Agent card at http://localhost:${PORT}/.well-known/a2a/agent_card.json`);
   });
 

@@ -1,0 +1,37 @@
+# NeoDEM robot supervisor (TASK-403) — one instance per robot, %i = robot id.
+#
+# A USER unit: no sudo. Install (docs/g1-edu-lab-bringup.md, "Start the robot
+# side from NeoDEM"):
+#
+#   mkdir -p ~/.config/systemd/user ~/.config/neodem
+#   ln -sf ~/develop/robot-management-system/robot-agent/supervisor/systemd/neodem-robot-supervisor@.service \
+#          ~/.config/systemd/user/
+#   printf 'ROBOT_SUPERVISOR_TOKEN=%s\n' "$(openssl rand -hex 24)" > ~/.config/neodem/supervisor-g1-edu-4.env
+#   chmod 600 ~/.config/neodem/supervisor-g1-edu-4.env
+#   systemctl --user daemon-reload
+#   systemctl --user start neodem-robot-supervisor@g1-edu-4      # `enable` only once you want it at login
+#
+# Linger is already on for this user (ollama runs the same way), so the unit
+# keeps running without a login session.
+[Unit]
+Description=NeoDEM robot supervisor (%i)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/develop/robot-management-system/robot-agent/supervisor
+# ROBOT_SUPERVISOR_TOKEN=... (never in the repo). Optional: ROBOT_SUPERVISOR_PORT (default 8766).
+EnvironmentFile=%h/.config/neodem/supervisor-%i.env
+Environment=ROBOT_SUPERVISOR_PROFILE=%h/develop/robot-management-system/robot-agent/hardware/profiles/%i.yaml
+ExecStart=%h/.nvm/versions/node/v22.23.2/bin/node --import tsx src/index.ts
+# LOAD-BEARING: stop/restart only the supervisor itself. The default
+# (control-group) would SIGTERM and then SIGKILL every child in the cgroup — the
+# sidecar included, which must never be SIGKILLed. With KillMode=process the
+# children keep running and the next supervisor re-adopts them from their PID
+# files. Stopping the robot side is POST /stop, not `systemctl stop`.
+KillMode=process
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -76,6 +76,9 @@
   /* The one saturated red on screen: E-stop buttons and alarm banners. */
   --color-stop: var(--signal-stopped-fill);
   --color-on-stop: #ffffff;
+
+  /* The video well (bg-media): video is black in every theme. */
+  --color-media: var(--bg-media);
 }
 
 /* Custom theme configuration */
@@ -121,6 +124,20 @@
 
   /* Motion */
   --ease-instrument: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* The only motion for a lit state (TASK-425): opacity .45 → 1 → .45 over
+     2 s. The REC tally, the current setup step's ring and the live dot. The
+     reduced-motion block below stops it. */
+  --animate-breathe: breathe 2s ease-in-out infinite;
+
+  @keyframes breathe {
+    0%,
+    100% {
+      opacity: 0.45;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
 }
 
 /* Theme values — the token table in docs/brand.md. Dark is the default and is
@@ -169,6 +186,9 @@
   --signal-unknown: #e9c39c;
   --signal-stopped: #ff9b9b;
   --signal-stopped-fill: #e5484d;
+
+  /* The video well behind a camera or the twin: black in both themes. */
+  --bg-media: #03070c;
 }
 
 /* Light theme via class */
@@ -209,6 +229,8 @@
   --signal-unknown: #7a5510;
   --signal-stopped: #b02020;
   --signal-stopped-fill: #c9302c;
+
+  --bg-media: #03070c;
 }
 
 @layer base {

@@ -344,6 +344,52 @@ Behind `CONTROL_LEASES_ENABLED` — **on by default** since TASK-321; `CONTROL_L
 
 **Data-collection inputs (TASK-320).** The session detail page holds one lease for the whole page (`app/src/features/datacollection/hooks/useSessionControlLease.ts`): while the capability is on and a live session has a gamepad or VR input, it keeps its own agent socket on `/ws/keyboard-teleop` open as the lease's primary and shows the same "Take control" bar (`ControlLeaseBar`). The gamepad and simulated-VR inputs join that lease with `bindSocket` on their own sockets (`hooks/inputLease.ts`) — never acquiring one of their own — and send motion only after the agent answers `{type:'lease', state:'bound'}` on that socket. `revoked`, `expired`, `lease_invalid`, `lease_required` or the page's lease ending silence them until the operator takes control again; a stop (gamepad direction 0) always goes out, the simulated input's leave-time `home` only while bound. Under a lease the gamepad drives through the agent's `/ws/keyboard-teleop`, since the SO-101 sidecar's socket on `:8766` knows nothing of leases. Capability off: no page socket, no bar, and both inputs behave as before.
 
+### Robot mode (`/api/robots/:id/base-mode`, TASK-398)
+
+A role-guarded, audited proxy to the agent's `/api/v1/robots/:id/base/mode`. The authority is the robot: the server passes the agent's status and body through verbatim.
+
+| Method | Path | Guard | Description |
+|--------|------|-------|-------------|
+| GET | `/` | viewer | The agent's GET plus `sidecarReachable: boolean\|null` (TASK-409: from a readiness snapshot of the last 10 s, `null` when none is cached); `503 {code:'agent_unreachable'}` when it does not answer; `404` for a robot outside the caller's tenant |
+| POST | `/` | member | `{mode:'limp'\|'stand'\|'balance', leaseId, generation}` (all required — `400 invalid_mode` / `400 lease_required`) → the agent's answer; `503 agent_unreachable`. One compliance entry per attempt (`access_audit`, action `base_mode`, metadata `{result:'ok'\|'denied'\|'failed', mode, fromMode, fsmId, code}` — never the lease id) |
+
+### Robot readiness and robot side (`/api/robots/:id/readiness`, `/api/robots/:id/bringup`, TASK-409)
+
+One readiness snapshot per robot, merged from the robot supervisor (`robot-agent/supervisor`, TASK-403: processes) and the agent's `GET /api/v1/robots/:id/readiness` (TASK-405: sidecar, mode, arms, hands, lease, camera, "why not following"), and Start/Stop of the robot side proxied to the supervisor. Which supervisor serves which robot comes from the server env, never from the agent: `ROBOT_SUPERVISORS=<robotId>=<url>[,…]` and `ROBOT_SUPERVISOR_TOKEN` (bearer). Unset → `bringup: null` in every snapshot and `404 {code:'no_supervisor'}` from every `/bringup` route. A supervised robot with no record yet is visible to every tenant's caller until Start registers it.
+
+```
+RobotReadiness = {
+  robotId, at,
+  agent: { reachable, error, readiness: AgentReadiness | null },   // the agent's own snapshot, verbatim
+  bringup: SupervisorStatus | null,                                // the supervisor's GET /status, verbatim
+  supervisor: { reachable, error } | null,                         // null = no supervisor configured
+  quest: { adb, devices: [{serial, state:'device'|'unauthorized'|'offline', model}], reversed: [{remote, local}], hint } | null,
+                                                                   // the supervisor's GET /quest (TASK-412); display-only
+  reason: { code, severity: 'block'|'warn'|'ok', text, source: 'server'|'agent' }
+}
+```
+
+`reason` is the server's own line when one applies, in this order — `bringup_stopped` ("Robot side is stopped. Press Start."), `bringup_failed:<step>` (that step's `detail`), `bringup_foreign:<step>` ("An old <bridge> process is running (pid N). Adopt or leave it."), `bringup_busy` (a start/stop is running), `supervisor_unreachable` (neither supervisor nor agent answers), `agent_unreachable` ("Robot agent is not answering."), `agent_no_readiness` (the agent answered, but not with a readiness report) — else the agent's own `reason` with `source:'agent'`. `text` is at most 72 characters (one VR HUD line).
+
+Polling: only watched robots — one with a readiness request or a bringup write in the last 30 s, or an open (`recording`/`paused`) teleop session — at 1 Hz: supervisor `/status` (2 s timeout) and agent `/readiness` (4 s); the supervisor's `/quest` every 2 s. `quest` never changes `reason`. `robot:readiness` goes out on `/api/a2a/ws` as `{type:'robot:readiness', data: RobotReadiness, timestamp}` whenever the snapshot changes (deep-equal ignoring every `at`) and at least every 5 s while watched (the heartbeat is decided on the 1 Hz tick, so an emission between ticks — a `GET /readiness` poll — does not stretch the gap past 5 s), to every identified socket of the robot's tenant (no per-topic subscription).
+
+| Method | Path | Guard | Description |
+|--------|------|-------|-------------|
+| GET | `/:id/readiness` | viewer | `RobotReadiness`; opens or extends the 30 s watch window. `404 robot_not_found` outside the caller's tenant |
+| GET | `/:id/bringup` | viewer | The supervisor's `SupervisorStatus`; `404 no_supervisor`; `503 supervisor_unreachable` |
+| POST | `/:id/bringup/start` | member | `{mode:'read_only'\|'arm_sdk', confirm?, leaseId?, generation?}`. `arm_sdk` needs `confirm:true` (`400 confirm_required`) **and** the caller's live control lease (`409 lease_required`); `400 invalid_mode`. → the supervisor's `202` + status. Once the supervisor reports the agent step `ok`, a robot without a record is registered from `http://<supervisor host>:<status.agentPort>` (the `POST /api/robots/register` logic, in the caller's tenant) |
+| POST | `/:id/bringup/stop` | member | → `{status: SupervisorStatus, baseMode: {mode, fsmId, source:'agent'\|'supervisor'} \| null}`. Never changes the FSM; the UI offers "Limp first?" through `POST /api/robots/:id/base-mode` |
+| POST | `/:id/bringup/sidecar-mode` | member | `{mode, confirm:true}` (`400 confirm_required`), plus the caller's lease for `arm_sdk` (`409 lease_required`) |
+| POST | `/:id/bringup/steps/:step/adopt` · `…/leave` | member | Adopt or leave a foreign process holding a step's port; `404 no_step` |
+| POST | `/:id/bringup/lan-up` | member | `nmcli con up` of the profile's robot LAN (real profiles only) |
+| GET | `/:id/bringup/logs/:proc?tail=200` | member | `{proc, lines}` for `sim`\|`bridge`\|`sidecar`\|`agent` (tail 1–2000); `404 no_proc` |
+| GET | `/:id/bringup/logs/:proc/stream` | member | SSE passthrough of the supervisor's log stream |
+| GET | `/:id/quest` | member | The supervisor's `GET /quest`: the Meta Quest(s) adb sees on the robot PC's USB, the reverse rules and a `hint` (TASK-412) |
+| POST | `/:id/quest/connect` | member | `{port?}` (1024–65535, default 1420) → `adb -s <serial> reverse tcp:<port> tcp:<port>` on the robot PC; `409 no_device`/`no_adb` with the hint; `400 bad_port` |
+| POST | `/:id/quest/open` | member | `{path, port?}` → the Quest browser opens `http://localhost:<port><path>`. `path` must be `/data-collection/live?robot=<id>` or `/data-collection/<session uuid>` (`400 bad_path`, checked here and again on the supervisor) |
+
+Every POST — a viewer's `403` included — writes one compliance entry (`access_audit`, resourceType `robot_bringup`, action `bringup_start|stop|sidecar_mode|adopt|leave|lan_up` or `quest_connect|quest_open`, metadata `{result:'ok'|'denied'|'failed', mode, step, code, status}`; never the lease id). A supervisor refusal (`409 busy`, `409 armed`, …) is passed through with its status and body; no answer at all is `503 supervisor_unreachable`. The one exception, on every bringup route: a supervisor `401` (the server's `ROBOT_SUPERVISOR_TOKEN` is wrong) goes out as `502 supervisor_auth_failed` — a server misconfiguration, which as a `401` the app would take for an expired session and resend.
+
 ### Tour / host mode (`/api/tour`, TASK-213)
 
 Routes are the server's record; runs are what the robot reports back. There is no `/api/robots` half: a tour is never started by a schedule.
@@ -566,6 +612,17 @@ The robot's one installed control lease — fenced by a strictly increasing `gen
 **Motion ingress while a lease is held (TASK-316).** With `CONTROL_LEASE_REQUIRED` on and the lease `held`, every REST route that *starts* motion answers `409 {code:'control_lease_held', holder:{displayName, userId}, message}` and starts nothing: `POST /robots/:id/command` (except `type: 'stop'\|'emergency_stop'`), `/skills/execute`, `/vla/start`, `/vla/resume`, `/evaluation/run`, `/tasks`, `/agent-mode/command`, `/agent-mode/tour`, `/agent-mode/patrol`. Stop, abort and E-stop routes are never refused (`/vla/stop`, `/vla/pause`, `/skills/abort`, `/agent-mode/tour/abort`, `/agent-mode/patrol/abort`, `/agent-mode/estop*`, `/safety/estop*`). With no lease held (`none`, `expired`, `released`) autonomous starts are admitted as before.
 
 The bilateral teleop socket (`/ws/bilateral-teleop`) follows the socket binding contract: the server sends `{type:'lease', state:'unbound', required:true}` after `ready`; the client sends `{bind:{leaseId, generation}}` and gets `{type:'lease', state:'bound', generation}` or `{type:'error', code:'lease_invalid'}`. `leader_state` frames from an unbound socket are dropped with `{type:'error', code:'lease_required'}` (once per binding); a fence, release or expiry of the bound generation sends `{type:'lease', state:'revoked'\|'expired', generation}` and stops forwarding at once — no auto-rebind. Flag off: no lease messages, a `{bind}` frame is ignored.
+
+### Robot mode (`/api/v1/robots/:id/base/mode`, TASK-398)
+
+Limp / stand / balance on a real G1 without the Unitree remote. The sidecar (`G1_LOCO_ENABLED=fsm`) measures the FSM and owns the transition table and the E-stop order; this route adds the lease, the agent's latch and Agent Mode, and passes the sidecar's status and body through.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | `{capability:{gate:'off'\|'fsm'\|'full'\|'unknown', moveEnabled, idsVerified, ids}, base:{fsmId, mode, ageS, error}\|null, inFlight, estopLatched, sidecarEstopLatched, armed, armWeight, agentModeRunning, hardwareStop}` — `base` is read live from the sidecar's `GET /loco/mode` |
+| POST | `/` | `{mode:'limp'\|'stand'\|'balance', leaseId, generation}` → the sidecar's answer (`200 {ok, mode, fsm_id, confirmed, took_ms}`; `409 {code:'bad_transition'\|'not_settled'\|'arms_engaged'\|'estop_latched'\|'fsm_unknown'\|'mode_change_in_flight'}`; `503 rpc_failed`; `504 unconfirmed`). The agent refuses first: `400` bad mode, `403 lease_required`/`lease_invalid` (a presented lease must verify; none at all only while leases are enforced), `409 mode_control_unavailable` (gate off/unknown), `409 estop_latched` / `409 agent_mode_running` (not for `limp`) |
+
+`POST /api/v1/robots/:id/safety/estop` now awaits the sidecar's `/estop` (latch → disarm → damp) BEFORE stopping Agent Mode, and reports it as `hardwareStop:{reached, disarmed, damped, dampConfirmed, dampError}`.
 
 ### Patrol (`/api/v1/robots/:id/agent-mode/patrol`, TASK-212)
 

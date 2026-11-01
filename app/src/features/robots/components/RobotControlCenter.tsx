@@ -140,7 +140,7 @@ export const RobotControlCenter = memo(function RobotControlCenter({
       />
 
       {robot.status === 'offline' && (
-        <RobotOfflineBanner robotName={robot.name} lastSeen={robot.lastSeen} />
+        <RobotOfflineBanner robotName={robot.name} lastSeen={robot.lastSeen} robotId={robot.id} />
       )}
 
       {tab === 'overview' && (

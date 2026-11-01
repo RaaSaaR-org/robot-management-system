@@ -80,7 +80,9 @@ cd app && npm run dev
 ```
 
 `test-all.sh` runs, in order: typecheck (server, app, robot-agent), vitest
-(server, app, robot-agent), the `sim_g1_dds` pytest suite, the curation +
+(server, app, robot-agent), the robot supervisor's typecheck + vitest
+(`robot-agent/supervisor`, needs a python with pyzmq for its stub children —
+`python3` here has it), the `sim_g1_dds` pytest suite, the curation +
 LeRobot-converter pytest suite, the hardware-sidecar pytest suite, and the
 Playwright UI tests. Every stage runs even when an earlier one fails, so one
 invocation gives the whole picture.
@@ -277,7 +279,9 @@ robot-management-system/
 │   │   ├── api/            # REST & WebSocket
 │   │   ├── config/         # Environment configuration
 │   │   └── prompts/        # AI prompt templates
+│   ├── supervisor/         # Starts/stops bridge → sidecar → agent on the robot PC (TASK-403)
 │   ├── hardware/
+│   │   ├── profiles/       # Robot profiles the supervisor reads (g1-edu-4, sim-g1-edu-dev)
 │   │   ├── g1_sidecar.py   # DDS<->HTTP bridge to a real G1 (adds /loco/* for Agent Mode)
 │   │   ├── sim_g1_dds/     # MuJoCo sim that speaks the real Unitree wire protocol
 │   │   └── sim_evaluator/  # MJCF scenes (incl. g1_dex3_room_scene.xml)
@@ -433,6 +437,9 @@ Guidelines:
 | `docs/multi-tenancy.md`          | Row-level multi-tenancy — flag, Prisma `$extends` isolation, `runAsPlatform`, Organizations UI (TASK-155) |
 | `docs/vla-integration-guide.md`  | VLA integration (SmolVLA, pi0.5, GR00T) |
 | `docs/training-run-export.md`    | Exporting a run to a cluster this server cannot reach |
+| `docs/data-collection-two-person.md` | The data-collection session runbook — readiness panel to last take, Quest operator + desktop assistant, E-stop recovery, remote testing over Tailscale |
+| `docs/g1-edu-lab-bringup.md`     | G1 EDU lab bringup — robot supervisor install (real robot and the `sim-g1-edu-dev` rehearsal robot), arm_sdk, mode changes without the remote |
+| `docs/vr-teleop-data-collection.md` | Quest 3 teleop on the G1 through NeoDEM, single operator; Unitree `xr_teleoperate` path and LeRobot import |
 | `docs/huggingface-publish.md`    | Publishing a recorded dataset to the Hugging Face Hub |
 | `docs/regulatory-compliance.md`  | EU AI Act, GDPR compliance        |
 

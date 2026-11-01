@@ -35,8 +35,14 @@ const TEST_JOINTS = [
   { name: 'elbow_flex', axis: 'y', limitLower: 0, limitUpper: 2, defaultPosition: 0.5 },
 ];
 
+/** A G1 EDU cut down to one of each kind of joint the forwarder must tell apart. */
+const G1_TEST_JOINTS = [
+  'left_shoulder_pitch_joint', 'right_elbow_joint', 'left_hip_pitch_joint', 'waist_yaw_joint',
+  'left_hand_thumb_0_joint', 'right_hand_thumb_0_joint',
+].map((name) => ({ name, axis: 'y', limitLower: -2, limitUpper: 2, defaultPosition: 0 }));
+
 vi.mock('../joint-configs/index.js', () => ({
-  getJointConfig: vi.fn().mockReturnValue(TEST_JOINTS),
+  getJointConfig: vi.fn((type: string) => (type === 'g1_edu' ? G1_TEST_JOINTS : TEST_JOINTS)),
 }));
 
 /**
@@ -55,10 +61,24 @@ const { HardwareActionError } = vi.hoisted(() => ({
 
 const hw = {
   connected: false,
+  /** TASK-393: whether the sidecar would take `/action` now (armed, or nothing to arm). */
+  mayStream: true,
+  hands: null as { left: boolean; right: boolean } | null,
+  resetEstop: vi.fn(async (): Promise<{ ok: boolean }> => ({ ok: true })),
   joints: [] as Array<{ name: string; position: number }>,
   sendAction: vi.fn(async (_joints: Record<string, number>): Promise<void> => {}),
   releaseAction: vi.fn(async (): Promise<void> => {}),
   locoStop: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
+  sendEstop: vi.fn(async (_opts?: { damp?: boolean }) => ({
+    reached: true, disarmed: true, damped: false, dampConfirmed: false, dampError: null as string | null,
+  })),
+  disarm: vi.fn(async () => ({ ok: true })),
+  /** TASK-398: the sidecar's G1_LOCO_ENABLED gate as `/health` reported it. */
+  gate: 'unknown' as 'unknown' | 'off' | 'fsm' | 'full',
+  requiresArming: false,
+  /** TASK-421: fresh arms so far, and the pose the last one was seeded from. */
+  armEpoch: 0,
+  armSeed: null as Record<string, number> | null,
 };
 
 vi.mock('../../hardware/HardwareClient.js', () => ({
@@ -67,9 +87,24 @@ vi.mock('../../hardware/HardwareClient.js', () => ({
     isConnected: () => hw.connected,
     getJointStates: () => hw.joints,
     sendAction: (j: Record<string, number>) => hw.sendAction(j),
+    mayStreamAction: () => hw.mayStream,
+    getArmStatus: () => ({ hands: hw.hands }),
+    resetEstop: () => hw.resetEstop(),
+    getImuNow: async () => null,
     releaseAction: () => hw.releaseAction(),
     locoStop: () => hw.locoStop(),
-    sendEstop: async () => {},
+    sendEstop: (opts?: { damp?: boolean }) => hw.sendEstop(opts),
+    mayMoveBase: () => hw.gate === 'unknown' || hw.gate === 'full',
+    getLocoCapability: () => ({
+      gate: hw.gate,
+      moveEnabled: hw.gate === 'unknown' ? null : hw.gate === 'full',
+      idsVerified: false,
+      ids: null,
+    }),
+    requiresArming: () => hw.requiresArming,
+    getArmEpoch: () => hw.armEpoch,
+    getArmSeed: () => hw.armSeed,
+    disarm: () => hw.disarm(),
     onPoseSample: () => () => {},
     getOdometry: () => null,
     getMotorTemperatures: () => null,
@@ -86,10 +121,10 @@ vi.mock('../../config/config.js', async (importOriginal) => {
 
 const { RobotStateManager } = await import('../state.js');
 
-function makeConfig(): RobotConfig {
+function makeConfig(robotType: RobotConfig['robotType'] = 'so101'): RobotConfig {
   return {
     id: 'test-robot-1', name: 'TestBot', model: 'TestModel', robotClass: 'standard',
-    robotType: 'so101', maxPayloadKg: 10, description: 'Test robot',
+    robotType, maxPayloadKg: 10, description: 'Test robot',
     initialLocation: { x: 0, y: 0, floor: '1' }, capabilities: ['navigation'],
   };
 }
@@ -108,9 +143,20 @@ describe('RobotStateManager — teleop reaches the robot', () => {
     vi.useFakeTimers();
     hw.connected = false;
     hw.joints = [];
+    hw.mayStream = true;
+    hw.hands = null;
+    hw.resetEstop.mockClear();
     hw.sendAction.mockClear().mockImplementation(async () => {});
     hw.releaseAction.mockClear().mockImplementation(async () => {});
     hw.locoStop.mockClear().mockImplementation(async () => ({ ok: true }));
+    hw.sendEstop.mockClear().mockImplementation(async () => ({
+      reached: true, disarmed: true, damped: false, dampConfirmed: false, dampError: null,
+    }));
+    hw.disarm.mockClear();
+    hw.gate = 'unknown';
+    hw.requiresArming = false;
+    hw.armEpoch = 0;
+    hw.armSeed = null;
     mgr = new RobotStateManager(makeConfig());
   });
 
@@ -233,6 +279,86 @@ describe('RobotStateManager — teleop reaches the robot', () => {
       expect(hw.sendAction).toHaveBeenCalled();
     });
   });
+  describe('TASK-398: one E-stop order — the sidecar /estop first', () => {
+    it('sends /estop before the plan listeners and StopMove', async () => {
+      const order: string[] = [];
+      hw.sendEstop.mockImplementation(async () => {
+        order.push('sendEstop');
+        return { reached: true, disarmed: true, damped: true, dampConfirmed: true, dampError: null };
+      });
+      hw.locoStop.mockImplementation(async () => {
+        order.push('locoStop');
+        return { ok: true };
+      });
+      mgr.onSafetyStop(() => order.push('listener'));
+
+      const hardware = await mgr.triggerEmergencyStop('remote', 'operator hit the button');
+
+      expect(order).toEqual(['sendEstop', 'listener', 'locoStop']);
+      expect(hardware).toMatchObject({ damped: true, dampConfirmed: true });
+    });
+
+    it('sends no StopMove to a sidecar that only changes modes', async () => {
+      hw.gate = 'fsm';
+      await mgr.triggerEmergencyStop('remote', 'stop');
+      expect(hw.sendEstop).toHaveBeenCalledTimes(1);
+      expect(hw.locoStop).not.toHaveBeenCalled();
+    });
+
+    it('a protective stop does not post /estop (it must not damp)', async () => {
+      hw.gate = 'fsm';
+      mgr.triggerProtectiveStop('someone walked into the cell');
+      await tick(1);
+      expect(hw.sendEstop).not.toHaveBeenCalled();
+    });
+
+    // The humanoid safety loop's push of a stop (it only runs for a humanoid
+    // with a sidecar, so it is driven directly here).
+    const propagate = (category: number): void =>
+      (mgr as unknown as { propagateStopToSidecar(c: number): void }).propagateStopToSidecar(category);
+
+    it('the safety loop pushes a protective stop to a mode-control sidecar as a disarm only', () => {
+      hw.gate = 'fsm';
+      hw.requiresArming = true;
+      propagate(2);
+      expect(hw.disarm).toHaveBeenCalledTimes(1);
+      expect(hw.sendEstop).not.toHaveBeenCalled();
+    });
+
+    it('a protective stop on a sidecar read as gate-off posts /estop with damp:false', () => {
+      // The cached gate can be stale (the sidecar was restarted with fsm
+      // between two polls): the request itself must forbid the damp.
+      hw.gate = 'off';
+      propagate(2);
+      expect(hw.sendEstop).toHaveBeenCalledTimes(1);
+      expect(hw.sendEstop).toHaveBeenCalledWith({ damp: false });
+    });
+
+    it('an emergency stop posts /estop without damp:false', async () => {
+      hw.gate = 'off';
+      await mgr.triggerEmergencyStop('remote', 'stop');
+      expect(hw.sendEstop).toHaveBeenCalledTimes(1);
+      expect(hw.sendEstop.mock.calls[0][0]).toBeUndefined();
+    });
+
+    it('says in the safety status whether the robot went limp', async () => {
+      hw.gate = 'fsm';
+      hw.sendEstop.mockImplementation(async () => ({
+        reached: true, disarmed: true, damped: false, dampConfirmed: false, dampError: 'rpc 3104',
+      }));
+      await mgr.triggerEmergencyStop('remote', 'stop');
+      const status = mgr.getSafetyStatus();
+      expect(status.hardwareStop).toMatchObject({ damped: false, dampError: 'rpc 3104' });
+      expect(status.warnings).toContain('E-stop: arms disarmed, robot NOT damped — rpc 3104');
+
+      hw.sendEstop.mockImplementation(async () => ({
+        reached: true, disarmed: true, damped: true, dampConfirmed: true, dampError: null,
+      }));
+      await mgr.triggerEmergencyStop('remote', 'stop again');
+      expect(mgr.getSafetyStatus().warnings).toContain('Robot limp (E-stop)');
+    });
+  });
+
   describe('the E-Stop reaches the writer', () => {
     it('stops streaming the pose the moment the latch is taken', async () => {
       hw.connected = true;
@@ -404,6 +530,214 @@ describe('RobotStateManager — teleop reaches the robot', () => {
 
       expect(seen.length).toBe(before);
       warn.mockRestore();
+    });
+  });
+
+  // TASK-393: the real G1. A leg target on a standing robot is a fall.
+  describe('a G1 gets arms and hands only', () => {
+    let g1: InstanceType<typeof RobotStateManager>;
+    beforeEach(() => {
+      g1 = new RobotStateManager(makeConfig('g1_edu'));
+    });
+    afterEach(() => {
+      g1.disableTeleop();
+    });
+
+    it('never forwards a leg or waist joint, even when the operator commands one', async () => {
+      hw.connected = true;
+      g1.enableTeleop();
+      g1.setTeleopJoint('left_shoulder_pitch_joint', 0.5);
+      g1.setTeleopJoint('left_hip_pitch_joint', 0.3);
+      g1.setTeleopJoint('waist_yaw_joint', 0.2);
+      g1.setTeleopJoint('left_hand_thumb_0_joint', 0.1);
+      await tick(2);
+      const sent = hw.sendAction.mock.calls.at(-1)![0];
+      expect(sent).toEqual({ left_shoulder_pitch_joint: 0.5, left_hand_thumb_0_joint: 0.1 });
+    });
+
+    it('sends only what this session commanded, and nothing before the first command', async () => {
+      hw.connected = true;
+      g1.enableTeleop();
+      await tick(3);
+      expect(hw.sendAction).not.toHaveBeenCalled();
+      g1.setTeleopJoint('right_elbow_joint', 1.0);
+      await tick(2);
+      expect(hw.sendAction.mock.calls.at(-1)![0]).toEqual({ right_elbow_joint: 1.0 });
+    });
+
+    it('drops the fingers of a hand the sidecar reports absent', async () => {
+      hw.connected = true;
+      hw.hands = { left: true, right: false };
+      g1.enableTeleop();
+      g1.setTeleopJoint('left_hand_thumb_0_joint', 0.2);
+      g1.setTeleopJoint('right_hand_thumb_0_joint', 0.2);
+      await tick(2);
+      expect(hw.sendAction.mock.calls.at(-1)![0]).toEqual({ left_hand_thumb_0_joint: 0.2 });
+    });
+
+    it('sends nothing while an arm-only sidecar is not armed', async () => {
+      hw.connected = true;
+      hw.mayStream = false;
+      g1.enableTeleop();
+      g1.setTeleopJoint('left_shoulder_pitch_joint', 0.5);
+      await tick(4);
+      expect(hw.sendAction).not.toHaveBeenCalled();
+      hw.mayStream = true;
+      await tick(2);
+      expect(hw.sendAction).toHaveBeenCalled();
+    });
+
+    it('records what the sidecar accepted, and nothing once the stream stops', async () => {
+      hw.connected = true;
+      g1.enableTeleop();
+      expect(g1.getRecordedCommand()).toEqual({});
+      g1.setTeleopJoint('left_shoulder_pitch_joint', 0.5);
+      await tick(2);
+      expect(g1.getRecordedCommand()).toMatchObject({ left_shoulder_pitch_joint: 0.5 });
+      hw.mayStream = false;
+      await tick(20);
+      expect(g1.getRecordedCommand()).toEqual({});
+    });
+
+    it('a refused frame is not recorded as sent', async () => {
+      hw.connected = true;
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      g1.enableTeleop();
+      g1.setTeleopJoint('left_shoulder_pitch_joint', 0.5);
+      await tick(2);
+      hw.sendAction.mockRejectedValue(new HardwareActionError('not_armed', 409));
+      await tick(2);
+      expect(g1.getRecordedCommand()).toEqual({});
+      warn.mockRestore();
+    });
+
+    it('a protective stop that recovers on its own clears the sidecar latch too', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      g1.startSafetyMonitoring();
+      g1.updateServerHeartbeat();
+      const monitor = (g1 as unknown as { safetyMonitor: { simulateConnectionLoss(): void } }).safetyMonitor;
+      monitor.simulateConnectionLoss();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(g1.isEStopTriggered()).toBe(true);
+      expect(hw.resetEstop).not.toHaveBeenCalled();
+      g1.updateServerHeartbeat();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(g1.isEStopTriggered()).toBe(false);
+      expect(hw.resetEstop).toHaveBeenCalledTimes(1);
+      g1.stopSafetyMonitoring();
+      warn.mockRestore();
+    });
+
+    // TASK-421 (g1-edu-4, 2026-10-29): every key press armed the real arms,
+    // no /action followed, and the sidecar's dead-man blended them back out
+    // a second later — the arms twitched and never moved.
+    describe('on an armed arm-only sidecar', () => {
+      beforeEach(() => {
+        hw.connected = true;
+        hw.requiresArming = true;
+        hw.mayStream = true;
+      });
+
+      it('keeps /action flowing even when nothing forwardable was commanded', async () => {
+        hw.armEpoch = 1;
+        hw.armSeed = { left_shoulder_pitch_joint: 0.3, right_elbow_joint: -0.2 };
+        g1.enableTeleop();
+        // The keyboard's first selected joint is a leg.
+        g1.applyTeleopDelta('left_hip_pitch_joint', 0.1);
+        await tick(3);
+        expect(hw.sendAction.mock.calls.length).toBeGreaterThanOrEqual(2);
+        expect(hw.sendAction.mock.calls.at(-1)![0]).toEqual({
+          left_shoulder_pitch_joint: 0.3, right_elbow_joint: -0.2,
+        });
+      });
+
+      it('holds the seed while the operator moves nothing, and moves only what they drive', async () => {
+        hw.armEpoch = 1;
+        hw.armSeed = { left_shoulder_pitch_joint: 0.3, right_elbow_joint: -0.2 };
+        g1.enableTeleop();
+        await tick(2);
+        g1.applyTeleopDelta('left_shoulder_pitch_joint', 0.05);
+        await tick(1);
+        expect(hw.sendAction.mock.calls.at(-1)![0]).toEqual({
+          left_shoulder_pitch_joint: 0.35, right_elbow_joint: -0.2,
+        });
+      });
+
+      it('starts every fresh arm from the seed, not from a target left over from the last one', async () => {
+        hw.armEpoch = 1;
+        hw.armSeed = { left_shoulder_pitch_joint: 0.3, right_elbow_joint: -0.2 };
+        g1.enableTeleop();
+        await tick(1);
+        g1.setTeleopJoint('left_shoulder_pitch_joint', 1.5);
+        await tick(1);
+        expect(hw.sendAction.mock.calls.at(-1)![0]).toMatchObject({ left_shoulder_pitch_joint: 1.5 });
+
+        // Disarmed (dead-man, heartbeat, ...): the robot's own controller moved
+        // the arm back. The next arm measures it there.
+        hw.mayStream = false;
+        await tick(2);
+        hw.mayStream = true;
+        hw.armEpoch = 2;
+        hw.armSeed = { left_shoulder_pitch_joint: 0.1, right_elbow_joint: 0 };
+        await tick(1);
+        expect(hw.sendAction.mock.calls.at(-1)![0]).toEqual({
+          left_shoulder_pitch_joint: 0.1, right_elbow_joint: 0,
+        });
+        expect(g1.getTeleopPositions().left_shoulder_pitch_joint).toBe(0.1);
+      });
+
+      it('seeds only once per arm, so the operator\'s motion is never undone mid-arm', async () => {
+        hw.armEpoch = 1;
+        hw.armSeed = { left_shoulder_pitch_joint: 0.3, right_elbow_joint: -0.2 };
+        g1.enableTeleop();
+        await tick(1);
+        g1.setTeleopJoint('left_shoulder_pitch_joint', 0.9);
+        await tick(3);
+        expect(hw.sendAction.mock.calls.at(-1)![0]).toMatchObject({ left_shoulder_pitch_joint: 0.9 });
+      });
+
+      it('falls back to the measured pose for an arm joint the seed does not carry', async () => {
+        hw.armEpoch = 1;
+        hw.armSeed = { left_shoulder_pitch_joint: 0.3 };
+        hw.joints = [{ name: 'right_elbow_joint', position: -0.6 }];
+        g1.enableTeleop();
+        await tick(1);
+        expect(hw.sendAction.mock.calls.at(-1)![0]).toEqual({
+          left_shoulder_pitch_joint: 0.3, right_elbow_joint: -0.6,
+        });
+      });
+
+      // Review of TASK-421: an open Dex3 hand rests on five of its stops, and
+      // the sidecar clamps every /action value 0.05 rad off a stop — streaming
+      // the untouched seed flexed both hands on every fresh arm.
+      it('starts the fingers at the seed but sends none until the operator drives one', async () => {
+        hw.armEpoch = 1;
+        hw.armSeed = {
+          left_shoulder_pitch_joint: 0.3,
+          left_hand_index_0_joint: 0,
+          left_hand_thumb_0_joint: 0.4,
+          right_hand_index_0_joint: 0,
+        };
+        g1.enableTeleop();
+        await tick(3);
+        for (const [pose] of hw.sendAction.mock.calls) {
+          expect(Object.keys(pose as Record<string, number>).some((n) => n.includes('_hand_'))).toBe(false);
+        }
+        expect(hw.sendAction.mock.calls.at(-1)![0]).toEqual({ left_shoulder_pitch_joint: 0.3 });
+        // The seed is still where a finger key starts from.
+        g1.applyTeleopDelta('left_hand_thumb_0_joint', 0.1);
+        await tick(1);
+        expect(hw.sendAction.mock.calls.at(-1)![0]).toEqual({
+          left_shoulder_pitch_joint: 0.3, left_hand_thumb_0_joint: 0.5,
+        });
+      });
+    });
+
+    it('an E-stop reset clears the sidecar latch as well', () => {
+      g1.triggerEmergencyStop('remote', 'stop');
+      g1.updateServerHeartbeat();
+      expect(g1.resetEmergencyStop()).toBe(true);
+      expect(hw.resetEstop).toHaveBeenCalledTimes(1);
     });
   });
 });

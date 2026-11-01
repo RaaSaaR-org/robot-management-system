@@ -11,10 +11,13 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useXRInputSourceState, XRSpace } from '@react-three/xr';
 import * as THREE from 'three';
-import { composeHud, markerAppearance, HUD_COLORS, type HudLine } from './vrHud';
+import { composeHud, finishWristHud, markerAppearance, HUD_COLORS, type HudLine } from './vrHud';
+import { whyFromTelemetry } from './vrWhy';
 import { useTextPlate } from './VrTextPlate';
+import { VR_UI_MATERIAL, VR_UI_RENDER_ORDER } from './VrPanel';
 import { GRIP_THRESHOLD } from './vrConstants';
 import type { VrRigTelemetry } from './VrTeleopRig';
+import { hudTakeOf, type VrSessionBridge } from './vrSessionBridge';
 
 /**
  * Panel size in metres — 12 x 6 cm, the size of a large smartwatch.
@@ -42,8 +45,16 @@ const HUD_PX_HEIGHT = 256;
  * naturally. This is geometry from that convention, not a measurement — worth
  * re-checking on a real Quest before anyone treats the numbers as tuned.
  */
-const HUD_POSITION: [number, number, number] = [0, 0.05, 0.07];
-const HUD_ROTATION: [number, number, number] = [-Math.PI / 3, 0, 0];
+/**
+ * TASK-418: ABOVE the wrist, like a watch face lifted toward the eyes, not in
+ * front of it. Parked 5 cm out and 7 cm back the plate floated in front of the
+ * session board whenever the left hand was held forward — in a 2064x2208 render
+ * of the neutral pose it covered the board's Start button. 10 cm off the back of
+ * the hand it sits above the board's top edge (≈ -12° below the eyes) and left of
+ * the camera screen, and it turns to face the eyes every frame (the billboard,
+ * below) rather than relying on a fixed pitch.
+ */
+export const HUD_POSITION: [number, number, number] = [0, 0.17, 0.05];
 
 /**
  * And where it sits on a tracked HAND's wrist joint.
@@ -54,7 +65,7 @@ const HUD_ROTATION: [number, number, number] = [-Math.PI / 3, 0, 0];
  * here can check in a headset is how a panel ends up edge-on to the wearer.
  * A distance is a distance in any frame; a billboard needs no frame at all.
  */
-const HUD_POSITION_HAND: [number, number, number] = [0, 0.09, 0];
+export const HUD_POSITION_HAND: [number, number, number] = [0, 0.09, 0];
 
 /** Scratch for the billboard, so the frame loop allocates nothing. */
 const FACING = new THREE.Vector3();
@@ -100,7 +111,14 @@ function applyMarker(mesh: THREE.Mesh | null, squeeze: number, saturated: boolea
  * hands with no clutch. A side with no controller falls back to that hand's
  * `wrist` joint space.
  */
-export function VrWristHud({ telemetryRef }: { telemetryRef: { current: VrRigTelemetry } }) {
+export function VrWristHud({
+  telemetryRef,
+  vrSession,
+}: {
+  telemetryRef: { current: VrRigTelemetry };
+  /** The recording session (TASK-413): its take is the HUD's first line. */
+  vrSession?: VrSessionBridge;
+}) {
   const left = useXRInputSourceState('controller', 'left');
   const right = useXRInputSourceState('controller', 'right');
   const leftHand = useXRInputSourceState('hand', 'left');
@@ -143,11 +161,11 @@ export function VrWristHud({ telemetryRef }: { telemetryRef: { current: VrRigTel
     applyMarker(rightMarker.current,
       t.right.tracked === 'hand' ? 1 : t.right.squeeze, t.right.saturated);
 
-    // Billboard the plate when it is on a hand. The controller offsets below
-    // are geometry from WebXR's GRIP space convention; a hand's `wrist` joint
-    // is a different frame and its numbers would be a guess. Facing the head
-    // needs no convention at all — only the joint's position.
-    if (plateMesh.current && anchors.left.onHand) {
+    // Billboard the plate. A hand's `wrist` joint does not share the grip
+    // space's convention, so a fixed rotation there would be a guess; facing
+    // the head needs no convention at all — only the anchor's position.
+    // TASK-418: the controller plate too, from its place on the forearm.
+    if (plateMesh.current) {
       plateMesh.current.lookAt(state.camera.getWorldPosition(FACING));
     }
 
@@ -159,6 +177,7 @@ export function VrWristHud({ telemetryRef }: { telemetryRef: { current: VrRigTel
       estopLatched: t.estopLatched,
       link: t.link,
       msSinceState: t.msSinceState,
+      posesOutstanding: t.posesOutstanding,
       armLeft: t.armLeft,
       armRight: t.armRight,
       driving: t.driving,
@@ -166,23 +185,32 @@ export function VrWristHud({ telemetryRef }: { telemetryRef: { current: VrRigTel
       vy: t.vy,
       omega: t.omega,
       baseDamped: t.baseDamped,
-      recording: t.recording,
+      moveEnabled: t.moveEnabled,
+      baseMode: t.baseMode,
+      modeControl: t.modeControl,
+      recording: hudTakeOf(vrSession?.getState()),
+      arm: t.arm,
+      clutchHeld: t.clutch.left || t.clutch.right,
+      handTracked: t.left.tracked === 'hand' || t.right.tracked === 'hand',
     });
-    // Appended, never inserted, and never while latched: `composeHud` guarantees
-    // a latched E-Stop returns exactly its two red lines and nothing competing
-    // with them, and an extra readout under that banner is exactly the
-    // competition it exists to avoid.
-    // The plate holds `HUD_MAX_LINES`; `composeHud` returns at most four and
-    // gives up its TURN line while recording precisely so this one still fits.
-    if (!t.estopLatched && t.rttMs !== null) {
-      const rtt = Math.round(t.rttMs);
-      lines.push({
-        id: 'rtt',
-        text: `RTT ${rtt}ms`,
-        color: rtt < RTT_OK_MS ? HUD_COLORS.ok : rtt < RTT_WARN_MS ? HUD_COLORS.warn : HUD_COLORS.bad,
-      });
-    }
-    plate.draw(lines);
+    // TASK-417: RTT only while poses are outstanding — an idle RTT is a
+    // number frozen at the last pose. `finishWristHud` puts a blocking reason
+    // first (never under a latched E-stop, whose banner already says it), keeps
+    // the plate's budget, and always ends on the `B/Y = STOP` tag.
+    const rtt = t.posesOutstanding && t.rttMs !== null ? Math.round(t.rttMs) : null;
+    const why = whyFromTelemetry(t, Date.now());
+    const drawn = finishWristHud(lines, {
+      estopLatched: t.estopLatched,
+      whyBlock: why.severity === 'block' ? why.short : null,
+      rttLine: rtt === null
+        ? null
+        : {
+            id: 'rtt',
+            text: `RTT ${rtt}ms`,
+            color: rtt < RTT_OK_MS ? HUD_COLORS.ok : rtt < RTT_WARN_MS ? HUD_COLORS.warn : HUD_COLORS.bad,
+          },
+    });
+    plate.draw(drawn);
   });
 
   return (
@@ -197,15 +225,15 @@ export function VrWristHud({ telemetryRef }: { telemetryRef: { current: VrRigTel
             <mesh
               ref={plateMesh}
               position={anchors.left.onHand ? HUD_POSITION_HAND : HUD_POSITION}
-              rotation={anchors.left.onHand ? [0, 0, 0] : HUD_ROTATION}
               // Drawn last and without a depth test: a status panel that
               // disappears when the operator's wrist passes behind the robot's
               // torso is a status panel that is missing at the moment they are
-              // reaching into something.
-              renderOrder={10}
+              // reaching into something. TASK-418: over the robot but UNDER the
+              // panels, so a raised wrist can never hide a board button.
+              renderOrder={VR_UI_RENDER_ORDER.hud}
             >
               <planeGeometry args={[HUD_WIDTH_M, HUD_HEIGHT_M]} />
-              <meshBasicMaterial map={plate.texture} transparent toneMapped={false} depthTest={false} />
+              <meshBasicMaterial map={plate.texture} {...VR_UI_MATERIAL} />
             </mesh>
           )}
         </XRSpace>

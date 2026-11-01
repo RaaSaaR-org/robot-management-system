@@ -60,7 +60,9 @@ export function AppLayout({ children }: AppLayoutProps) {
   return (
     <div data-app-shell className="min-h-screen bg-canvas text-ink-primary">
       <TopBar onOpenPalette={() => setPaletteOpen(true)} />
-      <div className="flex">
+      {/* At least the viewport under the TopBar (h-14), so the sidebar's column
+          reaches the bottom on a page shorter than the screen (TASK-428). */}
+      <div className="flex min-h-[calc(100dvh-3.5rem)]">
         <Sidebar />
         <main className="min-w-0 flex-1">
           <div className="flex flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">

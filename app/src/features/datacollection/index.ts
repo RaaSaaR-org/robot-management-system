@@ -48,6 +48,13 @@ export type {
 export { useTeleopEvents } from './hooks/useTeleopEvents';
 export type { UseTeleopEventsReturn } from './hooks/useTeleopEvents';
 export { useSimulatedVrInput } from './hooks/useSimulatedVrInput';
+export { useDeviceRole, detectDeviceRole } from './hooks/useDeviceRole';
+export type { DeviceRole } from './hooks/useDeviceRole';
+export { useTakeHotkeys, DISCARD_UNDO_MS } from './hooks/useTakeHotkeys';
+export type { TakeControls, UseTakeHotkeysOptions } from './hooks/useTakeHotkeys';
+export { useViewportFill, consoleHeight } from './hooks/useViewportFill';
+export { sessionPhase, commandBarTally } from './utils/sessionPhase';
+export type { SessionPhase, CommandBarTally } from './utils/sessionPhase';
 export type { SimInputStatus } from './hooks/useSimulatedVrInput';
 
 // Components
@@ -58,9 +65,14 @@ export {
   QualityIndicator,
   PriorityDashboard,
   UncertaintyHeatmap,
-  SessionStepIndicator,
-  EpisodePanel,
+  TakeDock,
+  TakesList,
+  SystemsStrip,
+  OperatorChip,
   VRSessionPanel,
+  SessionCommandBar,
+  TestingTools,
+  HeadsetHero,
 } from './components';
 export type {
   SessionStatusBadgeProps,
@@ -69,9 +81,14 @@ export type {
   QualityIndicatorProps,
   PriorityDashboardProps,
   UncertaintyHeatmapProps,
-  SessionStepIndicatorProps,
-  EpisodePanelProps,
+  TakeDockProps,
+  TakesListProps,
+  SystemsStripProps,
+  OperatorChipProps,
   VRSessionPanelProps,
+  SessionCommandBarProps,
+  TestingToolsProps,
+  HeadsetHeroProps,
 } from './components';
 
 // Pages
@@ -79,4 +96,5 @@ export {
   DataCollectionPage,
   NewSessionPage,
   SessionDetailPage,
+  LiveSessionRedirect,
 } from './pages';

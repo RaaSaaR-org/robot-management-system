@@ -2,27 +2,55 @@
 g1_sidecar.py — Hardware bridge between a Unitree G1 EDU (Dex3-1 hands) and the
 Node.js Robot Agent. Mirrors the SO-101 sidecar's HTTP contract so the existing
 TeleoperationService / HardwareClient / SkillExecutor work unchanged — only the
-underlying driver differs (Unitree DDS via lerobot's `unitree_g1`, instead of
-serial).
+underlying driver differs (Unitree DDS instead of serial).
 
-⚠️ HARDWARE-PENDING / UNTESTED
-  This sidecar is written to spec against lerobot's `unitree_g1` robot +
-  teleoperator and the Unitree SDK2 (DDS). It cannot be exercised without a
-  physical G1 on the network, so it has NOT been run. Verify joint names, the
-  DDS network interface, and the lerobot `--robot.type/--teleop.type` flags
-  against your unit before relying on it. See:
-    temp/lerobot/src/lerobot/robots/unitree_g1/
-    temp/lerobot/src/lerobot/teleoperators/unitree_g1/
+Two write modes (TASK-391), chosen at start and never switched at runtime:
+  read_only (DEFAULT) — telemetry only. State from the read-only ZMQ bridge
+                        (g1_state_bridge_readonly.py); no DDS publisher for any
+                        joint command exists in the process.
+  arm_sdk             — G1_WRITE_MODE=arm_sdk. Arms + Dex3 hands through
+                        Unitree's arm-only channel rt/arm_sdk (the legs stay
+                        under Unitree's balance controller), and ONLY between
+                        POST /arm and the next disarm. See g1_arm_sdk.py.
+The old lerobot rt/lowcmd path (G1_READ_ONLY=0) is gone: rt/lowcmd bypasses
+the balance controller and a standing robot falls. G1_READ_ONLY=0 without
+G1_WRITE_MODE=arm_sdk now refuses to start.
 
-Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_URL):
-  GET  /health        → {"status": "ok", "connected": true/false}
+⚠️ The arm_sdk path is unit-tested and checked against the MuJoCo DDS sim, not
+yet against the physical G1 — robot day runs it on the gantry first
+(docs/g1-edu-lab-bringup.md, "Arm teleop through arm_sdk").
+
+Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_URL),
+on every interface in read_only mode and on 127.0.0.1 only in arm_sdk mode
+(G1_SIDECAR_HOST overrides — see _bind_host):
+  GET  /health        → {"status": "ok", "connected": true/false, + WRITE STATUS}
   GET  /state         → {"joints": [...], "imu": {...}, "touch": {...},
-                         "battery": {...}, "odometry": {...}, "timestamp": ...}
+                         "battery": {...}, "odometry": {...}, "timestamp": ...,
+                         + WRITE STATUS}
                         (TASK-184 contract §2 — every group is OMITTED when its
                         source DDS topic has no fresh data; never zero-filled)
-  GET  /state/fast    → joint read that keeps motors enabled (closed loop)
-  POST /action        → {"<joint>": value, ...} → RAMPED + CLAMPED, then sent
-  POST /estop         → clears the action-ramp state (soft stop, see caveat)
+                        WRITE STATUS (TASK-391): "write_mode" ("read_only" |
+                        "arm_sdk"), "armed", "arm_weight" (0..1),
+                        "estop_latched", "hands": {"left","right"} (Dex3 state
+                        within 0.5 s), "teleop_mode" ("arms+hands" |
+                        "arms+left_hand" | "arms+right_hand" | "arms_only")
+                        FRESHNESS (TASK-404): "lowstate_age_s" (s | null),
+                        "hand_health": {"left","right"} -> {present, age_s,
+                        error[2], motor_faults[], power_v} (dex3_faults.py)
+  GET  /state/fast    → same as /state
+  POST /arm           → {"lease_generation": int|null} → weight 0→1 over ~1.5 s,
+                        seeded from the MEASURED arm pose; a fresh arm's
+                        reply carries that pose as "seed" {joint: rad}
+                        (TASK-421). 403 read_only, 409 estop_latched,
+                        503 no fresh rt/lowstate
+  POST /disarm        → weight 1→0 over ~1 s, then the publisher goes quiet
+  POST /action        → {"<joint>": rad, ...} → only while armed (409
+                        {"error":"not_armed"} otherwise, 403 in read_only);
+                        CLAMPED + SLEW-LIMITED; leg/waist keys ignored + counted.
+                        Dead-man: no /action 0.5 s → hold, 1.0 s → disarm
+  POST /estop         → disarm ramp now + LATCHED until POST /estop/reset;
+                        with G1_LOCO_ENABLED=fsm|1 it then damps (TASK-398)
+  POST /estop/reset   → clears the latch (does not re-arm, does not stand up)
   GET  /cameras       → {"cameras": [...],
                          "source": "lerobot"|"teleimager"|"pc2cam"|"realsense"|null}
                         The names the ACTIVE source can serve, not a fixed list:
@@ -39,9 +67,30 @@ Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_UR
                         frame convention to one scan session (TASK-190)
   POST /pointcloud/lidar/switch → {"on": true|false} → rt/utlidar/switch
                         (sensor enable — the single authorized write, no motion)
-  POST /record/start  → spawn lerobot-record (G1 teleop + dataset)
+  POST /record/start  → 403 in BOTH modes since TASK-391: it spawned
+                        lerobot-record --robot.type=unitree_g1, i.e. rt/lowcmd.
+                        Real-robot recording runs in the robot-agent.
   POST /record/stop   → SIGINT the recording subprocess
   GET  /record/status → recording progress / dataset path
+
+  --- Robot mode without the remote (TASK-398), behind G1_LOCO_ENABLED=fsm|1 ---
+  GET  /loco/mode     → {"ok", "fsm_id", "mode", "age_s", "fsm_mode", "odom_mode",
+                         "source", "error", "loco": {...}, "in_flight",
+                         "estop_latched"} — the MEASURED mode (FSM monitor, 2 Hz)
+  POST /loco/mode     → {"mode": "limp"|"stand"|"balance"} → SetFsmId(1 | 4 | 500/501),
+                        confirmed by GetFsmId. Stand only from measured limp,
+                        balance only from stand held >= 2 s (501 on a
+                        3-DoF-waist G1: G1_FSM_ID_BALANCE), neither while the
+                        arms are engaged or the E-stop is latched; limp always
+                        (it disarms first). Refusals carry a machine "code".
+                        See g1_loco_mode.py for the whole table.
+  POST /estop         → (with the gate on) latch, disarm ramp, THEN damp:
+                        {"latched", "was_armed", "disarmed", "damped",
+                         "damp_confirmed", "damp_error"}
+  G1_LOCO_ENABLED: 0/unset = off, fsm = mode changes only (the real robot: the
+  only RPCs that can leave this process are SetFsmId(limp|stand|balance),
+  GetFsmId and GetFsmMode), 1 = full locomotion (the sim). Anything else
+  refuses to start, and so does fsm/1 without an explicit G1_DDS_DOMAIN.
 
   --- Agent Mode locomotion (TASK-194), behind G1_LOCO_ENABLED=1 (default OFF) ---
   POST /loco/move     → {"vx","vy","omega","duration_s"} → LocoClient.SetVelocity
@@ -77,6 +126,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import g1_loco_mode
 from recorder import recorder
 from pointcloud_replay import load_frame, resolve_replay_path
 
@@ -94,17 +144,144 @@ NET_INTERFACE = os.environ.get("G1_NET_INTERFACE", "eth0")
 BOOT_ID = uuid.uuid4().hex
 
 # ---------------------------------------------------------------------------
-# READ-ONLY MODE (stage 1: telemetry only) — DEFAULT ON
+# WRITE MODE (TASK-391) — read_only by DEFAULT, arm_sdk only on explicit opt-in
 # ---------------------------------------------------------------------------
-# While G1_READ_ONLY != "0" this process has NO write path to the robot:
-#   • the lerobot UnitreeG1 driver is never loaded (its connect() initializes a
-#     rt/lowcmd DDS publisher — a command path must not even exist);
-#   • POST /action and POST /record/start return 403;
-#   • state comes from a ZMQ SUB to the read-only bridge on the robot's PC2
+# read_only: this process has NO write path to the robot's joints —
+#   • no DDS publisher for rt/arm_sdk, rt/dex3/*/cmd or rt/lowcmd is built;
+#   • POST /action, /arm and /record/start return 403;
+#   • state comes from a ZMQ SUB to the read-only bridge
 #     (g1_state_bridge_readonly.py, port 6001) — subscribe-only by design.
-# Set G1_READ_ONLY=0 explicitly and deliberately to enable the command path.
-READ_ONLY = os.environ.get("G1_READ_ONLY", "1").strip() != "0"
+# arm_sdk (G1_WRITE_MODE=arm_sdk): rt/arm_sdk + Dex3 publishers exist, but
+#   nothing is published until POST /arm, and every way out ramps the arm_sdk
+#   weight back to 0 (g1_arm_sdk.py). The legs are never commanded.
+#
+# G1_READ_ONLY is kept as a guard, not a switch. It used to mean "0 = load
+# lerobot's UnitreeG1 driver", whose rt/lowcmd publisher bypasses the balance
+# controller — that path is removed, and a config still asking for it must fail
+# loudly instead of quietly starting a different mode. See _write_mode_error().
+WRITE_MODE = (
+    "arm_sdk" if os.environ.get("G1_WRITE_MODE", "").strip().lower() == "arm_sdk"
+    else "read_only"
+)
+READ_ONLY = WRITE_MODE != "arm_sdk"
 LOWSTATE_ENDPOINT = os.environ.get("G1_LOWSTATE_ENDPOINT", f"tcp://{ROBOT_IP}:6001")
+
+
+def _dds_domain_env(env=None) -> "str | None":
+    """The configured DDS domain as a string, or None when nothing sets it.
+
+    G1_DDS_DOMAIN is the name for it; G1_LIDAR_DDS_DOMAIN is historical (the
+    LiDAR path got there first) and still honoured — ChannelFactoryInitialize
+    runs once per process, so LiDAR, odometry, loco RPC and arm_sdk share one."""
+    env = os.environ if env is None else env
+    for key in ("G1_DDS_DOMAIN", "G1_LIDAR_DDS_DOMAIN"):
+        raw = (env.get(key) or "").strip()
+        if raw:
+            return raw
+    return None
+
+
+def _sim_backend(env=None) -> bool:
+    """Whether this sidecar fronts the MuJoCo DDS sim, not a robot (TASK-416).
+
+    The sidecar cannot tell `sim_node.py` from a G1 over DDS, so the supervisor
+    says so: a `robot: sim` profile sets G1_SIM_BACKEND=1. Reported on /health
+    as `sim`, the field the recorder reads to label a dataset sim or real.
+    Never on DDS domain 0 (the robot's): a stray flag there must not make real
+    demonstrations read as simulated ones."""
+    env = os.environ if env is None else env
+    if (env.get("G1_SIM_BACKEND") or "").strip() != "1":
+        return False
+    raw = _dds_domain_env(env)
+    try:
+        return int(raw or "0") != 0
+    except ValueError:
+        return False
+
+
+def _dds_iface_env(env=None) -> str:
+    env = os.environ if env is None else env
+    for key in ("G1_DDS_IFACE", "G1_LIDAR_DDS_IFACE", "G1_NET_INTERFACE"):
+        raw = (env.get(key) or "").strip()
+        if raw:
+            return raw
+    return ""
+
+
+def _bind_host(env=None) -> str:
+    """The address the HTTP API listens on.
+
+    G1_SIDECAR_HOST wins when set. Otherwise read_only keeps listening on every
+    interface, as before, while arm_sdk listens on loopback only: the routes are
+    unauthenticated, and in arm_sdk mode `/arm` + `/action` move the robot's
+    arms, so they must not be reachable from the lab Wi-Fi or the robot LAN.
+    Every caller (the robot-agent's HARDWARE_SIDECAR_URL) is on this host."""
+    env = os.environ if env is None else env
+    explicit = (env.get("G1_SIDECAR_HOST") or "").strip()
+    if explicit:
+        return explicit
+    mode = (env.get("G1_WRITE_MODE") or "").strip().lower()
+    # TASK-398: /loco/mode stands the robot up and /estop damps it — with the
+    # mode gate on, read-only mode listens on loopback too.
+    gate, _ = g1_loco_mode.parse_gate(env)
+    if mode == "arm_sdk" or gate not in (None, g1_loco_mode.GATE_OFF):
+        return "127.0.0.1"
+    return "0.0.0.0"
+
+
+def _loco_config_error(env=None) -> "str | None":
+    """Why the mode/locomotion gate configuration must not start, or None.
+    Checked by main() next to _write_mode_error (TASK-398)."""
+    env = os.environ if env is None else env
+    gate, err = g1_loco_mode.parse_gate(env)
+    if err:
+        return err
+    if gate == g1_loco_mode.GATE_OFF:
+        return None
+    domain = _dds_domain_env(env)
+    if domain is None:
+        return ("G1_LOCO_ENABLED=%s needs an explicit DDS domain: set G1_DDS_DOMAIN "
+                "(0 = the real robot, 1 = the MuJoCo sim). There is no default on "
+                "purpose: a mode change aimed at the sim must not land on the robot"
+                % ("fsm" if gate == g1_loco_mode.GATE_FSM else "1"))
+    try:
+        int(domain)
+    except ValueError:
+        return f"G1_DDS_DOMAIN={domain!r} is not an integer"
+    _, err = g1_loco_mode.fsm_config(env)
+    return err
+
+
+def _write_mode_error(env=None) -> "str | None":
+    """Why this configuration must not start, or None. Checked by main()."""
+    env = os.environ if env is None else env
+    mode = (env.get("G1_WRITE_MODE") or "").strip().lower()
+    read_only = (env.get("G1_READ_ONLY") or "").strip()
+    if mode not in ("", "read_only", "arm_sdk"):
+        return (f"G1_WRITE_MODE={mode!r} is not a mode — use 'read_only' (default) "
+                "or 'arm_sdk'")
+    if mode == "arm_sdk":
+        if read_only == "1":
+            return ("G1_WRITE_MODE=arm_sdk contradicts G1_READ_ONLY=1 — remove "
+                    "G1_READ_ONLY (or set it to 0) to run the arm_sdk write path")
+        domain = _dds_domain_env(env)
+        if domain is None:
+            return ("G1_WRITE_MODE=arm_sdk needs an explicit DDS domain: set "
+                    "G1_DDS_DOMAIN (0 = the real robot, 1 = the MuJoCo sim). There "
+                    "is no default on purpose: a test aimed at the sim must not "
+                    "land on the robot because a variable was missing")
+        try:
+            int(domain)
+        except ValueError:
+            return f"G1_DDS_DOMAIN={domain!r} is not an integer"
+        return None
+    if read_only == "0":
+        return ("G1_READ_ONLY=0 used to load lerobot's UnitreeG1 driver, whose "
+                "rt/lowcmd publisher bypasses Unitree's balance controller (a "
+                "standing robot falls). That path is removed (TASK-391). For arm + "
+                "hand control set G1_WRITE_MODE=arm_sdk, which uses rt/arm_sdk "
+                "and leaves the legs to the robot")
+    return None
 
 # ---------------------------------------------------------------------------
 # AGENT-MODE LOCOMOTION GATE (TASK-194) — DEFAULT OFF
@@ -118,18 +295,27 @@ LOWSTATE_ENDPOINT = os.environ.get("G1_LOWSTATE_ENDPOINT", f"tcp://{ROBOT_IP}:60
 # the robot. Once G1_LOCO_ENABLED=1, an agent command moves the robot.
 #
 # What this flag IS: a per-process off switch. The overwhelmingly common way to
-# run this sidecar is telemetry-only (G1_READ_ONLY defaults to 1), and such a
+# run this sidecar is telemetry-only (G1_WRITE_MODE defaults to read_only), and such a
 # process must not be turnable into a motion path by a stray HTTP call from a
 # mis-pointed component or a stale config. With the gate off, /loco/* answers
 # 403 and no LocoClient is ever constructed.
 #
-# Deliberately SEPARATE from G1_READ_ONLY: that flag governs the rt/lowcmd
-# joint-position path (the lerobot driver), while /loco/* is the rt/api/sport
+# Deliberately SEPARATE from G1_WRITE_MODE: that flag governs the rt/arm_sdk
+# joint-position path (arms + hands, TASK-391), while /loco/* is the rt/api/sport
 # request/response path. Different wires, different risk profiles — one must not
 # silently imply the other. Telemetry-only + locomotion-enabled (READ_ONLY=1,
 # LOCO_ENABLED=1) is a legitimate, intended configuration: it is exactly what
 # Agent Mode uses against the simulated loco service in sim_g1_dds/.
-LOCO_ENABLED = os.environ.get("G1_LOCO_ENABLED", "0").strip() == "1"
+#
+# TASK-398 adds a third value: G1_LOCO_ENABLED=fsm — robot MODE changes only
+# (limp / stand / balance through POST /loco/mode, and the E-stop's damp). Under
+# fsm, /loco/move, /loco/action (stop included), /loco/stand-height and the raw
+# /loco/fsm answer 403 before any client is looked up: walking and turning stay
+# impossible on the real robot. "1" keeps its full meaning (the sim). An invalid
+# value refuses to start (_loco_config_error).
+LOCO_GATE = g1_loco_mode.parse_gate(os.environ)[0] or g1_loco_mode.GATE_OFF
+LOCO_ENABLED = LOCO_GATE == g1_loco_mode.GATE_FULL
+FSM_IDS = g1_loco_mode.fsm_config(os.environ)[0] or g1_loco_mode.FsmIds()
 
 # TASK-184: extra READ-ONLY telemetry topics forwarded by the bridge over the
 # same ZMQ PUB socket. Names must match the bridge's DDS topic strings.
@@ -322,53 +508,31 @@ def _pos_float(name: str, default: float) -> float:
     return val
 
 
+# rt/arm_sdk publish rate and slew limits (arm_sdk mode). The slew is applied
+# per publish tick against the clock, so the joint speed does not depend on how
+# often the caller sends /action.
 CONTROL_HZ = _pos_float("G1_CONTROL_HZ", 50.0)
-MAX_JOINT_VEL = _pos_float("G1_MAX_JOINT_VEL", 1.0)  # rad/s, conservative
-_MAX_STEP = MAX_JOINT_VEL / CONTROL_HZ  # rad per /action (both guaranteed > 0)
+ARM_SDK_MAX_JOINT_VEL = _pos_float("G1_ARM_SDK_MAX_JOINT_VEL", 3.0)   # rad/s, arms
+ARM_SDK_MAX_HAND_VEL = _pos_float("G1_ARM_SDK_MAX_HAND_VEL", 6.0)     # rad/s, fingers
+ARM_SDK_LIMIT_MARGIN = _pos_float("G1_ARM_SDK_LIMIT_MARGIN", 0.05)    # rad off each stop
 
-# Last position we actually COMMANDED per joint. Ramp state; the ramp advances
-# this toward the requested target by at most _MAX_STEP each /action call.
-_commanded_pos: dict[str, float] = {}
-
+# The lerobot UnitreeG1 driver used to live here. Its connect() opened an
+# rt/lowcmd publisher — the debug-mode channel that bypasses Unitree's balance
+# controller — so it is gone (TASK-391), not merely switched off. These three
+# names stay only because the "lerobot" camera source still asks for them; with
+# no driver there is never an observation, exactly as in read-only mode before.
 robot = None
 robot_lock = threading.Lock()
 connected = False
 
 
 def _connect_unlocked() -> bool:
-    """Connect to the G1 over DDS. Must hold robot_lock.
-
-    Uses lerobot's UnitreeG1 driver. Import is lazy so the sidecar can boot
-    (and answer /health) even where the Unitree SDK isn't installed.
-    """
-    global robot, connected
-    if READ_ONLY:
-        # NEVER load the lerobot driver in read-only mode — UnitreeG1.connect()
-        # initializes a rt/lowcmd DDS publisher, i.e. a command path.
-        return False
-    try:
-        from lerobot.robots.unitree_g1 import UnitreeG1, UnitreeG1Config  # type: ignore
-
-        config = UnitreeG1Config(
-            id=ROBOT_ID,
-            robot_ip=ROBOT_IP,
-            net_interface=NET_INTERFACE,
-        )
-        r = UnitreeG1(config)
-        r.connect()
-        robot = r
-        connected = True
-        print(f"[G1 Sidecar] ✅ Connected to G1 at {ROBOT_IP} via {NET_INTERFACE}", flush=True)
-        return True
-    except Exception as e:  # noqa: BLE001
-        robot = None
-        connected = False
-        print(f"[G1 Sidecar] ⚠️  Could not connect ({e})", flush=True)
-        return False
+    """Always False: there is no lerobot driver to connect any more (TASK-391)."""
+    return False
 
 
 # ---------------------------------------------------------------------------
-# IMU extraction (shared contract — feeds the humanoid fall-detection net)
+# Small coercion helpers (shared contract — no fabricated values)
 # ---------------------------------------------------------------------------
 
 
@@ -380,67 +544,6 @@ def _coerce3(v):
         except (TypeError, ValueError):
             return None
     return None
-
-
-def _axes3(d, kx, ky, kz):
-    """Pull a 3-vector from three scalar keys of a dict, else None."""
-    if not isinstance(d, dict) or not (kx in d and ky in d and kz in d):
-        return None
-    try:
-        return [float(d[kx]), float(d[ky]), float(d[kz])]
-    except (TypeError, ValueError):
-        return None
-
-
-def _extract_imu(obs):
-    """Best-effort IMU pull from a lerobot observation dict.
-
-    @status hardware-pending — the EXACT lerobot/Unitree low-state key names
-    are unverified without a physical G1, so we probe several conventions
-    (nested `imu` object, flat dotted keys, per-axis keys). We NEVER fabricate:
-    if nothing is found we return None and the caller OMITS the field.
-
-    Returns {"rpy":[r,p,y], "gyro":[gx,gy,gz], "accel":[ax,ay,az]} with any
-    sub-field that couldn't be sourced set to null.
-    """
-    if not isinstance(obs, dict):
-        return None
-    rpy = gyro = accel = None
-
-    imu = obs.get("imu")
-    if isinstance(imu, dict):
-        rpy = _coerce3(imu.get("rpy")) or _axes3(imu, "roll", "pitch", "yaw")
-        gyro = (
-            _coerce3(imu.get("gyro"))
-            or _coerce3(imu.get("angular_velocity"))
-            or _axes3(imu, "gyro_x", "gyro_y", "gyro_z")
-        )
-        accel = (
-            _coerce3(imu.get("accel"))
-            or _coerce3(imu.get("acc"))
-            or _coerce3(imu.get("linear_acceleration"))
-            or _axes3(imu, "accel_x", "accel_y", "accel_z")
-        )
-
-    # Flat dotted-key fallbacks (lerobot frequently flattens observations).
-    if rpy is None:
-        rpy = _coerce3(obs.get("imu.rpy")) or _axes3(obs, "imu.roll", "imu.pitch", "imu.yaw")
-    if gyro is None:
-        gyro = (
-            _coerce3(obs.get("imu.gyro"))
-            or _axes3(obs, "imu.gyro.x", "imu.gyro.y", "imu.gyro.z")
-            or _axes3(obs, "imu.angular_velocity.x", "imu.angular_velocity.y", "imu.angular_velocity.z")
-        )
-    if accel is None:
-        accel = (
-            _coerce3(obs.get("imu.accel"))
-            or _axes3(obs, "imu.accel.x", "imu.accel.y", "imu.accel.z")
-            or _axes3(obs, "imu.linear_acceleration.x", "imu.linear_acceleration.y", "imu.linear_acceleration.z")
-        )
-
-    if rpy is None and gyro is None and accel is None:
-        return None
-    return {"rpy": rpy, "gyro": gyro, "accel": accel}
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +613,16 @@ class _LowStateReader:
                 return None
             return entry[0]
 
+    def entry(self, topic: str):
+        """(newest dict, age_s) for `topic` WHATEVER its age, or (None, None)
+        when nothing ever arrived — for the TASK-404 freshness fields, which
+        must say how stale a feed is rather than just that it is."""
+        with self._lock:
+            hit = self._cache.get(topic)
+            if hit is None:
+                return None, None
+            return hit[0], time.time() - hit[1]
+
 
 _lowstate_reader = _LowStateReader(LOWSTATE_ENDPOINT)
 
@@ -555,6 +668,18 @@ def _touch_pads(hand_data: dict) -> list | None:
     return pads or None
 
 
+def _state_latest(topic: str, max_age_s: float = 2.0):
+    """Newest dict for `topic`: the arm_sdk DDS feed first (when this process
+    has one), then the read-only ZMQ bridge. None when neither is fresh."""
+    if _dds_state is not None:
+        data = _dds_state.latest_dict(topic, max_age_s)
+        if data is not None:
+            return data
+    if not _lowstate_reader.start():
+        return None
+    return _lowstate_reader.latest(topic, max_age_s)
+
+
 def _get_state_readonly() -> dict:
     """Build the /state response from the read-only bridge feed (contract §2).
 
@@ -567,10 +692,13 @@ def _get_state_readonly() -> dict:
     while the matching topic is fresh — never fabricated as 0.0. Likewise
     touch / battery / odometry are whole-group omitted when their source
     topic is stale.
+
+    In arm_sdk mode the controller's own DDS subscription (g1_arm_sdk.
+    DdsStateSource) is asked first for rt/lowstate and the Dex3 topics — it is
+    the fresher feed and needs no second process; BMS and odometry still come
+    from the bridge. In read_only mode only the bridge exists, as before.
     """
-    if not _lowstate_reader.start():
-        return {"joints": [], "connected": False, "simulated": False, "timestamp": time.time()}
-    data = _lowstate_reader.latest(TOPIC_LOWSTATE)
+    data = _state_latest(TOPIC_LOWSTATE)
     if data is None:
         return {"joints": [], "connected": False, "simulated": False, "timestamp": time.time()}
 
@@ -587,7 +715,7 @@ def _get_state_readonly() -> dict:
         ("left", TOPIC_LEFT_HAND, LEFT_HAND_WIRE),
         ("right", TOPIC_RIGHT_HAND, RIGHT_HAND_WIRE),
     ):
-        hand = _lowstate_reader.latest(topic)
+        hand = _state_latest(topic)
         if hand is None:
             continue  # stale side → its 7 joints and touch pads are omitted
         hand_motors = hand.get("motor_state") or []
@@ -616,7 +744,7 @@ def _get_state_readonly() -> dict:
             result["imu"] = imu
 
     # --- battery from the BMS topic (soc required, rest optional) --------------
-    bms = _lowstate_reader.latest(TOPIC_BMS)
+    bms = _state_latest(TOPIC_BMS)
     if isinstance(bms, dict):
         soc = _opt_float(bms.get("soc"))
         if soc is not None:
@@ -632,7 +760,7 @@ def _get_state_readonly() -> dict:
             result["battery"] = battery
 
     # --- odometry (position required, rest optional) ---------------------------
-    odom = _lowstate_reader.latest(TOPIC_ODOM)
+    odom = _state_latest(TOPIC_ODOM)
     if isinstance(odom, dict):
         position = _coerce3(odom.get("position"))
         if position is not None:
@@ -660,128 +788,250 @@ def _get_state_readonly() -> dict:
 
 
 def get_state(keep_alive: bool = False) -> dict:
-    """Read joint positions. `keep_alive` keeps motors enabled for closed loop.
-
-    Adds an `imu` field (radians / rad·s⁻¹ / m·s⁻²) when the driver exposes one;
-    omitted otherwise (see _extract_imu — no fabricated values).
-    """
-    if READ_ONLY:
-        return _get_state_readonly()
-    with robot_lock:
-        if not connected and not _connect_unlocked():
-            return {"joints": [], "connected": False, "simulated": False, "timestamp": time.time()}
-        try:
-            obs = robot.get_observation()  # lerobot driver returns a flat obs dict
-            joints = []
-            for name in JOINT_NAMES:
-                key = f"{name}.pos"
-                joints.append({"name": name, "position": float(obs.get(key, 0.0))})
-            result = {"joints": joints, "connected": True, "simulated": False, "timestamp": time.time()}
-            imu = _extract_imu(obs)
-            if imu is not None:
-                result["imu"] = imu
-            return result
-        except Exception as e:  # noqa: BLE001
-            return {"joints": [], "connected": False, "error": str(e), "timestamp": time.time()}
+    """GET /state (and /state/fast — `keep_alive` is kept for the route's
+    callers and means nothing since the lerobot driver is gone): the bridge /
+    DDS feed of `_get_state_readonly`, plus the write status (TASK-391)."""
+    result = _get_state_readonly()
+    result.update(write_status())
+    return result
 
 
-def _seed_commanded_unlocked() -> None:
-    """Seed the ramp state from the live joint positions (once). Hold robot_lock.
+# ---------------------------------------------------------------------------
+# rt/arm_sdk WRITE PATH (TASK-391) — built only when G1_WRITE_MODE=arm_sdk
+# ---------------------------------------------------------------------------
+# The controller and its DDS pieces live in g1_arm_sdk.py. Here: wiring them to
+# this process's DDS factory and joint tables, and the read-only answers.
+_arm_controller = None   # g1_arm_sdk.ArmSdkController
+_arm_runner = None       # g1_arm_sdk.ArmSdkRunner (the publish thread)
+_dds_state = None        # g1_arm_sdk.DdsStateSource
 
-    Seeding from the real current pose means the first /action ramps FROM where
-    the robot actually is, not from 0 — avoiding a large initial jump. If the
-    pose can't be read we let the exception propagate so the caller REFUSES the
-    action: ramping from a false 0.0 would command a large jump away from the
-    true pose on the very first tick (the opposite of slew limiting). Built into
-    a local dict first so a mid-read failure never leaves _commanded_pos partial.
-    """
-    if _commanded_pos:
-        return
-    obs = robot.get_observation()  # may raise — caller treats it as action failure
-    _commanded_pos.update(
-        {name: float(obs.get(f"{name}.pos", 0.0)) for name in JOINT_NAMES}
+_READ_ONLY_WRITE_ERROR = (
+    "G1_WRITE_MODE is read_only — this sidecar has no joint command path. "
+    "Restart it with G1_WRITE_MODE=arm_sdk to drive the arms "
+    "(docs/g1-edu-lab-bringup.md)"
+)
+
+
+def _hands_present_zmq() -> dict:
+    """Dex3 hands with state within HAND_FRESH_S, from whatever feed we have."""
+    from g1_arm_sdk import HAND_FRESH_S
+
+    return {
+        side: _state_latest(topic, HAND_FRESH_S) is not None
+        for side, topic in (("left", TOPIC_LEFT_HAND), ("right", TOPIC_RIGHT_HAND))
+    }
+
+
+def _state_entry(topic: str):
+    """(newest dict, age_s) for `topic` from the read-only bridge, whatever its
+    age; (None, None) when nothing arrived. Never STARTS the subscriber: a
+    status read must not open a connection of its own — /health and /state
+    already started it through _state_latest before this runs."""
+    if not _lowstate_reader._started:
+        return None, None
+    return _lowstate_reader.entry(topic)
+
+
+def _readonly_health(hands: dict) -> dict:
+    """TASK-404 `hand_health` + `lowstate_age_s` from the bridge's messages.
+    `hands` is the boolean pair already computed for this reply, so
+    `hand_health.<side>.present` and `hands.<side>` can never disagree."""
+    import dex3_faults
+
+    health = {}
+    for side, topic, wire in (("left", TOPIC_LEFT_HAND, LEFT_HAND_WIRE),
+                              ("right", TOPIC_RIGHT_HAND, RIGHT_HAND_WIRE)):
+        data, age = _state_entry(topic)
+        health[side] = dex3_faults.hand_health(side, data, age, bool(hands.get(side)), wire)
+    _, body_age = _state_entry(TOPIC_LOWSTATE)
+    return {
+        "hand_health": health,
+        "lowstate_age_s": None if body_age is None else round(max(0.0, body_age), 3),
+    }
+
+
+def write_status() -> dict:
+    """The contract's write fields for /health and /state, plus the TASK-404
+    freshness fields (`hand_health`, `lowstate_age_s`)."""
+    from g1_arm_sdk import teleop_mode
+
+    if _arm_controller is not None:
+        status = _arm_controller.snapshot()
+        # Where the frames go, so a sim-only check can refuse a sidecar that
+        # is pointed at the robot (domain 0) before it sends a single /arm.
+        domain = _dds_domain_env()
+        status["dds_domain"] = int(domain) if domain is not None else None
+        status["dds_iface"] = _dds_iface_env() or None
+        return status
+    hands = _hands_present_zmq()
+    status = {
+        "write_mode": WRITE_MODE,
+        "armed": False,
+        "arm_weight": 0.0,
+        "estop_latched": _base_estop_latched,
+        "hands": hands,
+        "teleop_mode": teleop_mode(hands["left"], hands["right"]),
+    }
+    status.update(_readonly_health(hands))
+    return status
+
+
+def start_arm_sdk() -> None:
+    """Build the rt/arm_sdk publishers, the DDS state feed, the controller and
+    the publish thread. Main thread only, before the HTTP server starts —
+    cyclonedds type registration is not thread-safe. Raises on failure: in
+    arm_sdk mode a sidecar that cannot write must not pretend it can."""
+    global _arm_controller, _arm_runner, _dds_state
+    import g1_arm_sdk
+
+    _ensure_dds_factory()
+    _dds_state = g1_arm_sdk.DdsStateSource()
+    wire = g1_arm_sdk.DdsArmWire()
+    _arm_controller = g1_arm_sdk.ArmSdkController(
+        BODY_JOINTS,
+        {"left": LEFT_HAND_WIRE, "right": RIGHT_HAND_WIRE},
+        POS_LIMITS,
+        _dds_state,
+        max_arm_vel=ARM_SDK_MAX_JOINT_VEL,
+        max_hand_vel=ARM_SDK_MAX_HAND_VEL,
+        limit_margin=ARM_SDK_LIMIT_MARGIN,
+        **_arm_fsm_kwargs(),
     )
+    _arm_runner = g1_arm_sdk.ArmSdkRunner(_arm_controller, wire, hz=CONTROL_HZ)
+    _arm_runner.start()
 
 
-def send_action(action: dict) -> dict:
-    """Send a joint-position action ({"<joint>": value, ...}), RAMPED + CLAMPED.
+def _arm_requires_fsm(env=None) -> bool:
+    """Whether /arm must see a MEASURED balance mode (TASK-398): on the real
+    robot (domain 0) or whenever this process measures the mode at all.
+    G1_ARM_ALLOW_UNKNOWN_FSM=1 is the escape hatch for a session in which a
+    person with the remote has put the robot in balance — loud at startup."""
+    env = os.environ if env is None else env
+    if (env.get("G1_ARM_ALLOW_UNKNOWN_FSM") or "").strip() == "1":
+        return False
+    gate, _ = g1_loco_mode.parse_gate(env)
+    if gate not in (None, g1_loco_mode.GATE_OFF):
+        return True
+    # Compare the domain as the DDS factory reads it (int, unset = 0), so "00"
+    # or "+0" is the real robot too; anything unreadable is treated as it.
+    raw = _dds_domain_env(env)
+    try:
+        return int(raw or "0") == 0
+    except ValueError:
+        return True
 
-    BLOCKER #2 fix — slew-rate limiting:
-      1. Every requested target is CLAMPED to the joint's real asymmetric
-         position limits (POS_LIMITS, from g1-edu.config.ts).
-      2. The commanded value moves toward the target by at most _MAX_STEP rad
-         per call, where _MAX_STEP = G1_MAX_JOINT_VEL / G1_CONTROL_HZ. Large
-         targets therefore RAMP across multiple /action calls instead of
-         jumping in one tick.
 
-    Approach: non-blocking, state-based. We hold the last commanded position per
-    joint in `_commanded_pos` and advance it one bounded step per call. This
-    fits the request/response endpoint model and does NOT hold robot_lock across
-    any sleep, so /state (and thus IMU fall-detection) is never starved. The
-    physical slew rate is correct when the caller drives /action at ~G1_CONTROL_HZ
-    (the normal closed-loop case). If a single setpoint is sent once and not
-    repeated, the robot stops part-way through the ramp — the SAFE failure mode;
-    re-send the same target to keep converging.
+def _fsm_reading():
+    """(fsm_id, age_s) for the arm controller's mode guard."""
+    if _fsm_monitor is None:
+        return None, None
+    return _fsm_monitor.reading()
 
-    ⚠️ HONEST CAVEAT: this is RATE-LIMITING, not balance control. It removes
-    jerky raw position jumps but does NOT keep a bipedal humanoid upright. True
-    balance needs Unitree's whole-body / locomotion control mode (or a learned
-    locomotion policy). Stage-4 closed-loop on real hardware still requires a
-    balance controller + a safety gantry. See @status hardware-pending.
+
+def _arm_fsm_kwargs() -> dict:
+    """The arm controller's TASK-398 guards, from env."""
+    return {
+        "fsm_source": _fsm_reading if LOCO_GATE != g1_loco_mode.GATE_OFF else None,
+        "require_fsm": _arm_requires_fsm(),
+        "balance_ids": FSM_IDS.balance_reported,
+        "track_err_rad": _pos_float("G1_ARM_TRACK_ERR_RAD", 0.35),
+        "track_err_hold_s": _pos_float("G1_ARM_TRACK_ERR_HOLD_S", 0.3),
+    }
+
+
+def arm(body: dict) -> "tuple[int, dict]":
+    if _arm_controller is None:
+        return 403, {"ok": False, "error": "read_only", "detail": _READ_ONLY_WRITE_ERROR}
+    if _mode_ctl is not None and _mode_ctl.limp_in_progress:
+        return 409, {"ok": False, "error": "mode_change_in_flight",
+                     "detail": "the robot is being put into Limp — not arming", **write_status()}
+    lease = body.get("lease_generation") if isinstance(body, dict) else None
+    if lease is not None and (isinstance(lease, bool) or not isinstance(lease, int)):
+        return 400, {"ok": False, "error": '"lease_generation" must be an integer or null'}
+    return _arm_controller.arm(lease)
+
+
+def disarm() -> "tuple[int, dict]":
+    if _arm_controller is None:
+        return 200, {"ok": True, "was_armed": False, **write_status()}
+    return _arm_controller.disarm("request")
+
+
+# The sidecar's own E-stop latch (TASK-398), in every write mode. Separate from
+# the arm controller's latch, but /estop sets both and /estop/reset clears both.
+# While it is set, Stand and Balance are refused; Limp is not.
+_base_estop_latched = False
+_estop_lock = threading.Lock()
+
+
+def estop(damp: bool = True) -> "tuple[int, dict]":
+    """POST /estop: latch, disarm, THEN damp (TASK-398).
+
+    `{"damp": false}` in the body (and only an explicit false) skips step 2:
+    the agent's PROTECTIVE stop (server link lost, tilt warning, geofence) is a
+    pause that must not drop a balancing robot into the gantry. The sidecar
+    decides that here, from the request, so an agent with a stale idea of this
+    sidecar's G1_LOCO_ENABLED cannot damp the robot by accident.
+
+    1. Both latches, and the arm controller's disarm ramp starts — synchronous,
+       no RPC. We wait for at most two publish ticks (<= 0.1 s) so the first
+       falling-weight frame is on the wire before the damp (it does NOT wait out the 1 s ramp:
+       in damp the robot ignores arm_sdk, and waiting would keep the arms under
+       balance for a second longer during an emergency).
+    2. With the mode gate on: SetFsmId(1), confirmed by GetFsmId for up to 2 s.
+       The robot sags into the gantry, like the remote's damping.
+    Read-only mode damps too when the gate is on; with the gate off there is
+    no damp path and the reply says so.
     """
-    if READ_ONLY:
-        return {"ok": False, "error": "G1_READ_ONLY — command path disabled (stage 1: telemetry only)"}
-    with robot_lock:
-        if not connected and not _connect_unlocked():
-            return {"ok": False, "error": "not connected"}
-        try:
-            _seed_commanded_unlocked()
-            ramped: dict[str, float] = {}
-            converged = True
-            for k, v in action.items():
-                if k not in JOINT_NAMES:
-                    continue
-                lo, hi = POS_LIMITS.get(k, (-_DEFAULT_LIMIT, _DEFAULT_LIMIT))
-                target = min(hi, max(lo, float(v)))  # clamp to joint limits
-                cur = _commanded_pos.get(k, 0.0)
-                delta = target - cur
-                if delta > _MAX_STEP:
-                    step = _MAX_STEP
-                    converged = False
-                elif delta < -_MAX_STEP:
-                    step = -_MAX_STEP
-                    converged = False
-                else:
-                    step = delta
-                new_pos = cur + step
-                _commanded_pos[k] = new_pos
-                ramped[k] = new_pos
-            cmd = {f"{k}.pos": float(p) for k, p in ramped.items()}
-            robot.send_action(cmd)
-            return {
-                "ok": True,
-                "applied": len(cmd),
-                "converged": converged,
-                "max_step_rad": _MAX_STEP,
-            }
-        except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": str(e)}
+    global _base_estop_latched
+    with _estop_lock:
+        _base_estop_latched = True
+        was_armed = False
+        if _arm_controller is not None:
+            _, reply = _arm_controller.estop()
+            was_armed = bool(reply.get("was_armed"))
+            # Two ticks: the runner writes frame N before it calls tick N+1,
+            # so the second tick proves the first falling frame left us.
+            _arm_controller.wait_frames(2, timeout_s=0.1)
+    if not damp:
+        damp = {"damped": False, "damp_confirmed": False, "damp_requested": False,
+                "damp_error": "not requested (protective stop)"}
+    elif _mode_ctl is None:
+        damp = {"damped": False, "damp_confirmed": False,
+                "damp_error": "mode control disabled (G1_LOCO_ENABLED)"}
+    else:
+        damp = _mode_ctl.damp_for_estop()
+    print(f"[G1 Sidecar] ESTOP: latched, was_armed={was_armed}, damped={damp['damped']}, "
+          f"confirmed={damp['damp_confirmed']}"
+          + (f" — {damp['damp_error']}" if damp["damp_error"] else ""), flush=True)
+    body = {"ok": True, **write_status(), "latched": True, "was_armed": was_armed,
+            "disarmed": True, **damp}
+    if _arm_controller is None and _mode_ctl is None:
+        body["message"] = "read_only: no command path to stop"
+    return 200, body
 
 
-def reset_ramp_state() -> dict:
-    """Soft e-stop: clear the action-ramp state.
+def estop_reset() -> "tuple[int, dict]":
+    """POST /estop/reset: clears both latches. Never re-arms, never stands up —
+    the robot stays in whatever mode it is in (limp after an E-stop)."""
+    global _base_estop_latched
+    with _estop_lock:
+        was = _base_estop_latched
+        _base_estop_latched = False
+        if _arm_controller is None:
+            if was:
+                print("[G1 Sidecar] E-stop latch cleared (robot mode unchanged)", flush=True)
+            return 200, {"ok": True, "was_latched": was, **write_status()}
+        status, body = _arm_controller.estop_reset()
+        body["was_latched"] = bool(body.get("was_latched")) or was
+        return status, body
 
-    Clearing `_commanded_pos` means the next /action re-seeds from the live joint
-    positions, so we never ramp from a stale setpoint after a manual move or an
-    estop. This does NOT physically stop the robot.
 
-    ⚠️ HONEST CAVEAT: a true hardware e-stop requires Unitree's low-level
-    emergency/damping mode (or cutting motor power) — that is @status
-    hardware-pending and must be wired before any untethered Stage-4 run.
-    """
-    with robot_lock:
-        _commanded_pos.clear()
-    return {"ok": True, "message": "ramp state cleared; next /action re-seeds from live state"}
+def send_action(action: dict) -> "tuple[int, dict]":
+    """POST /action — see g1_arm_sdk.ArmSdkController.action."""
+    if _arm_controller is None:
+        return 403, {"ok": False, "error": "read_only", "detail": _READ_ONLY_WRITE_ERROR}
+    return _arm_controller.action(action)
 
 
 # ---------------------------------------------------------------------------
@@ -942,8 +1192,8 @@ def _realsense_color_jpeg():
 def _lerobot_color_jpeg_bytes(name: str):
     """One lerobot observation camera as raw JPEG bytes, or None. Needs cv2.
 
-    Always None in read-only mode: `_connect_unlocked` refuses to load the
-    driver there, so there is no observation to read.
+    Always None: the lerobot driver is gone (TASK-391), so there is no
+    observation to read.
     """
     try:
         import cv2  # type: ignore
@@ -985,12 +1235,9 @@ _REALSENSE_DEFAULT_NAME = "head_camera"
 _lerobot_cam_names: "tuple[str, ...] | None" = None
 
 #: How long a lerobot driver with no cameras is remembered, for the same reason
-#: the other three sources have a cooldown. This one guards more than a camera
-#: read: the probe takes `robot_lock`, which is also the lock `send_action`
-#: holds to command motors, and with G1_READ_ONLY=0 and the driver not yet up,
-#: `_connect_unlocked()` is a real blocking connect. Retrying that on every
-#: /cameras poll and every snapshot would serialise robot control behind a
-#: question about a camera.
+#: the other three sources have a cooldown. Since TASK-391 removed the lerobot
+#: driver this source never has a camera; the source name is kept so an
+#: existing G1_CAMERA_SOURCE=lerobot answers "no camera" rather than an error.
 _LEROBOT_ABSENT_COOLDOWN_S = 2.0
 _lerobot_absent_until = 0.0
 
@@ -1390,6 +1637,9 @@ def _no_camera_source_detail() -> str:
     `_PORT` are overridable, and a message that names a machine nobody is
     running sends the operator to the wrong box.
     """
+    if _camera_disabled():
+        return ("no camera: G1_CAMERA_SOURCE is off for this sidecar (a sim profile "
+                "has no head camera), so nothing on the robot's network is probed.")
     pc2_host, pc2_port = _pc2cam_endpoint()
     img_host, img_port = _teleimager_host_port()
     return (
@@ -1401,11 +1651,22 @@ def _no_camera_source_detail() -> str:
     )
 
 
+#: G1_CAMERA_SOURCE values that turn every camera source off (TASK-416). The
+#: `auto` order probes the robot's LAN (teleimager, then PC2) — wrong for a sim
+#: rehearsal, which has no head camera and must not reach 192.168.123.0/24.
+_CAMERA_OFF_VALUES = ("none", "off")
+
+
+def _camera_disabled(env=None) -> bool:
+    env = os.environ if env is None else env
+    return (env.get("G1_CAMERA_SOURCE") or "").strip().lower() in _CAMERA_OFF_VALUES
+
+
 def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
     """(active frame source, camera names it can serve).
 
     Source comes from G1_CAMERA_SOURCE ∈
-    {auto|lerobot|teleimager|pc2cam|realsense}, the same knob
+    {auto|lerobot|teleimager|pc2cam|realsense|none}, the same knob
     /cameras/<n>/snapshot has always used. The `auto` order is lerobot (richest,
     but never loaded in read-only mode), then the two ways to reach the ROBOT's
     own head camera — the vendor's teleimager image server, then this lab's
@@ -1413,6 +1674,8 @@ def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
     That last place is deliberate: the first three are what the robot sees,
     while a D435 plugged into the workstation sees whatever the desk faces.
     """
+    if _camera_disabled():
+        return None, ()  # `none`/`off`: probe nothing (TASK-416)
     cam_source = os.environ.get("G1_CAMERA_SOURCE", "auto").lower()
     if cam_source in ("auto", "lerobot"):
         names = _lerobot_camera_names()
@@ -1633,8 +1896,8 @@ def _ensure_dds_factory() -> None:
     with _dds_factory_lock:
         if _dds_factory_ready:
             return
-        domain = int(os.environ.get("G1_LIDAR_DDS_DOMAIN", "0"))  # 0 = real robot
-        iface = os.environ.get("G1_LIDAR_DDS_IFACE", os.environ.get("G1_NET_INTERFACE", "")).strip()
+        domain = int(_dds_domain_env() or "0")  # 0 = real robot
+        iface = _dds_iface_env()
         if iface:
             ChannelFactoryInitialize(domain, iface)
         else:
@@ -1701,8 +1964,8 @@ def _dds_pointcloud(target_count: int):
             if _dds_lidar_source is None:
                 _dds_lidar_source = _UnitreeDdsLidarSource(
                     topic=os.environ.get("G1_LIDAR_DDS_TOPIC", "rt/utlidar/cloud_livox_mid360"),
-                    domain=int(os.environ.get("G1_LIDAR_DDS_DOMAIN", "0")),
-                    iface=os.environ.get("G1_LIDAR_DDS_IFACE", os.environ.get("G1_NET_INTERFACE", "")).strip(),
+                    domain=int(_dds_domain_env() or "0"),
+                    iface=_dds_iface_env(),
                 )
                 _dds_lidar_source.start()
         msg = _dds_lidar_source.latest(float(os.environ.get("G1_LIDAR_DDS_TIMEOUT_S", "2.0")))
@@ -2112,34 +2375,6 @@ def _empty_cloud(name: str, sensor_type: str) -> dict:
     }
 
 
-def start_record(body: dict) -> dict:
-    """Spawn lerobot-record for the G1 with its native teleoperator.
-
-    Teleop options for the G1 (set via G1_TELEOP env or body.teleop):
-      unitree_g1   — wireless remote + exoskeleton joystick (lerobot native)
-      keyboard / gamepad — generic lerobot teleops (already supported by the agent)
-    """
-    teleop = body.get("teleop") or os.environ.get("G1_TELEOP", "unitree_g1")
-    robot_cli = [
-        "--robot.type=unitree_g1",
-        f"--robot.id={ROBOT_ID}",
-        f"--robot.robot_ip={ROBOT_IP}",
-        f"--robot.net_interface={NET_INTERFACE}",
-    ]
-    teleop_cli = [f"--teleop.type={teleop}"]
-    return recorder.start(
-        repo_id=body["repo_id"],
-        task=body.get("task", ""),
-        num_episodes=int(body.get("num_episodes", 1)),
-        episode_time_s=float(body.get("episode_time_s", 30.0)),
-        fps=int(body.get("fps", 30)),
-        cameras=body.get("cameras", {}),
-        dataset_root=body.get("dataset_root"),
-        robot_cli=robot_cli,
-        teleop_cli=teleop_cli,
-    )
-
-
 # ---------------------------------------------------------------------------
 # AGENT MODE — high-level locomotion via LocoClient (/loco/*, TASK-194)
 # ---------------------------------------------------------------------------
@@ -2154,7 +2389,8 @@ def start_record(body: dict) -> dict:
 # 403; SDK missing / DDS down / RPC unanswered → 503 with the real reason.
 #
 # DDS domain + interface come from _ensure_dds_factory(), i.e. from
-# G1_LIDAR_DDS_DOMAIN / G1_LIDAR_DDS_IFACE. The names are historical (the LiDAR
+# G1_DDS_DOMAIN / G1_DDS_IFACE (or the historical G1_LIDAR_DDS_DOMAIN /
+# G1_LIDAR_DDS_IFACE, still honoured). The LiDAR names are historical (the LiDAR
 # path got there first) but the value is process-global: CycloneDDS'
 # ChannelFactoryInitialize can only run once per process, so LiDAR, odometry and
 # loco RPC necessarily share one domain. Against the simulator set
@@ -2170,6 +2406,7 @@ LOCO_FSM_NAMES = {
     1: "damp",
     3: "sit",
     500: "start",
+    501: "regular_3dof_waist",
     702: "lie_to_stand",
     706: "squat_stand",
 }
@@ -2188,13 +2425,21 @@ _RPC_CODE_NAMES = {
 }
 
 _loco_client = None
+_loco_client_error = None           # why there is no client (str), or None
 _loco_lock = threading.Lock()       # guards construction of the singleton
 _loco_rpc_lock = threading.Lock()   # serialises RPC calls (ThreadingHTTPServer)
+_fsm_monitor = None                 # g1_loco_mode.FsmMonitor, gate != off
+_mode_ctl = None                    # g1_loco_mode.ModeController, gate != off
+
+LOCO_CONFIRM_S = _pos_float("G1_LOCO_CONFIRM_S", g1_loco_mode.CONFIRM_S_DEFAULT)
+LOCO_STAND_SETTLE_S = _pos_float("G1_LOCO_STAND_SETTLE_S", g1_loco_mode.STAND_SETTLE_S_DEFAULT)
+FSM_POLL_HZ = _pos_float("G1_FSM_POLL_HZ", g1_loco_mode.POLL_HZ_DEFAULT)
 
 
 def _loco_gate_error() -> dict:
     return {
         "ok": False,
+        "code": "loco_disabled",
         "error": (
             "G1_LOCO_ENABLED != 1 — /loco/* disabled on this sidecar "
             "(telemetry-only process). Set G1_LOCO_ENABLED=1 to allow locomotion."
@@ -2202,52 +2447,173 @@ def _loco_gate_error() -> dict:
     }
 
 
-def _get_loco_client():
-    """(client, None) on success, (None, error_dict) on failure. Never raises.
+def _loco_move_refusal(path: str) -> "tuple[int, dict] | None":
+    """(403, body) when `path` may not move the base under the current gate,
+    else None. Under G1_LOCO_ENABLED=fsm nothing that walks, turns, stops,
+    gestures or picks a raw FSM id leaves this process (TASK-398)."""
+    if LOCO_GATE == g1_loco_mode.GATE_FULL:
+        return None
+    if LOCO_GATE == g1_loco_mode.GATE_OFF:
+        return 403, _loco_gate_error()
+    if path == "/loco/fsm":
+        return 403, {"ok": False, "code": "use_loco_mode",
+                     "error": "raw FSM ids are disabled under G1_LOCO_ENABLED=fsm — "
+                              "POST /loco/mode {\"mode\": \"limp\"|\"stand\"|\"balance\"}"}
+    return 403, {"ok": False, "code": "loco_move_disabled",
+                 "error": f"{path} is disabled under G1_LOCO_ENABLED=fsm: this sidecar "
+                          "changes the robot mode only, it never walks, turns or moves the base"}
 
-    ONE LocoClient per process, built lazily and cached: its RPC stub owns DDS
-    readers/writers, so re-creating it per request would re-run discovery every
-    time. Failures are deliberately NOT cached — "SDK missing" is permanent but
-    "DDS peer not up yet" is not, and the honest thing is to retry and report
-    the current reason rather than remember a stale one.
-    """
-    global _loco_client
+
+def _new_loco_client():
+    """A fresh, initialised LocoClient. Raises on failure. Separate so tests
+    can see WHO builds the client (the startup path, never a request)."""
+    from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient  # type: ignore
+
+    client = LocoClient()
+    set_timeout = getattr(client, "SetTimeout", None)
+    if callable(set_timeout):
+        set_timeout(LOCO_RPC_TIMEOUT_S)
+    client.Init()
+    return client
+
+
+def _build_loco_client() -> bool:
+    """Build the process's one LocoClient. Called from main() on the MAIN
+    thread at startup (cyclonedds type registration is not thread-safe — see
+    start_arm_sdk), and retried every 2 s by the FSM monitor while it failed.
+    Never raises; the reason is kept for the next request to report."""
+    global _loco_client, _loco_client_error
+    with _loco_lock:
+        if _loco_client is not None:
+            return True
+        domain = _dds_domain_env()
+        iface = _dds_iface_env()
+        if domain is None:
+            _loco_client_error = ("no DDS domain configured — set G1_DDS_DOMAIN "
+                                  "(there is no default for the loco client)")
+            return False
+        try:
+            _ensure_dds_factory()
+            client = _new_loco_client()
+        except ImportError as e:
+            _loco_client_error = f"unitree_sdk2py not installed — LocoClient unavailable ({e})"
+            return False
+        except Exception as e:  # noqa: BLE001
+            _loco_client_error = (f"LocoClient init failed (domain {domain}, "
+                                  f"iface '{iface or 'default'}'): {e}")
+            return False
+        _loco_client = client
+        _loco_client_error = None
+    print(
+        f"[G1 Sidecar] ✅ LocoClient ready (sport service, domain {domain}, "
+        f"iface '{iface or 'default'}', timeout {LOCO_RPC_TIMEOUT_S}s)",
+        flush=True,
+    )
+    return True
+
+
+def _get_loco_client():
+    """(client, None) when the startup-built client exists, (None, error_dict)
+    otherwise. Never builds one: that happens on the main thread at startup
+    (and on the FSM monitor's retry), never on a request thread."""
     with _loco_lock:
         if _loco_client is not None:
             return _loco_client, None
+        return None, {"ok": False, "code": "rpc_failed",
+                      "error": _loco_client_error or "LocoClient not built (sidecar startup)"}
+
+
+def _loco_client_for_monitor():
+    client, err = _get_loco_client()
+    return client, (err or {}).get("error")
+
+
+def _odom_mode():
+    """rt/odommodestate.mode from whatever odometry feed exists — diagnostic
+    only (TASK-398 records it so its mapping to the FSM can be learned)."""
+    data = _state_latest(TOPIC_ODOM)
+    if isinstance(data, dict) and data.get("mode") is not None:
         try:
-            from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient  # type: ignore
-        except ImportError as e:  # noqa: BLE001
-            return None, {
-                "ok": False,
-                "error": f"unitree_sdk2py not installed — LocoClient unavailable ({e})",
-            }
-        domain = os.environ.get("G1_LIDAR_DDS_DOMAIN", "0")
-        iface = os.environ.get("G1_LIDAR_DDS_IFACE", os.environ.get("G1_NET_INTERFACE", "")).strip()
-        try:
-            _ensure_dds_factory()
-        except Exception as e:  # noqa: BLE001
-            return None, {
-                "ok": False,
-                "error": (
-                    f"DDS init failed (domain {domain}, iface '{iface or 'default'}'): {e}"
-                ),
-            }
-        try:
-            client = LocoClient()
-            set_timeout = getattr(client, "SetTimeout", None)
-            if callable(set_timeout):
-                set_timeout(LOCO_RPC_TIMEOUT_S)
-            client.Init()
-        except Exception as e:  # noqa: BLE001
-            return None, {"ok": False, "error": f"LocoClient init failed: {e}"}
-        _loco_client = client
-        print(
-            f"[G1 Sidecar] ✅ LocoClient ready (sport service, domain {domain}, "
-            f"iface '{iface or 'default'}', timeout {LOCO_RPC_TIMEOUT_S}s)",
-            flush=True,
-        )
-        return client, None
+            return int(data["mode"])
+        except (TypeError, ValueError):
+            return None
+    if _dds_odom_source is not None:
+        msg = _dds_odom_source.latest(ODOM_MAX_AGE_S)
+        mode = getattr(msg, "mode", None) if msg is not None else None
+        if mode is not None:
+            return int(mode)
+    return None
+
+
+def _arm_snapshot():
+    return None if _arm_controller is None else _arm_controller.snapshot()
+
+
+def _arm_disarm(reason: str) -> None:
+    if _arm_controller is not None:
+        _arm_controller.disarm(reason)
+
+
+def start_loco(clock=time.monotonic, start_thread: bool = True, **ctl_overrides) -> None:
+    """Gate on: build the LocoClient (main thread), the FSM monitor and the
+    mode controller. Gate off: nothing — no client, no thread, no RPC.
+    `clock`, `start_thread` and `ctl_overrides` exist for the tests."""
+    global _fsm_monitor, _mode_ctl
+    if LOCO_GATE == g1_loco_mode.GATE_OFF:
+        return
+    _build_loco_client()
+    _fsm_monitor = g1_loco_mode.FsmMonitor(
+        _loco_client_for_monitor, _loco_rpc_lock, FSM_IDS, clock=clock, poll_hz=FSM_POLL_HZ,
+        odom_mode_fn=_odom_mode, retry_fn=_build_loco_client)
+    kwargs = dict(arm_snapshot_fn=_arm_snapshot, arm_disarm_fn=_arm_disarm,
+                  estop_latched_fn=lambda: _base_estop_latched,
+                  settle_s=LOCO_STAND_SETTLE_S, confirm_s=LOCO_CONFIRM_S,
+                  rpc_timeout_s=LOCO_RPC_TIMEOUT_S)
+    kwargs.update(ctl_overrides)
+    _mode_ctl = g1_loco_mode.ModeController(
+        _loco_client_for_monitor, _loco_rpc_lock, _fsm_monitor, FSM_IDS, **kwargs)
+    if start_thread:
+        _fsm_monitor.start()
+
+
+def loco_capability() -> dict:
+    """The `loco` block of /health and /loco/mode."""
+    on = LOCO_GATE != g1_loco_mode.GATE_OFF
+    return {
+        "gate": LOCO_GATE,
+        "modes": list(g1_loco_mode.MODES) if on else [],
+        "ids": FSM_IDS.as_dict(),
+        "ids_verified": g1_loco_mode.FSM_STAND_VERIFIED,
+        "move_enabled": LOCO_GATE == g1_loco_mode.GATE_FULL,
+    }
+
+
+def fsm_state() -> dict:
+    """The `base` block: the MEASURED mode, or "unknown" with the reason."""
+    if _fsm_monitor is None:
+        return {"fsm_id": None, "mode": "unknown", "age_s": None, "fsm_mode": None,
+                "odom_mode": None, "source": "rpc",
+                "error": "mode control disabled (G1_LOCO_ENABLED)"
+                if LOCO_GATE == g1_loco_mode.GATE_OFF else "FSM monitor not running"}
+    return _fsm_monitor.state()
+
+
+def loco_mode_get() -> "tuple[int, dict]":
+    return 200, {"ok": True, **fsm_state(), "loco": loco_capability(),
+                 "in_flight": None if _mode_ctl is None else _mode_ctl.in_flight,
+                 "estop_latched": _base_estop_latched}
+
+
+def loco_mode_post(body: dict) -> "tuple[int, dict]":
+    """POST /loco/mode — see g1_loco_mode.ModeController for the table."""
+    if LOCO_GATE == g1_loco_mode.GATE_OFF or _mode_ctl is None:
+        return 403, {"ok": False, "code": "mode_control_disabled",
+                     "error": "mode control is off on this sidecar — restart it with "
+                              "G1_LOCO_ENABLED=fsm (docs/g1-edu-lab-bringup.md)"}
+    mode = body.get("mode") if isinstance(body, dict) else None
+    status, reply = _mode_ctl.request(mode)
+    reply.setdefault("base", fsm_state())
+    return status, reply
 
 
 def _rpc_failed(what: str, code: int) -> dict:
@@ -2281,8 +2647,9 @@ def loco_move(body: dict) -> tuple[int, dict]:
     silently defaulted duration would mean a silently different distance
     travelled.
     """
-    if not LOCO_ENABLED:
-        return 403, _loco_gate_error()
+    refusal = _loco_move_refusal("/loco/move")
+    if refusal is not None:
+        return refusal
 
     values = {}
     for key in ("vx", "vy", "omega", "duration_s"):
@@ -2349,8 +2716,9 @@ def loco_action(body: dict) -> tuple[int, dict]:
     args: wave → {"turn": bool} (turn the torso toward the greeted person),
     shake → {"stage": -1 toggle | 0 reach | 1 return}, stop → none.
     """
-    if not LOCO_ENABLED:
-        return 403, _loco_gate_error()
+    refusal = _loco_move_refusal("/loco/action")
+    if refusal is not None:
+        return refusal
 
     name = body.get("name")
     if not isinstance(name, str) or not name.strip():
@@ -2399,8 +2767,9 @@ def loco_fsm(body: dict) -> tuple[int, dict]:
     make the sidecar the bottleneck on a firmware update. The id is echoed back
     with its name (or null) so the caller sees what it actually sent.
     """
-    if not LOCO_ENABLED:
-        return 403, _loco_gate_error()
+    refusal = _loco_move_refusal("/loco/fsm")
+    if refusal is not None:
+        return refusal
 
     fsm_id = body.get("id")
     if isinstance(fsm_id, bool) or not isinstance(fsm_id, int):
@@ -2432,8 +2801,9 @@ def loco_stand_height(body: dict) -> tuple[int, dict]:
     and 0 as sentinels. Agent Mode's `posture: high|low` blocks route here;
     without this endpoint they had no way to work at all.
     """
-    if not LOCO_ENABLED:
-        return 403, _loco_gate_error()
+    refusal = _loco_move_refusal("/loco/stand-height")
+    if refusal is not None:
+        return refusal
 
     preset = body.get("preset")
     metres = body.get("metres")
@@ -2625,11 +2995,11 @@ def loco_odom() -> tuple[int, dict]:
     if not LOCO_ENABLED:
         return 403, _loco_gate_error()
 
-    # ZMQ first while READ_ONLY: that bridge is the state source in that mode
-    # and is already running, so it costs nothing. Otherwise DDS leads.
+    # ZMQ first: the read-only bridge is running in both write modes (it is
+    # the BMS/odometry source even next to arm_sdk), so it costs nothing, and a
+    # silent bridge fails over to DDS cheaply. (DDS used to lead whenever
+    # READ_ONLY was off — that mode had the lerobot driver and no bridge.)
     order = (("zmq", _odom_from_zmq), ("dds", _odom_from_dds))
-    if not READ_ONLY:
-        order = tuple(reversed(order))
     for source, fetch in order:
         pose = fetch()
         if pose is not None:
@@ -2647,7 +3017,43 @@ def loco_odom() -> tuple[int, dict]:
     }
 
 
+def _with_base(state: dict) -> dict:
+    """/state carries the `base` group whenever the mode gate is on — with
+    fsm_id null when stale. A deliberate exception to "omit stale groups":
+    "unknown" is the answer the operator must see (TASK-398)."""
+    if LOCO_GATE != g1_loco_mode.GATE_OFF:
+        state["base"] = fsm_state()
+    return state
+
+
+def health_body() -> dict:
+    """GET /health. Point-cloud replay mode reports "connected" so the Node
+    hardware seam pulls real recorded clouds without a physical robot attached.
+    `sim` (TASK-416) is true only behind a sim profile, see `_sim_backend`."""
+    replay = bool(os.environ.get("G1_POINTCLOUD_REPLAY", "").strip())
+    live = _state_latest(TOPIC_LOWSTATE) is not None
+    body = {"status": "ok", "connected": live or replay, "read_only": READ_ONLY,
+            "boot_id": BOOT_ID, "sim": _sim_backend()}
+    body.update(write_status())
+    # TASK-398: what this sidecar may do to the base, and the measured mode.
+    body["loco"] = loco_capability()
+    body["base"] = fsm_state()
+    return body
+
+
 class Handler(BaseHTTPRequestHandler):
+    # TCP_NODELAY on every accepted socket (TASK-415). `_send` writes the
+    # headers and the body as two segments; with Nagle on, the body waits for
+    # the client's ACK of the headers, and a client in delayed-ACK mode holds
+    # that ACK ~40 ms. sim_node.py's facade, which keeps connections alive,
+    # lost every other `/state/fast` request to exactly that. This handler
+    # still answers HTTP/1.0 and closes after each reply, and closing pushes
+    # the held segment out at once -- measured offline at 0.6 ms median, which
+    # is why the first real-robot recording reached 30.21 fps -- so today this
+    # is insurance: it keeps the stall from appearing the day this handler
+    # moves to keep-alive. `StreamRequestHandler.setup()` applies it.
+    disable_nagle_algorithm = True
+
     def _send(self, code: int, payload: dict) -> None:
         data = json.dumps(payload).encode()
         self.send_response(code)
@@ -2737,20 +3143,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            # Point-cloud replay mode reports "connected" so the Node hardware
-            # seam pulls real recorded clouds without a physical robot attached.
-            replay = bool(os.environ.get("G1_POINTCLOUD_REPLAY", "").strip())
-            if READ_ONLY:
-                live = _lowstate_reader.start() and _lowstate_reader.latest() is not None
-                self._send(200, {"status": "ok", "connected": live or replay, "read_only": True,
-                                 "boot_id": BOOT_ID})
-                return
-            self._send(200, {"status": "ok", "connected": connected or replay,
-                             "boot_id": BOOT_ID})
+            self._send(200, health_body())
         elif self.path == "/state":
-            self._send(200, get_state())
+            self._send(200, _with_base(get_state()))
         elif self.path == "/state/fast":
-            self._send(200, get_state(keep_alive=True))
+            self._send(200, _with_base(get_state(keep_alive=True)))
+        elif self.path == "/loco/mode":
+            self._send(*loco_mode_get())
         elif self.path == "/cameras":
             # What the ACTIVE SOURCE can serve, not a fixed list (TASK-233):
             # with a lone D435 attached that is one name, and the two wrist
@@ -2779,14 +3178,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+        except ValueError:
+            self._send(400, {"ok": False, "error": "body is not JSON"})
+            return
         if self.path == "/action":
-            if READ_ONLY:
-                self._send(403, {"ok": False, "error": "G1_READ_ONLY — command path disabled (stage 1: telemetry only)"})
-                return
-            self._send(200, send_action(body))
+            self._send(*send_action(body))
+        # --- rt/arm_sdk arming (TASK-391) — see g1_arm_sdk.py ---------------
+        elif self.path == "/arm":
+            self._send(*arm(body))
+        elif self.path == "/disarm":
+            self._send(*disarm())
         elif self.path == "/estop":
-            self._send(200, reset_ramp_state())
+            # Only an explicit false skips the damp; anything else damps.
+            self._send(*estop(damp=not (isinstance(body, dict) and body.get("damp") is False)))
+        elif self.path == "/estop/reset":
+            self._send(*estop_reset())
         elif self.path == "/pointcloud/lidar/switch":
             # Deliberately NOT behind the READ_ONLY guard — the LiDAR enable is
             # the single authorized write (sensor only, no motion). See the
@@ -2797,11 +3205,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, set_lidar_switch(on))
         elif self.path == "/record/start":
-            if READ_ONLY:
-                # lerobot-record spawns a G1 teleoperator — that DRIVES the robot.
-                self._send(403, {"ok": False, "error": "G1_READ_ONLY — recording (teleop) disabled (stage 1: telemetry only)"})
-                return
-            self._send(200, start_record(body))
+            # Refused in BOTH modes. It spawned `lerobot-record
+            # --robot.type=unitree_g1`, whose driver publishes rt/lowcmd — the
+            # channel that drops a standing robot. Real-robot episodes are
+            # recorded by the robot-agent from /state + the camera instead.
+            self._send(403, {"ok": False, "error": (
+                "/record/start is disabled: lerobot-record would drive the G1 over "
+                "rt/lowcmd. Record through the robot-agent (TASK-391)")})
         elif self.path == "/record/stop":
             self._send(200, recorder.stop())
         # --- Agent Mode locomotion (TASK-194) --------------------------------
@@ -2816,6 +3226,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(*loco_fsm(body))
         elif self.path == "/loco/stand-height":
             self._send(*loco_stand_height(body))
+        elif self.path == "/loco/mode":
+            self._send(*loco_mode_post(body))
         else:
             self._send(404, {"error": "not found"})
 
@@ -2842,27 +3254,75 @@ class Handler(BaseHTTPRequestHandler):
                 "jpeg_base64": base64.b64encode(jpeg).decode(), "source": source}
 
 
+def _shutdown_arm_sdk() -> None:
+    """Ramp the arm_sdk weight to 0 and leave weight-0 frames behind. Safe to
+    call more than once and in read_only mode (then it does nothing)."""
+    if _arm_runner is not None:
+        _arm_runner.shutdown()
+
+
 def main() -> None:
+    import signal
+    import sys
+
+    problem = _write_mode_error() or _loco_config_error()
+    if problem:
+        print(f"[G1 Sidecar] REFUSING TO START: {problem}", flush=True)
+        sys.exit(2)
+
     print(f"[G1 Sidecar] starting on :{PORT} (robot {ROBOT_ID} @ {ROBOT_IP}/{NET_INTERFACE})", flush=True)
     print(f"[G1 Sidecar] {len(JOINT_NAMES)} joints ({len(BODY_JOINTS)} body + {len(HAND_JOINTS)} Dex3)", flush=True)
     if READ_ONLY:
         print(
-            "[G1 Sidecar] READ-ONLY MODE (G1_READ_ONLY) - telemetry only. "
-            f"State source: {LOWSTATE_ENDPOINT}. POST /action and /record/start are BLOCKED; "
-            "the lerobot driver (rt/lowcmd publisher) is never loaded.",
+            "[G1 Sidecar] READ-ONLY MODE (G1_WRITE_MODE=read_only) - telemetry only. "
+            f"State source: {LOWSTATE_ENDPOINT}. POST /action, /arm and /record/start are "
+            "BLOCKED; no joint-command publisher exists in this process.",
             flush=True,
         )
     else:
         print(
-            f"[G1 Sidecar] action ramp: max_vel={MAX_JOINT_VEL} rad/s @ {CONTROL_HZ} Hz "
-            f"→ {_MAX_STEP:.4f} rad/tick (NOT balance control)",
+            f"[G1 Sidecar] ⚠️  ARM_SDK WRITE MODE on DDS domain {_dds_domain_env()} "
+            f"(0 = REAL ROBOT, 1 = sim), iface '{_dds_iface_env() or 'default'}'. "
+            f"rt/arm_sdk + rt/dex3/*/cmd publish ONLY between POST /arm and the next "
+            f"disarm; arms slew <= {ARM_SDK_MAX_JOINT_VEL} rad/s, fingers <= "
+            f"{ARM_SDK_MAX_HAND_VEL} rad/s, {CONTROL_HZ:.0f} Hz. Legs are never commanded.",
             flush=True,
         )
-    if LOCO_ENABLED:
+        if _arm_requires_fsm():
+            print("[G1 Sidecar] /arm needs a MEASURED balance mode (FSM %s, fresh <= %.1fs)"
+                  % (list(FSM_IDS.balance_reported), g1_loco_mode.FSM_FRESH_S), flush=True)
+        elif (os.environ.get("G1_ARM_ALLOW_UNKNOWN_FSM") or "").strip() == "1":
+            print("[G1 Sidecar] ⚠️⚠️  G1_ARM_ALLOW_UNKNOWN_FSM=1 — /arm does NOT check the "
+                  "robot mode. Only for a session where a person with the Unitree remote has "
+                  "put the robot in balance (R1+X). In damp the robot ignores arm_sdk and the "
+                  "arm JUMPS when balance engages.", flush=True)
+        try:
+            start_arm_sdk()
+        except Exception as e:  # noqa: BLE001
+            print(f"[G1 Sidecar] REFUSING TO START: arm_sdk DDS setup failed ({e!r})", flush=True)
+            sys.exit(3)
+    # TASK-398: after start_arm_sdk (same DDS factory), on the main thread.
+    start_loco()
+    if LOCO_GATE == g1_loco_mode.GATE_FSM:
+        ids = FSM_IDS
+        print(
+            f"[G1 Sidecar] ⚠️  MODE CONTROL (G1_LOCO_ENABLED=fsm) on DDS domain "
+            f"{_dds_domain_env()} (0 = REAL ROBOT), iface '{_dds_iface_env() or 'default'}'. "
+            f"POST /loco/mode limp={ids.limp} stand={ids.stand}"
+            f"{'' if g1_loco_mode.FSM_STAND_VERIFIED else ' (UNVERIFIED on this G1)'} "
+            f"balance={ids.balance} (counts as balance: {list(ids.balance_reported)}). "
+            "Walking/turning (/loco/move, /loco/action, /loco/stand-height, /loco/fsm) "
+            "answer 403. /estop damps.",
+            flush=True,
+        )
+        if _loco_client is None:
+            print(f"[G1 Sidecar] LocoClient not ready yet ({_loco_client_error}) — "
+                  "retrying every 2 s; the mode reads 'unknown' until then", flush=True)
+    elif LOCO_ENABLED:
         print(
             "[G1 Sidecar] ⚠️  LOCOMOTION ENABLED (G1_LOCO_ENABLED=1) — /loco/* will move "
             f"the robot via the sport service on DDS domain "
-            f"{os.environ.get('G1_LIDAR_DDS_DOMAIN', '0')} (0 = real robot, 1 = sim). "
+            f"{_dds_domain_env()} (0 = real robot, 1 = sim). "
             "Agent Mode has manual E-Stop only: no arming gate, no watchdog, no speed cap.",
             flush=True,
         )
@@ -2871,7 +3331,37 @@ def main() -> None:
             "[G1 Sidecar] /loco/* disabled (G1_LOCO_ENABLED=0) — locomotion endpoints answer 403",
             flush=True,
         )
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    host = _bind_host()
+    if (not READ_ONLY or LOCO_GATE != g1_loco_mode.GATE_OFF) \
+            and host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"[G1 Sidecar] ⚠️  arm_sdk routes listen on {host} (G1_SIDECAR_HOST) — "
+              "/arm and /action are unauthenticated and reachable from that network", flush=True)
+    server = ThreadingHTTPServer((host, PORT), Handler)
+
+    # SIGTERM / SIGINT: start the disarm ramp AT ONCE, stop serving, and only
+    # let the process go once the weight is 0 (_shutdown_arm_sdk). The ramp is
+    # begun here rather than after serve_forever() returns because shutdown()
+    # waits out a poll interval first — measured against the sim, that put the
+    # weight at 0 only ~1.5 s after the signal. Both run on a helper thread:
+    # serve_forever() cannot be stopped from its own thread, and a signal
+    # handler should not take locks.
+    def _begin_exit():
+        if _arm_controller is not None:
+            _arm_controller.disarm("shutdown")
+        server.shutdown()
+
+    def _on_signal(signum, _frame):
+        print(f"[G1 Sidecar] signal {signum} — disarming before exit", flush=True)
+        threading.Thread(target=_begin_exit, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+    try:
+        server.serve_forever(poll_interval=0.1)
+    finally:
+        _shutdown_arm_sdk()
+        server.server_close()
+        print("[G1 Sidecar] stopped", flush=True)
 
 
 if __name__ == "__main__":

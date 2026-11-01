@@ -23,8 +23,39 @@ import type { Robot } from '../../../../types/robots.types';
 // ---------------------------------------------------------------------------
 
 /** The scene is the whole three.js half of this feature — stubbed wholesale. */
+const scene = vi.hoisted(() => ({
+  send: null as null | ((payload: unknown) => boolean),
+  telemetryRef: null as null | { current: Record<string, unknown> },
+  onEstop: null as null | (() => void),
+  onResetEstop: null as null | (() => void | Promise<void>),
+}));
 vi.mock('../VrScene', () => ({
-  VrScene: () => <div data-testid="vr-scene" />,
+  VrScene: (props: {
+    send?: (payload: unknown) => boolean;
+    telemetryRef?: { current: Record<string, unknown> };
+    onEstop?: () => void;
+    onResetEstop?: () => void | Promise<void>;
+  }) => {
+    scene.send = props.send ?? null;
+    scene.telemetryRef = props.telemetryRef ?? null;
+    scene.onEstop = props.onEstop ?? null;
+    scene.onResetEstop = props.onResetEstop ?? null;
+    return <div data-testid="vr-scene" />;
+  },
+}));
+
+/** TASK-398: the mode control polls the agent; answer as a robot in limp. */
+vi.mock('../../../../api/baseModeApi', () => ({
+  baseModeApi: {
+    getBaseMode: vi.fn(async () => ({
+      capability: { gate: 'fsm', moveEnabled: false, idsVerified: false, ids: null },
+      base: { fsmId: 1, mode: 'limp', ageS: 0.2, error: null },
+      inFlight: null,
+      estopLatched: false,
+      armed: false,
+    })),
+    setBaseMode: vi.fn(),
+  },
 }));
 
 /** A minimal XR store: enough to enter/leave a session and end one. */
@@ -52,7 +83,8 @@ vi.mock('@/features/safety/api/safetyApi', () => ({
   },
 }));
 
-import { VRTeleopModalBody } from '../VRTeleopModal';
+import type { VrSessionBridge } from '../vrSessionBridge';
+import { ArmNotices, VRTeleopModalBody, meterLink, parseArmFrame, parseBaseFrame, parseHeldFrame } from '../VRTeleopModal';
 
 /**
  * A WebSocket stand-in. `createTeleopLink` refuses to send unless
@@ -127,6 +159,21 @@ function renderModal(
 }
 
 /** The fourteen arm joints the agent needs a chain for, as the agent asks it. */
+/** A session the modal only checks for presence (TASK-413). */
+const FAKE_SESSION: VrSessionBridge = {
+  getState: () => ({
+    status: 'recording', phase: 'between', take: null, takeElapsedS: null, kept: 0, discarded: 0,
+    frames: 0, fpsActual: null, degraded: false, autoStopInS: null, lastQuickCheck: null, pending: false,
+    instruction: null, endedBy: null, sessionFrames: 0,
+  }),
+  actions: {
+    start: () => Promise.resolve('ok'),
+    stop: () => Promise.resolve('ok'),
+    next: () => Promise.resolve('ok'),
+    discardLast: () => Promise.resolve('ok'),
+  },
+};
+
 const G1_ARM_JOINTS = (['left', 'right'] as const).flatMap((side) =>
   ['shoulder_pitch', 'shoulder_roll', 'shoulder_yaw', 'elbow', 'wrist_roll', 'wrist_pitch', 'wrist_yaw']
     .map((j) => ({ name: `${side}_${j}_joint`, min: -2, max: 2 })),
@@ -165,7 +212,7 @@ afterEach(() => {
 });
 
 describe('VRTeleopModalBody — E-Stop', () => {
-  it('sends the zero-move frame before the estop frame, then ends the XR session', async () => {
+  it('sends the zero-move frame before the estop frame, and keeps the wearer in VR', async () => {
     renderModal();
     const socket = openLink();
     setSession(true);
@@ -180,9 +227,10 @@ describe('VRTeleopModalBody — E-Stop', () => {
     expect(frames[0]).toEqual({ move: { vx: 0, vy: 0, omega: 0 } });
     expect(frames[1]).toHaveProperty('estop');
 
-    // The wearer must be told why the robot stopped, and the banner explaining
-    // it is on a screen they cannot see while the headset is on.
-    expect(sessionEnd).toHaveBeenCalled();
+    // TASK-407 (D3): the stop no longer throws the wearer out. The robot panel
+    // in the headset turns red and offers the hold-to-reset; ending the session
+    // hid both from the person who pressed the stop.
+    expect(sessionEnd).not.toHaveBeenCalled();
     // The fleet alert and audit trail go over REST, in parallel.
     expect(triggerRobotEStop).toHaveBeenCalledWith('robot-1', expect.objectContaining({
       reason: expect.stringContaining('E-Stop'),
@@ -345,24 +393,27 @@ describe('VRTeleopModalBody — controller mapping card', () => {
     // only finds out about by pressing it and watching nothing happen.
     renderModal();
     expect(screen.queryByText('L-Stick')).not.toBeInTheDocument();
+    expect(screen.queryByText('R-Stick')).not.toBeInTheDocument();
     expect(screen.getByText('Safety and view')).toBeInTheDocument();
   });
 
-  it('lists the L-Stick episode control when the session supplies one', () => {
-    renderModal({ onNextEpisode: () => true });
+  it('lists the stick take controls when the session supplies one (TASK-413, D1)', () => {
+    renderModal({ vrSession: FAKE_SESSION });
     expect(screen.getByText('L-Stick')).toBeInTheDocument();
-    expect(
-      screen.getByText('Click to end this episode and start the next'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Click to start a take, click again to stop it')).toBeInTheDocument();
+    expect(screen.getByText('R-Stick')).toBeInTheDocument();
+    expect(screen.getByText('Click to end this take and start the next')).toBeInTheDocument();
+    // Discard is a hold, never a click: an accidental click must not destroy a take.
+    expect(screen.getByText('R-Stick hold')).toBeInTheDocument();
     // The heading moves with the rows.
     expect(screen.getByText('Safety, view and recording')).toBeInTheDocument();
     expect(screen.queryByText('Safety and view')).not.toBeInTheDocument();
   });
 
   it('leaves both face-button bindings exactly where they were', () => {
-    // Both are bound on BOTH hands on purpose. The stick click exists precisely
-    // so that adding a recording control did not have to buy a face button back.
-    renderModal({ onNextEpisode: () => true });
+    // Both are bound on BOTH hands on purpose. The stick clicks exist precisely
+    // so that adding recording controls did not have to buy a face button back.
+    renderModal({ vrSession: FAKE_SESSION });
     expect(screen.getByText('B / Y')).toBeInTheDocument();
     expect(screen.getByText('E-STOP — either hand, either button')).toBeInTheDocument();
     expect(screen.getByText('A / X')).toBeInTheDocument();
@@ -481,5 +532,302 @@ describe('VRTeleopModalBody — a damped base', () => {
     act(() => { fireEvent.click(screen.getByTestId('vr-stand-base')); });
 
     expect(screen.getByTestId('vr-base-damped')).toHaveTextContent('link is down');
+  });
+});
+
+// TASK-393: the real robot's arm write path, as the agent reports it.
+describe('VRTeleopModalBody — the real G1 arm path', () => {
+  it('connects through the server, not to the agent, by default', () => {
+    renderModal();
+    expect(FakeSocket.instances[0].url).toMatch(/\/api\/robots\/[^/]+\/teleop\/ws$/);
+  });
+
+  it('shows nothing about arming on a sidecar that needs none', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({ type: 'arm', writeMode: null, armed: false, arming: false, armWeight: 0 }));
+    expect(screen.queryByTestId('vr-arm-status')).toBeNull();
+    expect(screen.queryByTestId('vr-arm-notices')).toBeNull();
+  });
+
+  it('shows the arms ramping in, then armed', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({ type: 'arm', writeMode: 'arm_sdk', armed: true, arming: false, armWeight: 0.4 }));
+    expect(screen.getByTestId('vr-arm-status')).toHaveTextContent('Arming 40%');
+    act(() => socket.deliver({ type: 'arm', writeMode: 'arm_sdk', armed: true, arming: false, armWeight: 1 }));
+    expect(screen.getByTestId('vr-arm-status')).toHaveTextContent('Arms armed');
+  });
+
+  it('warns — and does not block — when a Dex3 hand is missing', () => {
+    renderModal();
+    const socket = openLink(G1_ARM_JOINTS);
+    act(() => socket.deliver({
+      type: 'arm', writeMode: 'arm_sdk', armed: false, arming: false, armWeight: 0,
+      hands: { left: true, right: false }, teleopMode: 'arms+left_hand',
+    }));
+    const notices = screen.getByTestId('vr-arm-notices');
+    expect(notices).toHaveTextContent('right Dex3 hand reports no state');
+    expect(screen.getByRole('button', { name: 'Enter VR' })).toBeEnabled();
+  });
+
+  it('says plainly when the sidecar is read-only', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({ type: 'arm', writeMode: 'read_only', armed: false, arming: false, armWeight: 0 }));
+    expect(screen.getByTestId('vr-arm-notices')).toHaveTextContent('G1_WRITE_MODE=arm_sdk');
+  });
+
+  it('takes heartbeat_lost back out when the agent says the heartbeat is live again', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({ type: 'error', code: 'heartbeat_lost', message: 'no heartbeat', at: 'now' }));
+    expect(screen.getByTestId('vr-agent-errors')).toHaveTextContent('heartbeat_lost');
+    act(() => socket.deliver({ type: 'heartbeat', state: 'live' }));
+    expect(screen.queryByTestId('vr-agent-errors')).toBeNull();
+  });
+
+  it('offers a reset when only the sidecar is still E-stopped', async () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({ type: 'arm', writeMode: 'arm_sdk', armed: false, arming: false, armWeight: 0, estopLatched: true }));
+    const notices = screen.getByTestId('vr-arm-notices');
+    expect(notices).toHaveTextContent('still E-stopped');
+    await act(async () => { fireEvent.click(within(notices).getByRole('button', { name: 'Reset E-stop' })); });
+    expect(resetRobotEStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('says to release the grip while the agent waits for a fresh squeeze', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({
+      type: 'arm', writeMode: 'arm_sdk', armed: false, arming: false, armWeight: 0,
+      engage: 'need_release', clutch: { left: true, right: false },
+    }));
+    expect(screen.getByTestId('vr-arm-status')).toHaveTextContent('Release grip to re-arm');
+    act(() => socket.deliver({
+      type: 'arm', writeMode: 'arm_sdk', armed: false, arming: false, armWeight: 0,
+      engage: 'need_press', clutch: { left: false, right: false },
+    }));
+    expect(screen.getByTestId('vr-arm-status')).toHaveTextContent('Arms off');
+  });
+});
+
+describe('parseArmFrame — the re-engage latch', () => {
+  it('reads engage and clutch, and drops what it does not know', () => {
+    const base = { type: 'arm', writeMode: 'arm_sdk' };
+    expect(parseArmFrame({ ...base, engage: 'ready', clutch: { left: true, right: true } }))
+      .toMatchObject({ engage: 'ready', clutch: { left: true, right: true } });
+    expect(parseArmFrame({ ...base, engage: 'armed!', clutch: { left: 1 } }))
+      .toMatchObject({ engage: null, clutch: null });
+  });
+});
+
+describe('ArmNotices — hand tracking on the real robot', () => {
+  const ARM = parseArmFrame({ type: 'arm', writeMode: 'arm_sdk', armed: false, arming: false, armWeight: 0 })!;
+
+  it('tells the operator to use the controllers', () => {
+    render(<ArmNotices arm={ARM} handTracking />);
+    expect(screen.getByTestId('vr-arm-notices')).toHaveTextContent('Use controllers to drive the real robot');
+  });
+
+  it('says nothing about it on the sim', () => {
+    const sim = parseArmFrame({ type: 'arm', writeMode: null })!;
+    render(<ArmNotices arm={sim} handTracking />);
+    expect(screen.queryByTestId('vr-arm-notices')).toBeNull();
+  });
+});
+
+describe('VRTeleopModalBody — robot mode without the remote (TASK-398)', () => {
+  it('shows the mode control instead of the damped panel when the sidecar controls the mode', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => {
+      socket.deliver({
+        type: 'base', damped: true, fsmId: 1, mode: 'limp', measured: true, moveEnabled: false, modeControl: 'fsm',
+      });
+    });
+    expect(screen.getByTestId('vr-robot-mode')).toBeInTheDocument();
+    expect(screen.queryByTestId('vr-base-damped')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('vr-stand-base')).not.toBeInTheDocument();
+  });
+
+  it('keeps the older damped panel on a robot without mode control', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => { socket.deliver({ type: 'base', damped: true, fsmId: 1 }); });
+    expect(screen.queryByTestId('vr-robot-mode')).not.toBeInTheDocument();
+    expect(screen.getByTestId('vr-base-damped')).toBeInTheDocument();
+  });
+
+  it('parses the base frame defensively', () => {
+    expect(parseBaseFrame({ type: 'base', damped: true })).toEqual({
+      damped: true, mode: 'unknown', measured: false, moveEnabled: true, modeControl: 'off',
+    });
+    expect(parseBaseFrame({ type: 'base', mode: 'balance', measured: true, moveEnabled: false, modeControl: 'fsm' }))
+      .toMatchObject({ mode: 'balance', moveEnabled: false, modeControl: 'fsm' });
+    expect(parseBaseFrame({ type: 'base', mode: 'flying', modeControl: 'yes' }))
+      .toMatchObject({ mode: 'unknown', modeControl: 'off' });
+  });
+});
+
+describe('VRTeleopModalBody — the link meter and {move} frames (TASK-398)', () => {
+  it('stays live across 5 s of head-turn moves the agent never echoes', () => {
+    vi.useFakeTimers();
+    try {
+      renderModal();
+      const socket = openLink();
+      act(() => { socket.deliver({ type: 'state', positions: {} }); });
+      expect(scene.send).not.toBeNull();
+      for (let i = 0; i < 50; i++) {
+        act(() => {
+          scene.send!({ move: { vx: 0, vy: 0, omega: 0.3 } });
+          vi.advanceTimersByTime(100);
+        });
+      }
+      expect(socket.frames().filter((f) => 'move' in f).length).toBe(50);
+      expect(screen.getByText('Link live')).toBeInTheDocument();
+      expect(screen.queryByText('Link lost')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still notices a pose frame that goes unanswered', () => {
+    vi.useFakeTimers();
+    try {
+      renderModal();
+      const socket = openLink();
+      act(() => { socket.deliver({ type: 'state', positions: {} }); });
+      // Pose frames ARE answered, so a stream of them with no reply is a link
+      // that stopped answering — the meter must still say so.
+      for (let i = 0; i < 50; i++) {
+        act(() => {
+          scene.send!({ positions: { left_elbow_joint: 0.1 } });
+          vi.advanceTimersByTime(100);
+        });
+      }
+      expect(screen.queryByText('Link live')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('VRTeleopModalBody — a refused arm is not a lost link (TASK-407)', () => {
+  const WRISTS = { wrists: { left: null, right: { p: [0.2, -0.2, -0.3], q: [0, 0, 0, 1], grip: 0 } } };
+
+  it('stays live while the agent answers every pose frame with held, and records why', () => {
+    vi.useFakeTimers();
+    try {
+      renderModal();
+      const socket = openLink();
+      const seen = new Set<string>();
+      for (let i = 0; i < 50; i++) {
+        act(() => {
+          scene.send!(WRISTS);
+          socket.deliver({ type: 'state', held: true, side: 'right', reason: 'arm_gate' });
+          vi.advanceTimersByTime(100);
+        });
+        // From the first meter tick on (it starts at the fail-safe 'lost').
+        if (i >= 3) seen.add(String(scene.telemetryRef!.current.link));
+      }
+      expect(screen.getByText('Link live')).toBeInTheDocument();
+      expect(screen.queryByText('Link stale')).not.toBeInTheDocument();
+      expect(screen.queryByText('Link lost')).not.toBeInTheDocument();
+      // The rig buzzes linkLost on the edge into 'lost'; it never got there.
+      expect([...seen]).toEqual(['live']);
+      expect(scene.telemetryRef!.current.armHeld).toMatchObject({ side: 'right', reason: 'arm_gate' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts ANY agent frame as transport evidence, not only state', () => {
+    vi.useFakeTimers();
+    try {
+      renderModal();
+      const socket = openLink();
+      for (let i = 0; i < 30; i++) {
+        act(() => {
+          scene.send!(WRISTS);
+          socket.deliver({ type: 'base', damped: false, mode: 'balance', measured: true, modeControl: 'fsm' });
+          vi.advanceTimersByTime(100);
+        });
+      }
+      expect(scene.telemetryRef!.current.link).toBe('live');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a state answer that moved an arm clears the held reason and the refusal', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => {
+      socket.deliver({ type: 'error', code: 'arm_reengage_required', message: 'release the grip' });
+      socket.deliver({ type: 'state', held: true, side: 'left', reason: 'not_armed' });
+    });
+    expect(scene.telemetryRef!.current.armRefusal).toMatchObject({ code: 'arm_reengage_required' });
+    expect(scene.telemetryRef!.current.armHeld).toMatchObject({ reason: 'not_armed' });
+    act(() => { socket.deliver({ type: 'state', positions: { left_elbow_joint: 0.1 } }); });
+    expect(scene.telemetryRef!.current.armHeld).toBeNull();
+    expect(scene.telemetryRef!.current.armRefusal).toBeNull();
+  });
+
+  it('meterLink: transport only — open and answering, or idle', () => {
+    expect(meterLink('closed', 1000, 999, 999)).toBe('lost');
+    expect(meterLink('open', 10_000, null, null)).toBe('live');
+    expect(meterLink('open', 10_000, 9_900, 9_950)).toBe('live');
+    expect(meterLink('open', 10_000, 7_000, 9_950)).toBe('lost');
+  });
+
+  it('parses held frames defensively', () => {
+    expect(parseHeldFrame({ type: 'state', held: true, side: 'left', reason: 'ik_held' }))
+      .toEqual({ side: 'left', reason: 'ik_held' });
+    expect(parseHeldFrame({ type: 'state', held: true, side: 'up', reason: 'bogus' }))
+      .toEqual({ side: 'both', reason: 'arm_gate' });
+    expect(parseHeldFrame({ type: 'state', positions: {} })).toBeNull();
+  });
+});
+
+describe('VRTeleopModalBody — the E-stop keeps the wearer in VR (TASK-407)', () => {
+  it('B/Y (the rig\'s onEstop) latches and stops the stream without ending the session', async () => {
+    renderModal();
+    const socket = openLink();
+    setSession(true);
+    await act(async () => { scene.onEstop!(); });
+    expect(socket.frames()[0]).toEqual({ move: { vx: 0, vy: 0, omega: 0 } });
+    expect(socket.frames()[1]).toHaveProperty('estop');
+    expect(sessionEnd).not.toHaveBeenCalled();
+    expect(scene.telemetryRef!.current.estopLatched).toBe(true);
+    expect(screen.getByText('E-stop latched')).toBeInTheDocument();
+  });
+
+  it('the robot panel\'s reset goes through the same reset as the desktop banner', async () => {
+    renderModal();
+    openLink();
+    await act(async () => { scene.onEstop!(); });
+    await act(async () => { await scene.onResetEstop!(); });
+    expect(resetRobotEStop).toHaveBeenCalledWith('robot-1');
+    expect(scene.telemetryRef!.current.estopLatched).toBe(false);
+    expect(screen.queryByText('E-stop latched')).not.toBeInTheDocument();
+  });
+});
+
+describe('parseArmFrame — TASK-405 fields for the robot panel', () => {
+  it('reads dead-man, the disarm reason and hand health, and drops what it does not know', () => {
+    const health = { present: true, ageS: 0.02, error: [0, 512], motorFaults: [{ motor: 1, joint: 'thumb_1', code: '0x200', bits: ['x'] }], powerV: 24 };
+    const arm = parseArmFrame({
+      type: 'arm', writeMode: 'arm_sdk', deadman: 'hold', lastDisarmReason: 'left_balance',
+      handHealth: { left: health, right: { ...health, motorFaults: 'nope' } },
+    });
+    expect(arm?.deadman).toBe('hold');
+    expect(arm?.lastDisarmReason).toBe('left_balance');
+    expect(arm?.handHealth?.left.motorFaults[0]).toMatchObject({ joint: 'thumb_1', code: '0x200' });
+    expect(arm?.handHealth?.right.motorFaults).toEqual([]);
+    const old = parseArmFrame({ type: 'arm', writeMode: 'arm_sdk', deadman: 'maybe' });
+    expect(old?.deadman).toBeNull();
+    expect(old?.handHealth).toBeNull();
   });
 });

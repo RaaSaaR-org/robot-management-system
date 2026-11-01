@@ -48,9 +48,10 @@ JPEG_B = b"\xff\xd8\xff\xdb\x00\x01\xbb\xff\xd9"
 class FakePublisher:
     """g1_cam_pub.py's wire protocol, in-process."""
 
-    def __init__(self, frames=(JPEG_A, JPEG_B), corrupt_length=False):
+    def __init__(self, frames=(JPEG_A, JPEG_B), corrupt_length=False, period=0.02):
         self.frames = frames
         self.corrupt_length = corrupt_length
+        self.period = period
         self._srv = socket.socket()
         self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._srv.bind(("127.0.0.1", 0))
@@ -88,7 +89,7 @@ class FakePublisher:
                 length = 1 << 30 if self.corrupt_length else len(payload)
                 conn.sendall(HDR.pack(length, time.time_ns()) + payload)
                 i += 1
-                time.sleep(0.02)
+                time.sleep(self.period)
         except OSError:
             pass
         finally:
@@ -179,6 +180,32 @@ def test_frames_keep_advancing(publisher):
             seen.add(jpeg)
         time.sleep(0.03)
     assert seen == {JPEG_A, JPEG_B}, "the reader is handing back one cached frame"
+
+
+def test_a_reader_faster_than_the_camera_gets_the_held_frame_at_once(monkeypatch):
+    # The real head camera runs at ~15 fps and the episode recorder asks for a
+    # frame 30 times a second. Every ask must answer at once with the newest
+    # frame -- the same one twice when no new frame has landed -- because the
+    # recorder drops any tick that has not come back within its 33 ms period,
+    # and a snapshot that waited for a fresh frame would halve the dataset.
+    pub = FakePublisher(period=1 / 15).start()
+    monkeypatch.setenv("G1_PC2_CAMERA_PORT", str(pub.port))
+    try:
+        assert _wait_for_frame() is not None
+        reads, slowest = [], 0.0
+        for _ in range(30):
+            t = time.perf_counter()
+            reads.append(g1_sidecar._pc2cam_jpeg_bytes())
+            slowest = max(slowest, time.perf_counter() - t)
+            time.sleep(1 / 30)
+        assert all(r in (JPEG_A, JPEG_B) for r in reads), "a read came back empty"
+        assert slowest < 1 / 30, f"a read blocked for {slowest * 1000:.1f} ms"
+        # 30 reads of a 15 fps stream: the picture can change at most ~16 times,
+        # so the rest are the held frame. Loose bound; this is wall-clock.
+        repeats = sum(1 for a, b in zip(reads, reads[1:]) if a == b)
+        assert repeats >= 5
+    finally:
+        pub.stop()
 
 
 def test_one_connection_is_held_open_not_reopened_per_frame(publisher):

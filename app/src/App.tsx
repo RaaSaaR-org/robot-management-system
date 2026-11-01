@@ -65,6 +65,7 @@ import {
   LazyDataCollectionPage,
   LazyNewSessionPage,
   LazySessionDetailPage,
+  LazyLiveSessionRedirect,
   LazyDocsPage,
   LazyDesignSystemPage,
   LazyTwinViewerPage,
@@ -504,6 +505,15 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyNewSessionPage />
+              </ProtectedAppRoute>
+            }
+          />
+          {/* TASK-412: the headset's stable URL — lands on the robot's newest live session */}
+          <Route
+            path="/data-collection/live"
+            element={
+              <ProtectedAppRoute>
+                <LazyLiveSessionRedirect />
               </ProtectedAppRoute>
             }
           />

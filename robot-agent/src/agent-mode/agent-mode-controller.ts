@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config/config.js';
 import type { EmbodimentConfig } from '../embodiment/types.js';
 import { hardwareClient, type CachedBasePose, type LocoResult } from '../hardware/HardwareClient.js';
+import type { LocoCapability, SidecarEstopResult } from '../hardware/base-mode.js';
 import type { RobotStateManager } from '../robot/state.js';
 import type { PersistedAgentState } from '../robot/StatePersistence.js';
 import {
@@ -286,6 +287,15 @@ export interface AgentEstopResult {
   deliveryError?: string;
 }
 
+export interface AgentEstopOptions {
+  /**
+   * The safety path's `/estop` result, when the caller has already triggered
+   * and awaited it (TASK-398). Agent Mode then does not trigger it again.
+   * `null` = triggered, but the sidecar reported nothing.
+   */
+  hardwareStop?: SidecarEstopResult | null;
+}
+
 export interface AgentModeControllerDeps {
   robotId?: string;
   enabled?: boolean;
@@ -318,6 +328,15 @@ export interface AgentModeControllerDeps {
   lock?: ControlOwnerLock;
   /** Loco facade override — tests pass a stub instead of the sidecar. */
   loco?: BlockExecutorDeps['loco'];
+  /**
+   * The robot's MEASURED mode and the sidecar's gate (TASK-398). Defaults to
+   * the hardware client. `measuredFsmId` is null when there is no fresh
+   * reading; `capability().gate` is `unknown` for a sidecar that does not say.
+   */
+  baseMode?: {
+    capability: () => LocoCapability;
+    measuredFsmId: () => number | null;
+  };
   say?: BlockExecutorDeps['say'];
   /**
    * The model call the visitor answerer makes (TASK-213). Injected in tests;
@@ -506,6 +525,7 @@ export class AgentModeController {
   private readonly heartbeat: HeartbeatMonitor;
   private readonly intents: IntentStore | null;
   private readonly loco: NonNullable<BlockExecutorDeps['loco']>;
+  private readonly baseMode: NonNullable<AgentModeControllerDeps['baseMode']>;
   private readonly memory: Workspace | null;
   private readonly journal: Journal | null;
   private readonly identity: IdentityStore | null;
@@ -716,6 +736,10 @@ export class AgentModeController {
     this.mirror =
       deps.mirror ?? new ServerMirror({ robotId: this.robotId, journal: this.journal });
     this.loco = deps.loco ?? defaultLoco;
+    this.baseMode = deps.baseMode ?? {
+      capability: () => hardwareClient.getLocoCapability(),
+      measuredFsmId: () => hardwareClient.getMeasuredFsmId(),
+    };
 
     // Every FSM change the blocks make goes through `commandFsm`, so the
     // controller always knows which FSM the base is in. That is the difference
@@ -1559,7 +1583,7 @@ export class AgentModeController {
   }
 
   /**
-   * True while the base sits in a non-locomoting FSM (damp/sit/zero-torque) —
+   * True while the base sits in a non-locomoting FSM (damp/sit/zero-torque/lock stand) —
    * after an E-Stop, until a `posture` block with pose "stand" re-arms it.
    * Locomotion commands are still ACKed in this state and do nothing, so this
    * flag is what stops the UI and the planner from being lied to. Clearing the
@@ -1567,7 +1591,18 @@ export class AgentModeController {
    * explicit operator action, never a side effect of a UI click.
    */
   isDamped(): boolean {
-    return this.lastFsmId !== null && G1_NON_LOCOMOTING_FSM_IDS.has(this.lastFsmId);
+    // TASK-398: the MEASURED mode wins whenever the sidecar has a fresh reading
+    // — on 2026-10-17 this said "not damped" about a robot hanging in damp,
+    // because nothing here had commanded it. The last COMMANDED id is the
+    // fallback for a sidecar that measures nothing (the sim, gate off).
+    const measured = this.baseMode.measuredFsmId();
+    const fsmId = measured ?? this.lastFsmId;
+    return fsmId !== null && G1_NON_LOCOMOTING_FSM_IDS.has(fsmId);
+  }
+
+  /** The sidecar would execute a StopMove / raw FSM id (gate `full`, or unknown). */
+  private sidecarMovesBase(): boolean {
+    return this.baseMode.capability().moveEnabled !== false;
   }
 
   getScene(): SceneMemory | null {
@@ -2044,7 +2079,7 @@ export class AgentModeController {
    * base, and delegates to the existing SafetyMonitor path so the rest of the
    * system sees a normal emergency stop.
    */
-  async estop(reason: string): Promise<AgentEstopResult> {
+  async estop(reason: string, opts: AgentEstopOptions = {}): Promise<AgentEstopResult> {
     const wasRunning = this.isRunning();
     this.estopActive = true;
     this.abortRequested = true;
@@ -2089,24 +2124,49 @@ export class AgentModeController {
       this.emit('agent:plan:finished', { plan: clonePlan(plan) });
     }
 
-    // Hardware path: zero the base velocity, then drop into damping. Both are
-    // best-effort, and delivery is reported to the CALLER, not just the log —
-    // a StopMove/Damp the sidecar never acked means the base may still be
-    // executing up to a minute of commanded velocity, and every UI upstream
-    // renders whatever this return value claims.
-    const stop = await this.loco.action('stop');
-    if (!stop.ok) console.error(`[AgentMode] E-Stop StopMove failed: ${stop.error}`);
-    const damp = await this.commandFsm(G1_FSM_DAMP);
-    if (!damp.ok) console.error(`[AgentMode] E-Stop Damp failed: ${damp.error}`);
-    const delivered = stop.ok && damp.ok;
-    const deliveryError = [
-      ...(stop.ok ? [] : [`StopMove: ${stop.error ?? 'failed'}`]),
-      ...(damp.ok ? [] : [`Damp: ${damp.error ?? 'failed'}`]),
-    ].join('; ');
+    // Hardware path, TASK-398 order: the safety net FIRST. It owns the E-stop
+    // state the rest of the fleet reads, and its actuation sends the sidecar's
+    // `/estop` — latch, disarm the arms, THEN damp — as one sequence in the
+    // one process that holds both arm_sdk and the LocoClient. It used to run
+    // last, after a StopMove and a Damp of our own: damp-before-disarm.
+    // Optional result: test doubles are partial.
+    //
+    // A caller that has ALREADY triggered and awaited that path (the platform
+    // `POST /safety/estop`) hands its result in instead: triggering it a second
+    // time would send a second `/estop`, and on a slow sport service two
+    // back-to-back damps outlast the server's E-stop timeout — the operator was
+    // told the stop failed while the robot was latched and disarmed.
+    const rsm = this.robotStateManager;
+    const hardware = opts.hardwareStop !== undefined
+      ? opts.hardwareStop
+      : rsm
+        ? await Promise.resolve(rsm.triggerEmergencyStop('local', `Agent Mode E-Stop: ${reason}`))
+          .then((r) => (r && typeof r === 'object' ? r : null), () => null)
+        : null;
+    if (hardware?.damped) this.noteBaseDamped();
 
-    // Keep the existing safety net in the loop — it owns the E-stop state the
-    // rest of the fleet reads.
-    this.robotStateManager?.triggerEmergencyStop('local', `Agent Mode E-Stop: ${reason}`);
+    // The legacy StopMove + Damp, only where the sidecar walks (the sim, gate
+    // `full`, or a sidecar that reports no gate) and did not already damp.
+    // Under `G1_LOCO_ENABLED=fsm` neither call may leave the agent.
+    // Delivery is reported to the CALLER, not just the log — every UI
+    // upstream renders whatever this return value claims.
+    let delivered: boolean;
+    let deliveryError: string;
+    if (this.sidecarMovesBase() && !hardware?.damped) {
+      const stop = await this.loco.action('stop');
+      if (!stop.ok) console.error(`[AgentMode] E-Stop StopMove failed: ${stop.error}`);
+      const damp = await this.commandFsm(G1_FSM_DAMP);
+      if (!damp.ok) console.error(`[AgentMode] E-Stop Damp failed: ${damp.error}`);
+      delivered = stop.ok && damp.ok;
+      deliveryError = [
+        ...(stop.ok ? [] : [`StopMove: ${stop.error ?? 'failed'}`]),
+        ...(damp.ok ? [] : [`Damp: ${damp.error ?? 'failed'}`]),
+      ].join('; ');
+    } else {
+      delivered = hardware?.damped === true;
+      deliveryError = hardware?.dampError ?? 'the sidecar did not damp the robot';
+      if (!delivered) console.error(`[AgentMode] E-Stop: robot NOT damped — ${deliveryError}`);
+    }
 
     // `reset()`, not `release('agent')`. An E-Stop lands at any moment,
     // including the middle of a `vla_skill` block, and there the lock is lent
@@ -2215,9 +2275,19 @@ export class AgentModeController {
    *   `isDamped()`, the persisted snapshot and the `agent:state:changed` event
    *   all follow.
    */
-  async standBase(): Promise<LocoResult> {
+  async standBase(): Promise<LocoResult & { code?: string }> {
     if (this.estopActive || this.robotStateManager?.isEStopTriggered()) {
       return { ok: false, error: 'an emergency stop is latched — clear it before standing the base' };
+    }
+    // TASK-398: on a sidecar with mode control the 1 -> 500 jump is refused —
+    // a real G1 stands up in two confirmed steps (Stand, then Balance) through
+    // the mode control, with a person watching it.
+    if (this.baseMode.capability().gate === 'fsm') {
+      return {
+        ok: false,
+        code: 'two_step_required',
+        error: 'this robot stands up in two steps — use Stand up, then Balance, in the mode control',
+      };
     }
     const stand = G1_FSM_IDS.stand;
     if (stand === undefined) {
@@ -2415,6 +2485,18 @@ export class AgentModeController {
     if (!failure) return {};
     this.lastBlockFailure = null;
     return { lastFailure: { kind: failure.kind, message: failure.message } };
+  }
+
+  /**
+   * The sidecar damped the robot (its `/estop`, TASK-398): record it like a
+   * commanded damp, so `isDamped()`, the persisted snapshot and the UI banner
+   * follow even when the measured mode is not yet polled.
+   */
+  private noteBaseDamped(): void {
+    const wasDamped = this.isDamped();
+    this.lastFsmId = G1_FSM_DAMP;
+    this.persistSafetyState();
+    if (wasDamped !== this.isDamped()) this.emit('agent:state:changed');
   }
 
   /**

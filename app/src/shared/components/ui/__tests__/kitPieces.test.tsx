@@ -2,7 +2,7 @@
  * @file kitPieces.test.tsx
  * @description Tests for the small kit pieces: test ids on menu items and stat
  *              tiles, the indeterminate ProgressBar, Panel's ref, ChoiceCard,
- *              cssColor and the focusRing export
+ *              Disclosure, cssColor and the focusRing export
  * @feature shared
  */
 
@@ -14,6 +14,7 @@ import {
   Button,
   ChoiceCard,
   ChoiceCardGroup,
+  Disclosure,
   DropdownMenu,
   Panel,
   ProgressBar,
@@ -124,5 +125,30 @@ describe('focusRing', () => {
   it('is exported for elements that are not kit components', () => {
     expect(focusRing).toContain('focus-visible:outline-primary');
     expect(focusRingInset).toContain('-outline-offset-2');
+  });
+});
+
+describe('Disclosure', () => {
+  it('starts closed with its summary, opens on click and hides the summary', async () => {
+    const user = userEvent.setup();
+    render(<Disclosure title="Advanced options" summary="Frame rate 30 fps"><p>Inside</p></Disclosure>);
+    const button = screen.getByRole('button', { name: /Advanced options/ });
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('Frame rate 30 fps')).toBeInTheDocument();
+    expect(screen.queryByText('Inside')).not.toBeInTheDocument();
+    await user.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Inside')).toBeVisible();
+    expect(screen.queryByText('Frame rate 30 fps')).not.toBeInTheDocument();
+    expect(document.getElementById(button.getAttribute('aria-controls')!)).toContainElement(screen.getByText('Inside'));
+  });
+
+  it('is controllable', async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    render(<Disclosure title="More" open={false} onOpenChange={onOpenChange}><p>Inside</p></Disclosure>);
+    await user.click(screen.getByRole('button', { name: 'More' }));
+    expect(onOpenChange).toHaveBeenCalledWith(true);
+    expect(screen.queryByText('Inside')).not.toBeInTheDocument();
   });
 });

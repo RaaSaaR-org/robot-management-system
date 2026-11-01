@@ -5,6 +5,8 @@ import fs from "fs";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+// @ts-expect-error process is a nodejs global
+const proxyTarget: string = process.env.VITE_PROXY_TARGET || 'http://localhost:3001';
 
 // White-label: resolve brand name for HTML title injection
 function brandHtmlPlugin(): Plugin {
@@ -61,9 +63,14 @@ export default defineConfig(async () => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**", "**/server/**", "**/packages/**"],
     },
+    // `/api` (HTTP AND WebSocket — the A2A event socket and the same-origin
+    // teleop socket, TASK-393) goes to the API server, so a browser only ever
+    // needs this one port. That is what makes a Meta Quest on
+    // `adb reverse tcp:1420 tcp:1420` work: the headset reaches nothing else.
+    // VITE_PROXY_TARGET points a second dev server at another API instance.
     proxy: {
-      '/api': { target: 'http://localhost:3001', changeOrigin: true, ws: true },
-      '/.well-known': { target: 'http://localhost:3001', changeOrigin: true },
+      '/api': { target: proxyTarget, changeOrigin: true, ws: true },
+      '/.well-known': { target: proxyTarget, changeOrigin: true },
     },
   },
 }));

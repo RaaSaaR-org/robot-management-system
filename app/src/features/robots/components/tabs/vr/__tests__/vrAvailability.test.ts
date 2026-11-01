@@ -74,7 +74,8 @@ describe('headsetTargets', () => {
     const t = headsetTargets(loc({ hostname: '192.168.1.42' }));
     expect(t[0].id).toBe('usb');
     expect(t[0].url).toBe('http://localhost:1420/robots/r1?tab=teleop');
-    expect(t[0].command).toBe('adb reverse tcp:1420 tcp:1420');
+    expect(t[0].command).toBe('./scripts/quest-connect.sh');
+    expect(t[0].fallbackCommand).toBe('adb reverse tcp:1420 tcp:1420');
     expect(t[0].insecure).toBe(false);
   });
 
@@ -122,5 +123,13 @@ describe('headsetTargets', () => {
       port: '1420',
     } as unknown as LocationLike;
     expect(headsetTargets(partial)[0].url).toBe('http://localhost:1420');
+  });
+});
+
+describe('quest-connect.sh hint (TASK-393)', () => {
+  it('passes a non-default dev port to the script', () => {
+    const t = headsetTargets({ protocol: 'http:', hostname: 'localhost', port: '1430', pathname: '/', search: '', hash: '' });
+    expect(t[0].command).toBe('./scripts/quest-connect.sh --port 1430');
+    expect(t[0].fallbackCommand).toBe('adb reverse tcp:1430 tcp:1430');
   });
 });

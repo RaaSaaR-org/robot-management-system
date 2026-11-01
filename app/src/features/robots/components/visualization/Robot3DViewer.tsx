@@ -4,7 +4,7 @@
  * @feature robots
  */
 
-import { Suspense, memo } from 'react';
+import { Suspense, memo, type ReactNode } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Grid, Center } from '@react-three/drei';
 import { RobotModel } from './RobotModel';
@@ -31,6 +31,11 @@ export interface Robot3DViewerProps {
    * waiting for the 2 s `jointStates` prop.
    */
   robotId?: string;
+  /**
+   * Scene content mounted inside one URDF link, in that link's frame (TASK-414:
+   * the operator's ghost hands in `torso_link`). See `RobotModel`.
+   */
+  linkOverlay?: { link: string; node: ReactNode };
   /** Additional CSS classes */
   className?: string;
 }
@@ -57,6 +62,7 @@ export const Robot3DViewer = memo(function Robot3DViewer({
   jointStates,
   isAnimating = true,
   robotId,
+  linkOverlay,
   className,
 }: Robot3DViewerProps) {
   const robotType = normalizeRobotType(rawRobotType);
@@ -72,7 +78,12 @@ export const Robot3DViewer = memo(function Robot3DViewer({
     [2, 1.5, 2];
 
   return (
-    <div className={cn('relative h-full min-h-[300px] w-full overflow-hidden rounded-control', className)}>
+    <div
+      className={cn('relative h-full min-h-[300px] w-full overflow-hidden rounded-control', className)}
+      data-testid="robot-3d-viewer"
+      data-fast-channel={robotId ? 'on' : 'off'}
+      data-robot-id={robotId}
+    >
       <ViewerGuard className="rounded-none">
         <Canvas
           camera={{ position: cameraPosition, fov: 50 }}
@@ -98,6 +109,7 @@ export const Robot3DViewer = memo(function Robot3DViewer({
                 jointStates={jointStates}
                 isAnimating={isAnimating}
                 robotId={robotId}
+                linkOverlay={linkOverlay}
               />
             </Center>
 

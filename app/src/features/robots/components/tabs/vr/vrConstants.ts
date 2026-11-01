@@ -23,6 +23,16 @@ export const SEND_INTERVAL_S = 0.05;
  * 1.7x. Use `smoothTowards(current, target, POSE_TAU_S, dt)`.
  */
 export const SMOOTHING = 0.25;
+/**
+ * Where the WebXR input profiles (controller layouts) are served from: the
+ * app's own `public/xr-profiles/`, not the library's jsdelivr default, so a
+ * headset on a network without internet still gets its controllers. Absolute,
+ * because the loader resolves files with `new URL(file, base)`.
+ */
+export const XR_PROFILES_BASE =
+  typeof window === 'undefined'
+    ? '/xr-profiles/'
+    : new URL(`${import.meta.env.BASE_URL ?? '/'}xr-profiles/`, window.location.origin).href;
 /** Grip (squeeze) threshold above which an arm is "engaged". */
 export const GRIP_THRESHOLD = 0.5;
 /**

@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest';
 // report 'pressed', the left stick would start ending an episode every time the
 // operator walked the robot — that is the regression this import exists to catch.
 import { updateXRControllerGamepadState } from '@pmndrs/xr/internals';
-import { stickAxis, pickDriveStick, isStickClick } from '../vrDrive';
+import { stickAxis, pickDriveStick, isStickClick, shouldSendDrive } from '../vrDrive';
 import { STICK_DEADZONE } from '../vrConstants';
 
 describe('stickAxis', () => {
@@ -145,5 +145,31 @@ describe('isStickClick', () => {
     const resting = readStick([0, 0], false);
     expect(resting?.state).toBe('default');
     expect(isStickClick(resting)).toBe(false);
+  });
+});
+
+describe('shouldSendDrive (TASK-398)', () => {
+  const ON = { sinceLastS: 0.2, streaming: true, moveEnabled: true, moving: true, wasDriving: false, intervalS: 0.1 };
+
+  it('sends while moving, at the send interval', () => {
+    expect(shouldSendDrive(ON)).toBe(true);
+    expect(shouldSendDrive({ ...ON, sinceLastS: 0.05 })).toBe(false);
+  });
+
+  it('owes exactly one zero after driving', () => {
+    expect(shouldSendDrive({ ...ON, moving: false, wasDriving: true })).toBe(true);
+    expect(shouldSendDrive({ ...ON, moving: false, wasDriving: false })).toBe(false);
+  });
+
+  it('sends nothing — no yaw, no stick, no zero — once the agent says the base does not walk', () => {
+    for (const moving of [true, false]) {
+      for (const wasDriving of [true, false]) {
+        expect(shouldSendDrive({ ...ON, moveEnabled: false, moving, wasDriving, sinceLastS: 10 })).toBe(false);
+      }
+    }
+  });
+
+  it('sends nothing while the stream is gated', () => {
+    expect(shouldSendDrive({ ...ON, streaming: false })).toBe(false);
   });
 });

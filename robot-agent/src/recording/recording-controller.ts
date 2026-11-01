@@ -14,6 +14,9 @@ import { config } from '../config/config.js';
 import {
   EpisodeRecorder,
   RecordingError,
+  type BeginEpisodeResult,
+  type EndEpisodeResult,
+  type EpisodeEndReason,
   type RecordingStatus,
   type StartRecordingRequest,
   type StopRecordingResult,
@@ -74,7 +77,9 @@ export class RecordingController {
       scratchRoot: defaultScratchRoot(config.robotId),
       datasetRoot: defaultDatasetRoot(config.robotId),
       hooks: {
-        getCommanded: () => sm.getTeleopPositions(),
+        // TASK-393: what the sidecar ACCEPTED, not the operator's intent — on a
+        // real robot those differ whenever it is not armed or refuses a pose.
+        getCommanded: () => sm.getRecordedCommand(),
         isTeleopActive: () => sm.isTeleopActive(),
         isEStopTriggered: () => sm.isEStopTriggered(),
         // NOT `getJointStates()`: that answers from the 2 s poll cache, so a
@@ -82,6 +87,8 @@ export class RecordingController {
         // and the commanded/measured distinction would be an artefact of the
         // cache rather than of the robot.
         getMeasured: () => hardwareClient.getJointMapNow(),
+        // TASK-415: with the sample clock, so a repeated state is counted.
+        getMeasuredSample: () => hardwareClient.getMeasuredSample(),
         snapshot: (camera, opts) =>
           hardwareClient.snapshotRaw(camera, { shadows: opts.shadows, quality: opts.quality }),
         listCameras: () => hardwareClient.getCameras(),
@@ -97,6 +104,18 @@ export class RecordingController {
 
   async nextEpisode(): Promise<number> {
     return this.ensure().nextEpisode();
+  }
+
+  async beginEpisode(): Promise<BeginEpisodeResult> {
+    return this.ensure().beginEpisode();
+  }
+
+  endEpisode(reason: EpisodeEndReason): EndEpisodeResult {
+    return this.ensure().endEpisode(reason);
+  }
+
+  async episodeThumbnail(index: number): Promise<Buffer | null> {
+    return this.ensure().episodeThumbnail(index);
   }
 
   pause(): void {

@@ -24,12 +24,14 @@ import { agentModeController } from '../agent-mode/agent-mode-controller.js';
 import { recordingController } from '../recording/recording-controller.js';
 import { RecordingError } from '../recording/EpisodeRecorder.js';
 import { hardwareClient, getSidecarUrl } from '../hardware/HardwareClient.js';
+import { readCameraList, SIDECAR_UNREACHABLE_DETAIL } from '../hardware/camera-list.js';
 import http from 'node:http';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import { INTENT_MAX_CHARS } from '../agent-mode/intents.js';
 import { getIdentityStore } from '../agent-mode/identity.js';
 import { lastPlatformAuthRejection } from '../utils/platform-auth.js';
 import { controlLease, type ControlLeaseRegistry } from '../control-lease/control-lease.js';
+import { isBaseModeCommand } from '../hardware/base-mode.js';
 import { refuseIfLeaseHeld } from '../control-lease/motion-guard.js';
 
 /**
@@ -884,11 +886,16 @@ export function createRestRoutes(
     const { reason, triggeredBy } = req.body;
     const stopReason = reason || 'Remote E-stop triggered';
 
-    // Latched FIRST: it is synchronous and cannot fail, while the Agent Mode
-    // stop below goes over HTTP to the sidecar. The latch keeps the real trigger
-    // source because SafetyMonitor records the first trigger and ignores the
-    // 'local' one that agentModeController.estop() raises a moment later.
-    robotStateManager.triggerEmergencyStop(triggeredBy || 'remote', stopReason);
+    // Latched FIRST, and its hardware half AWAITED (TASK-398): the trigger
+    // latches synchronously and starts the sidecar's `/estop` — latch, disarm
+    // the arms, THEN damp. Agent Mode's stop runs only after it, in sequence:
+    // the two used to race, and Agent Mode's own StopMove + Damp could land
+    // before the arms were disarmed. The latch keeps the real trigger source
+    // because SafetyMonitor records the first trigger and ignores the 'local'
+    // one that agentModeController.estop() raises a moment later.
+    const hardwareStop = await Promise.resolve(
+      robotStateManager.triggerEmergencyStop(triggeredBy || 'remote', stopReason),
+    ).catch(() => null);
 
     // TASK-194: the platform E-Stop has to reach Agent Mode. SafetyMonitor's
     // stop only zeroes the simulated speed and raises a warning — it never
@@ -898,7 +905,11 @@ export function createRestRoutes(
     let agentModeStopped = false;
     let agentModeError: string | undefined;
     try {
-      const result = await agentModeController.estop(`Platform E-Stop: ${stopReason}`);
+      // The hardware half has run above: hand its result over so Agent Mode
+      // does not send the sidecar a second `/estop` (and wait on it again).
+      const result = await agentModeController.estop(`Platform E-Stop: ${stopReason}`, {
+        hardwareStop,
+      });
       agentModeStopped = result.stopped;
       // The stop latched but StopMove/Damp never reached the robot — that is a
       // delivery failure, and hiding it renders an un-damped robot as stopped.
@@ -920,6 +931,8 @@ export function createRestRoutes(
       // Honest report of what this stop actually reached.
       agentModeStopped,
       ...(agentModeError ? { agentModeError } : {}),
+      // TASK-398: what the sidecar did — arms disarmed, robot damped or not.
+      ...(hardwareStop ? { hardwareStop } : {}),
       ...estopState,
       // TASK-382: the status the stop left the robot in, so the server can
       // mirror it at once instead of on its next 30 s health check.
@@ -984,6 +997,99 @@ export function createRestRoutes(
         ...estopState,
       });
     }
+  });
+
+  // ============================================================================
+  // ROBOT MODE (TASK-398) — limp / stand / balance without the Unitree remote
+  // ============================================================================
+  //
+  // The sidecar is the authority for the transition table and the E-stop order
+  // (g1_loco_mode.py): it measures the FSM, refuses a stand that is not from
+  // limp or a balance before a settled stand, refuses both while the arms are
+  // engaged or its latch is set, and confirms every change. This route adds
+  // the lease, the agent's own latch and Agent Mode on top — it cannot bypass
+  // the sidecar.
+
+  // GET /robots/:id/base/mode — capability, measured mode, latches
+  router.get('/robots/:id/base/mode', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({ code: 'ROBOT_NOT_FOUND', message: `This agent serves robot ${robot.id}` });
+      return;
+    }
+    // A fresh reading for a 1 Hz UI poll; the cached /state one is up to 2 s old.
+    const live = await hardwareClient.fetchLocoMode();
+    const arm = hardwareClient.getArmStatus();
+    res.json({
+      robotId: robot.id,
+      capability: hardwareClient.getLocoCapability(),
+      base: hardwareClient.getBaseState(),
+      inFlight: live?.inFlight ?? null,
+      estopLatched: robotStateManager.isEStopTriggered(),
+      sidecarEstopLatched: live?.estopLatched ?? arm.estopLatched,
+      armed: arm.armed,
+      armWeight: arm.armWeight,
+      agentModeRunning: agentModeController.isRunning(),
+      hardwareStop: robotStateManager.getLastHardwareStop(),
+    });
+  });
+
+  // POST /robots/:id/base/mode {mode, leaseId, generation}
+  router.post('/robots/:id/base/mode', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({ code: 'ROBOT_NOT_FOUND', message: `This agent serves robot ${robot.id}` });
+      return;
+    }
+    const body = (req.body ?? {}) as { mode?: unknown; leaseId?: unknown; generation?: unknown };
+    const mode = body.mode;
+    if (!isBaseModeCommand(mode)) {
+      res.status(400).json({ code: 'bad_mode', error: 'mode must be one of limp, stand, balance' });
+      return;
+    }
+    // The lease: a presented lease must be the installed one; none at all is
+    // refused only while leases are enforced (CONTROL_LEASE_REQUIRED).
+    const hasLease = body.leaseId !== undefined || body.generation !== undefined;
+    if (hasLease) {
+      const ok = typeof body.leaseId === 'string' && Number.isInteger(body.generation)
+        && leases.verify(body.leaseId, body.generation as number);
+      if (!ok) {
+        res.status(403).json({ code: 'lease_invalid', error: 'the control lease presented is not the one installed on this robot' });
+        return;
+      }
+    } else if (leases.observe().enforced) {
+      res.status(403).json({ code: 'lease_required', error: 'take control first — mode changes need the control lease' });
+      return;
+    }
+    const capability = hardwareClient.getLocoCapability();
+    if (capability.gate !== 'fsm' && capability.gate !== 'full') {
+      res.status(409).json({
+        code: 'mode_control_unavailable',
+        error: capability.gate === 'off'
+          ? 'mode control is off on this robot\'s sidecar (G1_LOCO_ENABLED)'
+          : 'this robot\'s sidecar does not offer mode control',
+      });
+      return;
+    }
+    if (mode !== 'limp' && robotStateManager.isEStopTriggered()) {
+      res.status(409).json({ code: 'estop_latched', error: 'reset the E-stop first (Limp is still allowed)' });
+      return;
+    }
+    if (mode !== 'limp' && agentModeController.isRunning()) {
+      res.status(409).json({ code: 'agent_mode_running', error: 'an Agent Mode plan is running — stop it first' });
+      return;
+    }
+    const from = hardwareClient.getBaseState();
+    const result = await hardwareClient.locoMode(mode);
+    console.log(
+      `[REST] base mode ${mode} (from ${from?.mode ?? 'unknown'}${from?.fsmId != null ? `/${from.fsmId}` : ''}) ` +
+        `-> ${result.status} ${result.ok ? 'ok' : result.code ?? 'failed'}`,
+    );
+    res.status(result.status === 0 ? 502 : result.status).json({
+      ...result.body,
+      ...(result.code ? { code: result.code } : {}),
+      fromMode: from?.mode ?? 'unknown',
+    });
   });
 
   // GET /robots/:id/safety/events - Get safety event log
@@ -1349,14 +1455,17 @@ export function createRestRoutes(
   };
 
   // POST /robots/:id/recording/start
-  //   {sessionId, fps?, cameras?, task?, shadows?, inputMode?}
+  //   {sessionId, fps?, cameras?, task?, shadows?, inputMode?,
+  //    startBetweenTakes?, episodeTimeS?}
   router.post('/robots/:id/recording/start', async (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
     const sessionId = req.body?.sessionId;
     if (typeof sessionId !== 'string' || !sessionId.trim()) {
       res.status(400).json({
         code: 'INVALID_REQUEST',
-        message: 'body must be {sessionId: string, fps?, cameras?, task?, shadows?, inputMode?}',
+        message:
+          'body must be {sessionId: string, fps?, cameras?, task?, shadows?, inputMode?, ' +
+          'startBetweenTakes?, episodeTimeS?}',
       });
       return;
     }
@@ -1371,6 +1480,7 @@ export function createRestRoutes(
       ['task', req.body?.task, 'string'],
       ['shadows', req.body?.shadows, 'boolean'],
       ['inputMode', req.body?.inputMode, 'string'],
+      ['startBetweenTakes', req.body?.startBetweenTakes, 'boolean'],
     ] as const) {
       if (wrongType(name, value, want)) {
         res.status(400).json({ code: 'INVALID_REQUEST', message: `${name} must be a ${want}` });
@@ -1382,6 +1492,19 @@ export function createRestRoutes(
       res.status(400).json({ code: 'INVALID_REQUEST', message: 'cameras must be string[]' });
       return;
     }
+    // null is a legal "no limit", so it cannot go through `wrongType`.
+    const episodeTimeS = req.body?.episodeTimeS;
+    if (
+      episodeTimeS !== undefined &&
+      episodeTimeS !== null &&
+      !(typeof episodeTimeS === 'number' && Number.isFinite(episodeTimeS) && episodeTimeS >= 0)
+    ) {
+      res.status(400).json({
+        code: 'INVALID_REQUEST',
+        message: 'episodeTimeS must be a non-negative number or null',
+      });
+      return;
+    }
     try {
       const status = await recordingController.start({
         sessionId: sessionId.trim(),
@@ -1390,6 +1513,10 @@ export function createRestRoutes(
         ...(typeof req.body?.task === 'string' ? { task: req.body.task } : {}),
         ...(typeof req.body?.shadows === 'boolean' ? { shadows: req.body.shadows } : {}),
         ...(typeof req.body?.inputMode === 'string' ? { inputMode: req.body.inputMode } : {}),
+        ...(typeof req.body?.startBetweenTakes === 'boolean'
+          ? { startBetweenTakes: req.body.startBetweenTakes }
+          : {}),
+        ...(episodeTimeS !== undefined ? { episodeTimeS: episodeTimeS as number | null } : {}),
       });
       res.json({ ok: true, ...status });
     } catch (err) {
@@ -1402,6 +1529,60 @@ export function createRestRoutes(
     if (wrongRobot(req, res)) return;
     try {
       res.json({ ok: true, episodeIndex: await recordingController.nextEpisode() });
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  // POST /robots/:id/recording/episodes/begin -> open a take (TASK-402)
+  //   200 {ok, episodeIndex, phase, startedAtMs} | 409 {ok:false, code}
+  router.post('/robots/:id/recording/episodes/begin', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    try {
+      const result = await recordingController.beginEpisode();
+      res.status(result.ok ? 200 : 409).json(result);
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  // POST /robots/:id/recording/episodes/end {reason?: 'operator'|'time_limit'}
+  //   200 {ok, episodeIndex, phase, report} | 409 {ok:false, code}
+  router.post('/robots/:id/recording/episodes/end', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const reason = req.body?.reason ?? 'operator';
+    if (reason !== 'operator' && reason !== 'time_limit') {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: "reason must be 'operator' or 'time_limit'" });
+      return;
+    }
+    try {
+      const result = recordingController.endEpisode(reason);
+      res.status(result.ok ? 200 : 409).json(result);
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  // GET /robots/:id/recording/episodes/:index/thumbnail -> image/jpeg
+  //   The middle frame of that take's first camera, from scratch — only while
+  //   the session lives. 404 {code:'no_thumbnail'} otherwise.
+  router.get('/robots/:id/recording/episodes/:index/thumbnail', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    // Strict integer, as for discard: the index is the only input, and it never
+    // becomes part of a path — the recorder serves the file it wrote itself.
+    const raw = req.params.index ?? '';
+    if (!/^\d+$/.test(raw)) {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'index must be a non-negative integer' });
+      return;
+    }
+    try {
+      const jpeg = await recordingController.episodeThumbnail(Number.parseInt(raw, 10));
+      if (!jpeg) {
+        res.status(404).json({ code: 'no_thumbnail', message: `take ${raw} has no thumbnail` });
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      res.type('image/jpeg').send(jpeg);
     } catch (err) {
       recordingError(res, err);
     }
@@ -1722,50 +1903,34 @@ export function createRestRoutes(
   // has no source behind it instead of watching a stream fail silently.
   router.get('/robots/:id/cameras', (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
-    const upstream = http.get(`${getSidecarUrl()}/cameras`, (stream) => {
-      const chunks: Buffer[] = [];
-      stream.on('data', (c: Buffer) => chunks.push(c));
-      stream.on('end', () => {
-        if (stream.statusCode !== 200) {
-          res.status(502).json({
-            code: 'CAMERA_UNAVAILABLE',
-            message: `sidecar answered ${stream.statusCode} for the camera list`,
-          });
-          return;
-        }
-        try {
-          const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-          res.json({
-            cameras: Array.isArray(body?.cameras) ? body.cameras : [],
-            source: body?.source ?? null,
-            ...(body?.detail ? { detail: String(body.detail) } : {}),
-          });
-        } catch {
-          res.status(502).json({
-            code: 'CAMERA_UNAVAILABLE',
-            message: 'sidecar camera list was not JSON',
-          });
-        }
-      });
-      stream.on('error', () => {
-        if (!res.headersSent) {
-          res.status(502).json({ code: 'CAMERA_UNAVAILABLE', message: 'camera list read failed' });
-        }
-      });
-    });
-    upstream.on('error', () => {
-      if (!res.headersSent) {
-        // No sidecar at all — a simulation-only agent, or one whose sidecar is
-        // down. Not an error the operator can act on inside the app, so answer
-        // with an empty list and say so rather than a 502 the cockpit would
-        // have to translate anyway.
-        res.json({ cameras: [], source: null, detail: 'cannot reach the hardware sidecar' });
-      }
-    });
     // Same teardown the stream route below does: the cockpit polls this every
     // 15 s, and resolving a source can take a second or more, so a viewer who
     // navigates away mid-poll must not leave the sidecar request dangling.
-    res.on('close', () => upstream.destroy());
+    const abort = new AbortController();
+    res.on('close', () => abort.abort());
+    void readCameraList({ signal: abort.signal }).then((list) => {
+      if (res.headersSent) return;
+      switch (list.kind) {
+        case 'ok':
+          res.json({ cameras: list.cameras, source: list.source, ...(list.detail ? { detail: list.detail } : {}) });
+          return;
+        case 'bad_status':
+          res.status(502).json({ code: 'CAMERA_UNAVAILABLE', message: `sidecar answered ${list.status} for the camera list` });
+          return;
+        case 'bad_body':
+          res.status(502).json({ code: 'CAMERA_UNAVAILABLE', message: 'sidecar camera list was not JSON' });
+          return;
+        case 'read_failed':
+          res.status(502).json({ code: 'CAMERA_UNAVAILABLE', message: 'camera list read failed' });
+          return;
+        case 'unreachable':
+          // No sidecar at all — a simulation-only agent, or one whose sidecar is
+          // down. Not an error the operator can act on inside the app, so answer
+          // with an empty list and say so rather than a 502 the cockpit would
+          // have to translate anyway.
+          res.json({ cameras: [], source: null, detail: SIDECAR_UNREACHABLE_DETAIL });
+      }
+    });
   });
 
   // GET /robots/:id/camera/:name/stream — live MJPEG, proxied from the sidecar.

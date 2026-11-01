@@ -8,6 +8,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   composeHud,
+  hudBaseLine,
+  hudArmSuffix,
+  hudHandWarning,
+  hudNeedsRelease,
+  sameClutch,
+  HUD_RELEASE_GRIP,
+  HUD_USE_CONTROLLERS,
   hudMode,
   isPoseFrame,
   markerAppearance,
@@ -16,7 +23,9 @@ import {
   onStateReceived,
   HUD_COLORS,
   HUD_MAX_LINES,
+  HUD_STOP_TAG,
   RTT_EMA_ALPHA,
+  finishWristHud,
   type HudState,
 } from '../vrHud';
 
@@ -24,6 +33,8 @@ const BASE: HudState = {
   estopLatched: false,
   link: 'live',
   msSinceState: 42,
+  // Poses going out: LINK carries its age (TASK-417 — idle reads LINK OK).
+  posesOutstanding: true,
   armLeft: false,
   armRight: false,
   driving: false,
@@ -105,14 +116,21 @@ describe('composeHud', () => {
     expect(composeHud({ ...BASE, recording: null }).some((l) => l.id === 'rec')).toBe(false);
   });
 
-  it('puts REC first while an episode is being captured', () => {
-    const lines = composeHud({ ...BASE, recording: { episode: 3, frames: 412 } });
+  it('puts REC first while a take is being captured, with the server-clock timer', () => {
+    const lines = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 7, elapsedS: 42.6 } });
     expect(lines[0].id).toBe('rec');
-    expect(lines[0].text).toBe('REC ● ep 3 · 412 fr');
+    expect(lines[0].text).toBe('REC ● T7 00:42');
+  });
+
+  it('reads READY and the next take between takes, in the same slot', () => {
+    const lines = composeHud({ ...BASE, recording: { phase: 'between', takeNumber: 8, elapsedS: null } });
+    expect(lines[0]).toMatchObject({ id: 'rec', text: 'READY T8', color: HUD_COLORS.ok });
+    expect(lines.length).toBeLessThanOrEqual(HUD_MAX_LINES - 1);
+    expect(lines.some((l) => l.id === 'turn')).toBe(false);
   });
 
   it('colours REC red — what every camera ever built means by "capturing"', () => {
-    const lines = composeHud({ ...BASE, recording: { episode: 1, frames: 0 } });
+    const lines = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 1, elapsedS: 5 } });
     expect(lines[0].color).toBe(HUD_COLORS.bad);
   });
 
@@ -124,7 +142,7 @@ describe('composeHud', () => {
   it('drops TURN to pay for REC rather than overflowing the plate', () => {
     const driving = { ...BASE, driving: true, vx: 0.3, omega: -0.4 };
     expect(composeHud(driving).map((l) => l.id)).toEqual(['link', 'mode', 'speed', 'turn']);
-    expect(composeHud({ ...driving, recording: { episode: 2, frames: 9 } }).map((l) => l.id)).toEqual(
+    expect(composeHud({ ...driving, recording: { phase: 'capturing', takeNumber: 2, elapsedS: 5 } }).map((l) => l.id)).toEqual(
       ['rec', 'link', 'mode', 'speed'],
     );
   });
@@ -133,8 +151,8 @@ describe('composeHud', () => {
     const states: HudState[] = [
       BASE,
       { ...BASE, armLeft: true, armRight: true, driving: true, vx: 1, vy: 1, omega: 1 },
-      { ...BASE, recording: { episode: 12, frames: 99999 } },
-      { ...BASE, estopLatched: true, recording: { episode: 12, frames: 99999 } },
+      { ...BASE, recording: { phase: 'capturing', takeNumber: 12, elapsedS: 5 } },
+      { ...BASE, estopLatched: true, recording: { phase: 'capturing', takeNumber: 12, elapsedS: 5 } },
     ];
     for (const state of states) {
       expect(composeHud(state).length).toBeLessThanOrEqual(HUD_MAX_LINES);
@@ -148,7 +166,7 @@ describe('composeHud', () => {
     const lines = composeHud({
       ...BASE,
       estopLatched: true,
-      recording: { episode: 3, frames: 412 },
+      recording: { phase: 'capturing', takeNumber: 3, elapsedS: 5 },
     });
     expect(lines).toHaveLength(2);
     expect(lines[0].text).toBe('E-STOP LATCHED');
@@ -156,14 +174,19 @@ describe('composeHud', () => {
     expect(lines.some((l) => l.id === 'rec')).toBe(false);
   });
 
-  it('shows -- rather than NaN, and never a negative count, on the REC line', () => {
-    const lines = composeHud({ ...BASE, recording: { episode: Number.NaN, frames: -3 } });
-    expect(lines[0].text).toBe('REC ● ep -- · 0 fr');
+  it('drops the timer for a recorder without explicit takes rather than freezing it at 00:00', () => {
+    const lines = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 3, elapsedS: null } });
+    expect(lines[0].text).toBe('REC ● T3');
   });
 
-  it('rounds a fractional frame count instead of printing a float at the wrist', () => {
-    const lines = composeHud({ ...BASE, recording: { episode: 1.4, frames: 412.6 } });
-    expect(lines[0].text).toBe('REC ● ep 1 · 413 fr');
+  it('shows -- rather than NaN, and never a negative count, on the REC line', () => {
+    const lines = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: Number.NaN, elapsedS: -3 } });
+    expect(lines[0].text).toBe('REC ● T-- 00:00');
+  });
+
+  it('rounds a fractional take number instead of printing a float at the wrist', () => {
+    const lines = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 1.4, elapsedS: 65.9 } });
+    expect(lines[0].text).toBe('REC ● T1 01:05');
   });
 });
 
@@ -202,7 +225,7 @@ describe('composeHud — a damped base', () => {
 
   it('still fits the plate while recording, which spends a line of its own', () => {
     const lines = composeHud({
-      ...BASE, baseDamped: true, recording: { episode: 3, frames: 120 },
+      ...BASE, baseDamped: true, recording: { phase: 'capturing', takeNumber: 3, elapsedS: 5 },
     });
     // REC, LINK, MODE, DAMPED — four, leaving the fifth for the modal's RTT.
     expect(lines.map((l) => l.id)).toEqual(['rec', 'link', 'mode', 'damped']);
@@ -345,5 +368,169 @@ describe('isPoseFrame — what counts as an RTT probe', () => {
     ]) {
       expect(isPoseFrame(payload)).toBe(false);
     }
+  });
+});
+
+// TASK-393: the real robot's arms on the plate.
+describe('the arm path on the HUD', () => {
+  const ARM = { armed: true, arming: false, armWeight: 1, teleopMode: 'arms+hands' };
+
+  it('folds the arm state into MODE and adds no line', () => {
+    const lines = composeHud({ ...BASE, armLeft: true, arm: ARM });
+    expect(lines.find((l) => l.id === 'mode')?.text).toBe('MODE ARM-L ARMED');
+    expect(lines.length).toBe(composeHud(BASE).length);
+  });
+
+  it('says ARMING with the weight, and warns while an arm is held but not under control', () => {
+    expect(hudArmSuffix({ ...ARM, armWeight: 0.42 })).toBe('ARMING 42%');
+    const lines = composeHud({ ...BASE, armRight: true, arm: { ...ARM, armed: false } });
+    const mode = lines.find((l) => l.id === 'mode')!;
+    expect(mode.text).toBe('MODE ARM-R ARMS OFF');
+    expect(mode.color).toBe(HUD_COLORS.warn);
+  });
+
+  it('puts a missing hand where TURN was, and never a fifth line', () => {
+    const lines = composeHud({ ...BASE, arm: { ...ARM, teleopMode: 'arms+left_hand' } });
+    expect(lines.find((l) => l.id === 'hands')?.text).toBe('NO RIGHT HAND — arms + left');
+    expect(lines.find((l) => l.id === 'turn')).toBeUndefined();
+    const recording = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 1, elapsedS: 5 }, arm: { ...ARM, teleopMode: 'arms_only' } });
+    expect(recording.length).toBeLessThanOrEqual(HUD_MAX_LINES - 1);
+  });
+
+  it('has no hand warning when both hands are there or nobody said', () => {
+    expect(hudHandWarning('arms+hands')).toBeNull();
+    expect(hudHandWarning(null)).toBeNull();
+  });
+
+  it('looks exactly as before without an arm path', () => {
+    expect(composeHud({ ...BASE, arm: null })).toEqual(composeHud(BASE));
+  });
+});
+
+// TASK-393 review: the arms never re-arm on a grip that was already held.
+describe('the re-engage latch on the HUD', () => {
+  const OFF = { armed: false, arming: false, armWeight: 0, teleopMode: 'arms+hands' };
+
+  it('asks for the grip to be let go while the agent waits for it', () => {
+    const lines = composeHud({ ...BASE, armLeft: true, clutchHeld: true, arm: { ...OFF, engage: 'need_release' } });
+    const mode = lines.find((l) => l.id === 'mode')!;
+    expect(mode.text).toBe(HUD_RELEASE_GRIP);
+    expect(mode.color).toBe(HUD_COLORS.warn);
+    expect(lines.length).toBe(composeHud(BASE).length);
+  });
+
+  it('goes back to the normal readout once released, and to ARMING on the squeeze', () => {
+    const released = composeHud({ ...BASE, clutchHeld: false, arm: { ...OFF, engage: 'need_release' } });
+    expect(released.find((l) => l.id === 'mode')?.text).toBe('MODE IDLE ARMS OFF');
+    const arming = composeHud({
+      ...BASE, armLeft: true, clutchHeld: true,
+      arm: { ...OFF, arming: true, armWeight: 0.2, engage: 'holding' },
+    });
+    expect(arming.find((l) => l.id === 'mode')?.text).toBe('MODE ARM-L ARMING 20%');
+  });
+
+  it('never asks for a release while the arms are up or arming', () => {
+    expect(hudNeedsRelease({ ...OFF, armed: true, engage: 'need_release' }, true)).toBe(false);
+    expect(hudNeedsRelease({ ...OFF, arming: true, engage: 'need_release' }, true)).toBe(false);
+    expect(hudNeedsRelease({ ...OFF, engage: 'need_press' }, true)).toBe(false);
+    expect(hudNeedsRelease({ ...OFF, engage: null }, true)).toBe(false);
+  });
+
+  it('tells a hand-tracking operator to use the controllers, in at most four lines', () => {
+    const lines = composeHud({ ...BASE, handTracked: true, recording: { phase: 'capturing', takeNumber: 1, elapsedS: 5 }, arm: OFF });
+    expect(lines.map((l) => l.text)).toContain(HUD_USE_CONTROLLERS[0]);
+    expect(lines.map((l) => l.text)).toContain(HUD_USE_CONTROLLERS[1]);
+    expect(`${HUD_USE_CONTROLLERS[0]} ${HUD_USE_CONTROLLERS[1]}`).toBe('Use controllers to drive the real robot');
+    expect(lines.length).toBeLessThanOrEqual(HUD_MAX_LINES - 1);
+  });
+
+  it('leaves hand tracking alone on the sim', () => {
+    expect(composeHud({ ...BASE, handTracked: true })).toEqual(composeHud(BASE));
+  });
+
+  it('compares clutch reports, with never-sent equal to nothing', () => {
+    expect(sameClutch({ left: true, right: false }, { left: true, right: false })).toBe(true);
+    expect(sameClutch({ left: true, right: false }, { left: false, right: false })).toBe(false);
+    expect(sameClutch({ left: false, right: false }, null)).toBe(false);
+  });
+});
+
+describe('composeHud — robot mode without the remote (TASK-398)', () => {
+  const FSM = { ...BASE, modeControl: 'fsm' as const, moveEnabled: false };
+
+  it('says the robot is limp and points at the desktop — never offers a button', () => {
+    const lines = composeHud({ ...FSM, baseMode: 'limp', baseDamped: true });
+    const line = lines.find((l) => l.id === 'damped');
+    expect(line?.text).toBe('ROBOT LIMP — desktop asks for Balance');
+    expect(lines.some((l) => /press/i.test(l.text))).toBe(false);
+  });
+
+  it('says MODE UNKNOWN when there is no fresh measurement', () => {
+    const lines = composeHud({ ...FSM, baseMode: 'unknown' });
+    expect(lines.map((l) => l.text)).toContain('MODE UNKNOWN');
+    expect(lines.some((l) => l.id === 'speed')).toBe(false);
+  });
+
+  it('replaces SPEED and TURN with one line when the base does not walk', () => {
+    const lines = composeHud({ ...FSM, baseMode: 'balance', vx: 0.3, omega: 0.4 });
+    expect(lines.map((l) => l.id)).toEqual(['link', 'mode', 'walk-off']);
+    expect(lines[2].text).toBe('Base walking disabled');
+  });
+
+  it('keeps the missing-hand warning next to it', () => {
+    const lines = composeHud({
+      ...FSM, baseMode: 'balance',
+      arm: { armed: true, arming: false, armWeight: 1, teleopMode: 'arms+left_hand' } as never,
+    });
+    expect(lines.some((l) => l.id === 'hands')).toBe(true);
+  });
+
+  it('leaves a robot without mode control exactly as it was', () => {
+    expect(hudBaseLine({ baseDamped: true })).toEqual({ id: 'damped', text: 'BASE DAMPED — desktop asks for Stand' });
+    expect(hudBaseLine({})).toBeNull();
+    expect(composeHud({ ...BASE, vx: 0.4 }).some((l) => l.id === 'speed')).toBe(true);
+  });
+});
+
+describe('the wrist plate (TASK-417)', () => {
+  it('reads LINK OK without a number while no pose is outstanding, the age only while one is', () => {
+    const idle = composeHud({ ...BASE, posesOutstanding: false, msSinceState: 4497 });
+    expect(idle[0]).toEqual({ id: 'link', text: 'LINK OK', color: HUD_COLORS.ok });
+    expect(composeHud({ ...BASE, posesOutstanding: undefined, msSinceState: 4497 })[0].text).toBe('LINK OK');
+    expect(composeHud({ ...BASE, posesOutstanding: true, msSinceState: 38 })[0].text).toBe('LINK LIVE 38ms');
+    // A closed socket is lost whatever the rig is doing, and has no age to give.
+    expect(composeHud({ ...BASE, posesOutstanding: false, link: 'lost' })[0].text).toBe('LINK LOST');
+  });
+
+  it('always ends on B/Y = STOP — idle, busy, blocked and latched', () => {
+    const rtt = { id: 'rtt', text: 'RTT 40ms', color: HUD_COLORS.ok };
+    const cases = [
+      finishWristHud(composeHud({ ...BASE, posesOutstanding: false }), { estopLatched: false, whyBlock: null, rttLine: null }),
+      finishWristHud(composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 3, elapsedS: 9 } }),
+        { estopLatched: false, whyBlock: 'LIMP — desktop asks', rttLine: rtt }),
+      finishWristHud(composeHud({ ...BASE, estopLatched: true }), { estopLatched: true, whyBlock: 'E-STOP', rttLine: rtt }),
+    ];
+    for (const lines of cases) {
+      expect(lines[lines.length - 1]).toEqual(HUD_STOP_TAG);
+      expect(lines.length).toBeLessThanOrEqual(HUD_MAX_LINES);
+    }
+    expect(HUD_STOP_TAG.text).toBe('B/Y = STOP');
+  });
+
+  it('puts a blocking reason first, and lets the RTT give way when the plate is full', () => {
+    const lines = finishWristHud(
+      composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 3, elapsedS: 9 } }),
+      { estopLatched: false, whyBlock: 'LIMP — desktop asks', rttLine: { id: 'rtt', text: 'RTT 40ms', color: HUD_COLORS.ok } },
+    );
+    expect(lines.map((l) => l.id)).toEqual(['why', 'rec', 'link', 'mode', 'stop-tag']);
+    const roomy = finishWristHud(composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 3, elapsedS: 9 } }),
+      { estopLatched: false, whyBlock: null, rttLine: { id: 'rtt', text: 'RTT 40ms', color: HUD_COLORS.ok } });
+    expect(roomy.map((l) => l.id)).toEqual(['rec', 'link', 'mode', 'speed', 'stop-tag']);
+  });
+
+  it('keeps the latched banner alone with the tag: no reason, no RTT', () => {
+    const lines = finishWristHud(composeHud({ ...BASE, estopLatched: true }),
+      { estopLatched: true, whyBlock: 'E-STOP', rttLine: { id: 'rtt', text: 'RTT 40ms', color: HUD_COLORS.ok } });
+    expect(lines.map((l) => l.id)).toEqual(['estop', 'estop-hint', 'stop-tag']);
   });
 });

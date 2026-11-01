@@ -28,6 +28,11 @@ vi.mock('../services/SafetyService.js', () => ({
   safetyService: mockSafetyService,
 }));
 
+const mockTeleoperation = vi.hoisted(() => ({ nudgeLiveAfterEStop: vi.fn() }));
+vi.mock('../services/TeleoperationService.js', () => ({
+  teleoperationService: mockTeleoperation,
+}));
+
 vi.mock('../middleware/auth.middleware.js', () => ({
   authMiddleware: (req: any, _res: any, next: any) => {
     req.user = { id: 'user-123', email: 'test@example.com', name: 'Test', role: 'admin' };
@@ -121,6 +126,8 @@ describe('Safety Routes', () => {
         'obstacle',
         'operator-1'
       );
+      // TASK-416: the robot's recording sessions are read again right away.
+      expect(mockTeleoperation.nudgeLiveAfterEStop).toHaveBeenCalledWith('robot-1');
     });
 
     it('defaults triggeredBy to "server" when omitted', async () => {

@@ -598,7 +598,7 @@ MANIP_ROUTES: frozenset[str] = frozenset({"/action", "/estop"})
 #:     `GET /loco/odom` — which is NOT diverted and still reaches the sidecar.
 #:     `HardwareClient.refreshBasePose()` documents exactly that fallback.
 #:   * `/health` is NOT diverted. The facade owns it, merges the sidecar's verdict
-#:     into it, and `_tryConnect` gates `sidecarAvailable` on it; routing it here
+#:     into it, and `_tryConnect` gates `sidecarReachable` on it; routing it here
 #:     would let a manipulation bridge that is down switch off locomotion and the
 #:     cameras, which do not depend on it.
 #: With no `--manip-url` this file behaves exactly as it did before.
@@ -780,7 +780,7 @@ def make_handler(slots: dict[str, FrameSlot], *, max_age_s: float, wait_s: float
             if sidecar_url:
                 # The upstream owns whether the ROBOT is available; a camera that has not
                 # warmed up yet must not switch off locomotion. `HardwareClient._tryConnect`
-                # gates `sidecarAvailable` on `status === "ok"`, and turning that off would
+                # gates `sidecarReachable` on `status === "ok"`, and turning that off would
                 # stop Agent Mode talking to the sidecar at all — including the /loco routes
                 # that work fine. So upstream's verdict passes through untouched, and a cold
                 # camera shows up as a 503 on the snapshot route, where it belongs.

@@ -45,7 +45,7 @@
     "zustand": "^5.0.9"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.1.18",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",

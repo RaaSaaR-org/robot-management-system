@@ -35,6 +35,11 @@ const locoMove = vi.fn(async () => ({ ok: true }));
 vi.mock('../../hardware/HardwareClient.js', () => ({
   hardwareClient: {
     locoMove: (...args: unknown[]) => locoMove(...(args as [])),
+    // TASK-398: a sidecar that reports no gate — moves go out as before.
+    getLocoCapability: () => ({ gate: 'unknown', moveEnabled: null, idsVerified: false, ids: null }),
+    getMeasuredFsmId: () => null,
+    getBaseState: () => null,
+    mayMoveBase: () => true,
     sendJointPose: vi.fn(async () => ({ ok: true })),
   },
 }));
@@ -113,19 +118,27 @@ afterEach(() => {
   controlOwnerLock.reset();
 });
 
+/**
+ * TASK-398: the frame also carries the measured mode and the sidecar's gate. A
+ * sidecar that reports neither (this stub) reads as unmeasured, moves enabled.
+ */
+const UNMEASURED = {
+  type: 'base', mode: 'unknown', measured: false, moveEnabled: true, modeControl: 'off',
+} as const;
+
 describe('the base-state channel', () => {
   it('says on connect that the base is damped, before anything is commanded', () => {
     // On CONNECT, not on the first refusal: the operator has to know before
     // they push the stick, not by inferring it from a robot that did not move.
     const ws = connect(makeState({ damped: true }));
 
-    expect(ws.ofType('base')).toEqual([{ type: 'base', damped: true, fsmId: 1 }]);
+    expect(ws.ofType('base')).toEqual([{ ...UNMEASURED, damped: true, fsmId: 1 }]);
   });
 
   it('says on connect that a standing base is standing', () => {
     const ws = connect(makeState({ damped: false }));
 
-    expect(ws.ofType('base')).toEqual([{ type: 'base', damped: false, fsmId: 500 }]);
+    expect(ws.ofType('base')).toEqual([{ ...UNMEASURED, damped: false, fsmId: 500 }]);
   });
 
   it('follows a base damped by something else — one frame per transition', async () => {
@@ -141,8 +154,8 @@ describe('the base-state channel', () => {
     await vi.advanceTimersByTimeAsync(200);
 
     expect(ws.ofType('base')).toEqual([
-      { type: 'base', damped: false, fsmId: 500 },
-      { type: 'base', damped: true, fsmId: 1 },
+      { ...UNMEASURED, damped: false, fsmId: 500 },
+      { ...UNMEASURED, damped: true, fsmId: 1 },
     ]);
 
     // …and no repeat while it simply stays damped.
@@ -167,8 +180,8 @@ describe("{posture:'stand'}", () => {
     expect(standBase).toHaveBeenCalledTimes(1);
     // The connect frame said damped; the second frame is the robot's answer.
     expect(ws.ofType('base')).toEqual([
-      { type: 'base', damped: true, fsmId: 1 },
-      { type: 'base', damped: false, fsmId: 500 },
+      { ...UNMEASURED, damped: true, fsmId: 1 },
+      { ...UNMEASURED, damped: false, fsmId: 500 },
     ]);
     // And the tick's edge detector does not then send a third, identical frame.
     await vi.advanceTimersByTimeAsync(500);
@@ -203,7 +216,7 @@ describe("{posture:'stand'}", () => {
     expect(errors.find((e) => e.code === 'stand_failed')?.message)
       .toContain('locomotion disabled');
     // Still damped, and still SAYING so.
-    expect(ws.ofType('base')).toEqual([{ type: 'base', damped: true, fsmId: 1 }]);
+    expect(ws.ofType('base')).toEqual([{ ...UNMEASURED, damped: true, fsmId: 1 }]);
   });
 
   it('refuses any posture but stand, rather than passing a number to an FSM', async () => {

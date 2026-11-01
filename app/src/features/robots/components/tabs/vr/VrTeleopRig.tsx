@@ -10,11 +10,12 @@
  * @feature robots
  */
 
-import { useRef, useMemo, useEffect } from 'react';
+import { useRef, useMemo, useEffect, useCallback } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useXRInputSourceState } from '@react-three/xr';
 import * as THREE from 'three';
 import { retargetArm, type RetargetResult, type VrJointMap } from './vrRetarget';
+import { sameClutch, type HudArm, type HudBaseMode, type RigClutch } from './vrHud';
 import {
   handKeypointsToRobotFrame,
   isStopPinch,
@@ -25,7 +26,7 @@ import {
   type RobotWristPose,
   type XrRigidTransform,
 } from './vrWrist';
-import { isStickClick, pickDriveStick, stickAxis } from './vrDrive';
+import { isStickClick, pickDriveStick, shouldSendDrive, stickAxis } from './vrDrive';
 import {
   headingController,
   headingFromCamera,
@@ -35,8 +36,25 @@ import {
   type StickVector,
 } from './vrHeading';
 import { advanceTargets, type JointTargets } from './vrSmoothing';
-import { HAPTICS, pulsePreset, type HapticPreset, type HapticSource } from './vrHaptics';
+import {
+  HAPTICS,
+  TAKE_REFUSED,
+  clearHapticQueue,
+  drainHapticQueue,
+  pulsePreset,
+  queueHaptics,
+  type HapticPreset,
+  type HapticSource,
+} from './vrHaptics';
+import {
+  IDLE_SESSION_KEYS,
+  stepSessionKeys,
+  type SessionKeysState,
+  type VrSessionBridge,
+} from './vrSessionBridge';
 import type { LinkState } from './vrSession';
+import { routeControllerInput } from './vrInput';
+import type { ArmHeld, ArmRefusal, VrArmInfo } from './vrWhy';
 import {
   DRIVE_MAX_MPS,
   DRIVE_SEND_INTERVAL_S,
@@ -98,6 +116,12 @@ export interface VrRigTelemetry {
   omega: number;
   left: VrHandTelemetry;
   right: VrHandTelemetry;
+  /**
+   * Each controller is present AND its pose resolves this frame (TASK-407).
+   * The why line's "controller not tracked" — a controller asleep, out of the
+   * cameras' view or out of battery reads exactly like a grip let go otherwise.
+   */
+  controllers: { left: boolean; right: boolean };
   // ---- written by the modal ------------------------------------------------
   estopLatched: boolean;
   /**
@@ -109,20 +133,76 @@ export interface VrRigTelemetry {
    * is simply standing against a wall.
    */
   baseDamped: boolean;
+  /**
+   * False while the agent says the base will not walk (TASK-398: a sidecar
+   * that only changes modes). The rig then sends no `{move}` at all — not for
+   * the head-follow yaw, not for a thumbstick — and holds the robot heading.
+   * Written by the modal from `{type:'base'}` or an `error loco_disabled`.
+   */
+  moveEnabled: boolean;
+  /** The measured mode and whether NeoDEM can change it — for the HUD only. */
+  baseMode: HudBaseMode;
+  modeControl: 'off' | 'fsm' | 'full';
   link: LinkState;
-  /** Age of the last `{type:'state'}` frame, ms. */
+  /** Age of the last `{type:'state'}` frame (held answers included), ms. */
   msSinceState: number | null;
+  /** TASK-417: pose frames went out recently, so LINK and RTT carry numbers (see `meterLink`). */
+  posesOutstanding: boolean;
+  /** The teleop socket is open (TASK-407). */
+  socketOpen: boolean;
+  /** This console may drive: it holds the control lease, or leases are off. */
+  leaseHeld: boolean;
+  /** For the robot panel: `you`, `none`, `off`, or who holds the robot. */
+  leaseLabel: string;
+  /**
+   * The agent's last `{type:'state', held:true}` answer (TASK-407): the arm was
+   * refused, and why. A refusal is NOT a link problem — the agent answered.
+   * Cleared by the next answer that moved an arm.
+   */
+  armHeld: ArmHeld | null;
+  /** The last arm refusal sent as `{type:'error'}`; cleared like `armHeld`. */
+  armRefusal: ArmRefusal | null;
+  /** The whole `{type:'arm'}` frame the robot panel reads, sim included. */
+  armInfo: VrArmInfo | null;
+  /** The base mode was MEASURED rather than commanded. */
+  baseMeasured: boolean;
   /** Smoothed control-loop round trip, ms. */
   rttMs: number | null;
   /**
-   * The episode being captured, or null when nothing is recording.
-   *
-   * Written by the modal, not the rig: the rig can ASK for the next episode but
-   * it is the session that decides one started, and the frame count is the
-   * server's number. `VrWristHud` hands this straight to `composeHud`.
+   * The real robot's arm write path, from the agent's `{type:'arm'}` frame
+   * (TASK-393). Null on the sim / an older sidecar, which need no arming.
    */
-  recording: { episode: number; frames: number } | null;
+  arm: HudArm | null;
+  /**
+   * Each controller grip past the clutch threshold, as the agent is told it
+   * (TASK-393). A side driven by a tracked hand is never clutched: a hand has
+   * no button, and a real robot's arms arm only on a clutch rising edge.
+   */
+  clutch: RigClutch;
+  /**
+   * The head's orientation in the robot's frame (TASK-414), for the desktop
+   * assistant's frustum; p is the eye point itself, so always ~0. Null before
+   * the first viewer pose.
+   */
+  head: RobotWristPose | null;
+  /**
+   * The wrist targets this frame commands (IK mode), robot frame — what the
+   * desktop draws as ghost hands. A side that is not driving is null.
+   */
+  targets: { left: RobotWristPose | null; right: RobotWristPose | null };
 }
+
+/**
+ * How often the rig tells the agent it is alive, in ms (TASK-393).
+ *
+ * 10 Hz against the agent's 1 s dead-man (`HEARTBEAT_TIMEOUT_MS` in
+ * `robot-agent/src/api/keyboard-teleop.ts`): ten beats of slack, so Wi-Fi
+ * jitter never trips it, and a render loop that stalls — headset off, tab
+ * backgrounded, the browser hung — has the arms handed back within a second.
+ * Sent from `useFrame` on purpose: the beat is proof that the thing reading the
+ * controllers is running, which a `setInterval` would not be.
+ */
+export const HEARTBEAT_INTERVAL_MS = 100;
 
 export function createRigTelemetry(): VrRigTelemetry {
   return {
@@ -134,17 +214,34 @@ export function createRigTelemetry(): VrRigTelemetry {
     omega: 0,
     left: { squeeze: 0, saturated: false, tracked: null },
     right: { squeeze: 0, saturated: false, tracked: null },
+    controllers: { left: false, right: false },
     estopLatched: false,
     // False until the agent says otherwise. The opposite default would put
     // "BASE DAMPED" on the plate of every robot for the first tick of every
     // session, and a warning that is usually wrong is a warning nobody reads.
     baseDamped: false,
+    // True until the agent says otherwise: an older agent never sends the
+    // field, and the sim walks.
+    moveEnabled: true,
+    baseMode: 'unknown',
+    modeControl: 'off',
     // 'lost' until a state frame proves otherwise — the fail-safe direction for
     // a control link, and the same rule `linkState()` applies.
     link: 'lost',
     msSinceState: null,
+    posesOutstanding: false,
+    socketOpen: false,
+    leaseHeld: true,
+    leaseLabel: 'off',
+    armHeld: null,
+    armRefusal: null,
+    armInfo: null,
+    baseMeasured: false,
     rttMs: null,
-    recording: null,
+    arm: null,
+    clutch: { left: false, right: false },
+    head: null,
+    targets: { left: null, right: null },
   };
 }
 
@@ -161,15 +258,13 @@ export interface VrTeleopRigProps {
    */
   onEstop: () => void;
   /**
-   * End the current episode and start the next one. Bound to the LEFT thumbstick
-   * CLICK — see the frame loop.
-   *
-   * OPTIONAL, and the binding only exists when it is passed. The same rig is
-   * mounted from the robot detail page, where there is no session and no episode
-   * to advance; a click there must do nothing rather than throw or, worse, buzz
-   * a confirmation for something that did not happen.
+   * The recording session (TASK-413), or absent. Its stick shortcuts — LEFT
+   * click Start/Stop, RIGHT click Next, RIGHT held 1.5 s Discard last — exist
+   * only when it is passed. The same rig is mounted from the robot detail page,
+   * where there is no session; a click there must do nothing rather than throw
+   * or, worse, buzz a confirmation for something that did not happen.
    */
-  onNextEpisode?: () => boolean | Promise<boolean>;
+  vrSession?: VrSessionBridge;
   /**
    * WEARER heading — the compass bearing the operator's body is facing. Seeded
    * by `VrOrigin` on a recenter and kept current here every frame.
@@ -243,7 +338,7 @@ export function VrTeleopRig({
   send,
   onRecenter,
   onEstop,
-  onNextEpisode,
+  vrSession,
   headingRef,
   robotHeadingRef,
   robotPositionsRef,
@@ -263,6 +358,30 @@ export function VrTeleopRig({
   // taking the headset off.
   const recenterHeld = useRef(false);
   const estopHeld = useRef(false);
+  /** When the last `{hb}` went out (performance.now), and its sequence number. */
+  const lastBeatAt = useRef(-Infinity);
+  const beatSeq = useRef(0);
+  /** The clutch the agent was last told, or null before the first beat. */
+  const sentClutch = useRef<RigClutch | null>(null);
+  /** One `{hb}` carrying the clutch as it is now. */
+  const beat = useCallback(() => {
+    lastBeatAt.current = performance.now();
+    beatSeq.current += 1;
+    const clutch = { ...telemetryRef.current.clutch };
+    sentClutch.current = clutch;
+    send({ hb: beatSeq.current, clutch });
+  }, [send, telemetryRef]);
+
+  // The arm dead-man's other half (TASK-393): beat while this rig may stream.
+  // A gated stream (E-stop, no lease, link down) sends nothing — the agent has
+  // nothing to keep alive then, and must not be told otherwise. Each beat
+  // carries the grips: the agent arms a real robot only on a clutch rising
+  // edge, so it has to see the grip let go as well as squeezed.
+  useFrame(() => {
+    if (!canStreamRef.current) return;
+    if (performance.now() - lastBeatAt.current < HEARTBEAT_INTERVAL_MS) return;
+    beat();
+  });
   /**
    * When both hands started making the stop gesture, or null.
    *
@@ -272,10 +391,8 @@ export function VrTeleopRig({
    */
   const stopPinchSince = useRef<number | null>(null);
   const stopPinchFired = useRef(false);
-  /** Left stick click last frame — the episode boundary is edge-triggered too. */
-  const nextEpisodeHeld = useRef(false);
-  /** The XR clock, readable from the async episode-boundary callback. */
-  const clockRef = useRef(0);
+  /** The stick shortcuts' edge and hold state — see `stepSessionKeys`. */
+  const sessionKeys = useRef<SessionKeysState>(IDLE_SESSION_KEYS);
 
   // Smoothed absolute targets we actually stream.
   const targetsRef = useRef<JointTargets>({});
@@ -325,11 +442,10 @@ export function VrTeleopRig({
    * are initialised once at mount and the rig outlives every session. End a
    * session with B/Y still held and `estopHeld` stayed true, so the edge
    * detector below swallowed a press made on the FIRST frame of the next
-   * session — a narrow window, but it is the E-Stop's edge. `nextEpisodeHeld` is
+   * session — a narrow window, but it is the E-Stop's edge. `sessionKeys` is
    * in that list for the same reason: an operator whose thumb is resting on a
    * clicked stick as one session ends would otherwise have the first deliberate
-   * episode boundary of the next one swallowed, with nothing on the plate to say
-   * why.
+   * Start/Stop of the next one swallowed, with nothing on the plate to say why.
    */
   useEffect(() => {
     prevHeading.current = Number.NaN;
@@ -337,10 +453,14 @@ export function VrTeleopRig({
     robotHeadingRef.current = Number.NaN;
     wasDriving.current = false;
     gripHeld.current = { left: false, right: false };
+    sentClutch.current = null;
     recenterHeld.current = false;
     estopHeld.current = false;
-    nextEpisodeHeld.current = false;
+    sessionKeys.current = IDLE_SESSION_KEYS;
   }, [recenterKey, inVr, robotHeadingRef]);
+
+  // A pattern still queued when the rig goes away must not buzz the next one.
+  useEffect(() => clearHapticQueue, []);
 
   // Read the controller orientation straight from the WebXR frame's grip space.
   // We deliberately do NOT use `ctrl.object` (the default controller model): that
@@ -368,7 +488,6 @@ export function VrTeleopRig({
       return isStopPinch(at(HAND_JOINT_NAMES.thumbTip), at(HAND_JOINT_NAMES.pinkyTip));
     };
     const now = state.clock.elapsedTime;
-    clockRef.current = now;
     const telemetry = telemetryRef.current;
     // No cast: `XRInputSource` satisfies `HapticSource` structurally
     // (`handedness` is a string, `gamepad` is typed `unknown` there precisely
@@ -386,6 +505,9 @@ export function VrTeleopRig({
     if (buzz) {
       const fired = [pulsePreset(leftSource, buzz.preset), pulsePreset(rightSource, buzz.preset)];
       if (fired.some(Boolean) || now >= buzz.until) pendingBuzz.current = null;
+    } else {
+      // Session pulses (a take's answer, a refusal) wait for any stop buzz.
+      drainHapticQueue([leftSource, rightSource]);
     }
 
     // ---- buttons ---------------------------------------------------------
@@ -396,35 +518,36 @@ export function VrTeleopRig({
     if (recenterPressed && !recenterHeld.current) onRecenter();
     recenterHeld.current = recenterPressed;
 
-    // ---- next episode ----------------------------------------------------
-    // LEFT thumbstick CLICK, and only when the host actually has episodes. The
-    // four face buttons are taken by recenter and the E-Stop, both bound on BOTH
-    // hands on purpose (see below), and freeing one of those for a recording
-    // control would trade a safety property for a convenience. The stick click
-    // is unused, takes a deliberate push rather than a nudge — a deflected stick
-    // reads 'touched', never 'pressed', see `isStickClick` — and a mis-hit costs
-    // an episode boundary rather than a stop.
+    // ---- session shortcuts (TASK-413, D1) --------------------------------
+    // LEFT stick click: Start between takes, Stop while capturing. RIGHT stick
+    // click: Next, on release. RIGHT stick held 1.5 s: Discard last, after a
+    // three-tick countdown. Only when the host has a session. The four face
+    // buttons are taken by recenter and the E-Stop on BOTH hands on purpose,
+    // and a stick click takes a deliberate push rather than a nudge — a
+    // deflected stick reads 'touched', never 'pressed', see `isStickClick` —
+    // so driving can never start, stop or discard a take. Discard is a HOLD:
+    // an accidental click must never destroy a take.
     //
     // Handled BEFORE the E-Stop so a frame carrying both leaves the STOP's buzz
-    // in `pendingBuzz`: there is one slot, and the stop confirmation is the one
-    // the operator will be waiting for.
-    const nextEpisodePressed = isStickClick(left?.gamepad['xr-standard-thumbstick']);
-    if (nextEpisodePressed && !nextEpisodeHeld.current && onNextEpisode) {
-      // Buzz on the ANSWER, not on the press. A buzz is a promise the operator
-      // acts on — they stop watching and start the next take — so confirming a
-      // boundary the session refused (paused, or the robot said no) is worse
-      // than confirming nothing. `state.clock.elapsedTime` is read again inside
-      // the callback because the frame that resolves is not this one.
-      void Promise.resolve(onNextEpisode()).then((accepted) => {
-        if (accepted) {
-          pendingBuzz.current = {
-            preset: HAPTICS.episodeMark,
-            until: clockRef.current + BUZZ_RETRY_WINDOW_S,
-          };
-        }
+    // in `pendingBuzz`, which outranks the queued session pulses below.
+    if (vrSession) {
+      const view = vrSession.getState();
+      const keys = stepSessionKeys(sessionKeys.current, {
+        leftClick: isStickClick(left?.gamepad['xr-standard-thumbstick']),
+        rightClick: isStickClick(right?.gamepad['xr-standard-thumbstick']),
+        now: Date.now(),
+        phase: view.phase,
+        enabled: !telemetry.estopLatched && view.status === 'recording',
       });
+      sessionKeys.current = keys.state;
+      if (keys.buzz === 'tick') pulsePreset(rightSource, HAPTICS.holdTick);
+      else if (keys.buzz === 'confirm') pulsePreset(rightSource, HAPTICS.holdConfirm);
+      else if (keys.buzz === 'refused') queueHaptics(TAKE_REFUSED);
+      // Buzz on the ANSWER, not on the press: a buzz is a promise the operator
+      // acts on, so confirming an action the session refused is worse than
+      // confirming nothing. The bridge queues the answer's pattern itself.
+      if (keys.action) void vrSession.actions[keys.action]();
     }
-    nextEpisodeHeld.current = nextEpisodePressed;
 
     // B on the right hand OR Y on the left. Both, either hand, on purpose: an
     // operator reaching for a stop is not going to recall which controller owns
@@ -463,7 +586,22 @@ export function VrTeleopRig({
     }
     prevLink.current = telemetry.link;
 
-    if (!frame) return;
+    if (!frame) {
+      telemetry.controllers.left = false;
+      telemetry.controllers.right = false;
+      return;
+    }
+
+    // ---- controller tracking (TASK-407) -----------------------------------
+    // Present AND posed: a controller the runtime still lists but cannot place
+    // (asleep, out of view) is as useless to the arm as a missing one.
+    const posed = (ctrl: ControllerState): boolean => {
+      const space = ctrl?.inputSource?.targetRaySpace;
+      if (!space || !referenceSpace) return false;
+      return frame.getPose(space, referenceSpace) != null;
+    };
+    telemetry.controllers.left = posed(left);
+    telemetry.controllers.right = posed(right);
 
     // ---- heading ---------------------------------------------------------
     // Turning is PHYSICAL, never a stick. Smooth stick yaw is the single most
@@ -511,6 +649,10 @@ export function VrTeleopRig({
     // ref still says where the base really points. When streaming resumes the
     // error is real again and the robot turns to follow, capped as always.
     const streaming = canStreamRef.current;
+    // TASK-398: a base that will not walk must not be TURNED either — and the
+    // heading loop must not believe it turned, or the arm retargeting would
+    // subtract a yaw the robot never made. Hold it, exactly like a gated stream.
+    const baseMoves = telemetryRef.current.moveEnabled;
     // The write-back is conditional on the robot heading being KNOWN. With a
     // degenerate camera quaternion the seed above never runs, and
     // `headingController` answers a non-finite input by holding at 0 — writing
@@ -518,7 +660,7 @@ export function VrTeleopRig({
     // finite, stop the seed from ever running again. The arm retargeting would
     // then subtract a heading nobody measured.
     const robotHeadingKnown = Number.isFinite(robotHeadingRef.current);
-    const turn = streaming
+    const turn = streaming && baseMoves
       ? headingController({
           wearer: headingRef.current,
           robot: robotHeadingRef.current,
@@ -526,7 +668,7 @@ export function VrTeleopRig({
           maxRate: TURN_MAX_RAD_S,
         })
       : { omega: 0, robotHeading: robotHeadingRef.current, error: 0 };
-    if (streaming && robotHeadingKnown) robotHeadingRef.current = turn.robotHeading;
+    if (streaming && baseMoves && robotHeadingKnown) robotHeadingRef.current = turn.robotHeading;
 
     // ---- driving ---------------------------------------------------------
     // Runs before the arm work: an operator holding a pose still has to be able
@@ -541,7 +683,7 @@ export function VrTeleopRig({
       // left, so both axes invert on the way to a base velocity.
       return { fwd: -stickAxis(stick.yAxis), left: -stickAxis(stick.xAxis) };
     };
-    const stick = pickDriveStick([handStick(left), handStick(right)]);
+    const stick = baseMoves ? pickDriveStick([handStick(left), handStick(right)]) : null;
     // The operator pushes the stick where they are LOOKING; the base takes
     // velocities in its own frame. While the closed loop is still catching up
     // those differ by exactly `turn.error`, and without this rotation a forward
@@ -556,22 +698,34 @@ export function VrTeleopRig({
     const stickDriving = vx !== 0 || vy !== 0;
     const moving = stickDriving || omega !== 0;
 
-    if (now - lastDriveRef.current >= DRIVE_SEND_INTERVAL_S && streaming) {
-      // Send while moving, plus exactly one zero on the way back to rest. The
-      // agent's dead-man would stop the robot on its own, but only after another
-      // third of a second of floor.
-      if (moving || wasDriving.current) {
-        lastDriveRef.current = now;
-        send({ move: { vx, vy, omega } });
-        wasDriving.current = moving;
-      }
+    // Send while moving, plus exactly one zero on the way back to rest. The
+    // agent's dead-man would stop the robot on its own, but only after another
+    // third of a second of floor. Nothing at all while the base does not walk.
+    if (shouldSendDrive({
+      sinceLastS: now - lastDriveRef.current,
+      streaming,
+      moveEnabled: baseMoves,
+      moving,
+      wasDriving: wasDriving.current,
+      intervalS: DRIVE_SEND_INTERVAL_S,
+    })) {
+      lastDriveRef.current = now;
+      send({ move: { vx, vy, omega } });
+      wasDriving.current = moving;
     }
 
     // ---- arms ------------------------------------------------------------
     const compute = (ctrl: ControllerState, side: 'left' | 'right'): RetargetResult | null => {
       if (!ctrl) return null;
       const squeeze = ctrl.gamepad['xr-standard-squeeze'];
-      if (!squeeze || (squeeze.button ?? 0) < GRIP_THRESHOLD) return null; // clutch
+      if (!squeeze) return null;
+      // The trigger belongs to the hand only while the grip is held; with the
+      // grip free it is the in-VR UI's click (TASK-407) and must not reach here.
+      const input = routeControllerInput({
+        squeeze: squeeze.button ?? 0,
+        trigger: ctrl.gamepad['xr-standard-trigger']?.button ?? 0,
+      });
+      if (!input.clutched || input.grasp === null) return null; // clutch
 
       const gripSpace = ctrl.inputSource?.gripSpace;
       if (!referenceSpace || !gripSpace) return null;
@@ -581,7 +735,7 @@ export function VrTeleopRig({
       const o = pose.transform.orientation;
       ctrlQuat.set(o.x, o.y, o.z, o.w);
       euler.setFromQuaternion(ctrlQuat, 'YXZ');
-      const trigger = ctrl.gamepad['xr-standard-trigger']?.button ?? 0;
+      const trigger = input.grasp;
       const axes = ctrl.gamepad['xr-standard-thumbstick'];
 
       return retargetArm(
@@ -646,7 +800,15 @@ export function VrTeleopRig({
     const readController = (ctrl: ControllerState, side: 'left' | 'right'): RobotWristPose | null => {
       if (!ctrl || !referenceSpace || !headTransform) return null;
       const squeeze = ctrl.gamepad['xr-standard-squeeze'];
-      if (!squeeze || (squeeze.button ?? 0) < GRIP_THRESHOLD) return null; // clutch
+      if (!squeeze) return null;
+      // One routing for the trigger: grasp while clutched, UI click otherwise.
+      // A trigger pulled with the grip free is a button press in the robot
+      // panel and must never close the robot's hand (TASK-407).
+      const input = routeControllerInput({
+        squeeze: squeeze.button ?? 0,
+        trigger: ctrl.gamepad['xr-standard-trigger']?.button ?? 0,
+      });
+      if (!input.clutched || input.grasp === null) return null; // clutch
       const gripSpace = ctrl.inputSource?.gripSpace;
       if (!gripSpace) return null;
       const pose = frame.getPose(gripSpace, referenceSpace);
@@ -660,7 +822,7 @@ export function VrTeleopRig({
       telemetry[side].tracked = 'controller';
       // The trigger stays the one-axis grasp it has always been — TASK-216
       // keeps it as the fallback for an operator without hand tracking.
-      wrist.grip = ctrl.gamepad['xr-standard-trigger']?.button ?? 0;
+      wrist.grip = input.grasp;
       return wrist;
     };
 
@@ -679,6 +841,11 @@ export function VrTeleopRig({
     const ikOn = retargetMode === 'ik';
     const wristLeft = ikOn ? (trackedLeft?.wrist ?? readController(left, 'left')) : null;
     const wristRight = ikOn ? (trackedRight?.wrist ?? readController(right, 'right')) : null;
+    // TASK-414: what the desktop assistant draws — the head's frustum and the
+    // commanded wrists. Written in place: the publisher samples it at 5 Hz.
+    telemetry.head = headTransform ? wristToRobotFrame(headTransform, headTransform, robotHeadingRef.current) : null;
+    telemetry.targets.left = wristLeft;
+    telemetry.targets.right = wristRight;
 
     const leftResult = ikOn ? null : compute(left, 'left');
     const rightResult = ikOn ? null : compute(right, 'right');
@@ -734,6 +901,20 @@ export function VrTeleopRig({
     };
     telemetry.armLeft = record(left, leftSource, 'left', leftResult, wristLeft !== null);
     telemetry.armRight = record(right, rightSource, 'right', rightResult, wristRight !== null);
+
+    // ---- the clutch the agent arms on (TASK-393) --------------------------
+    // A controller grip past the threshold — the same bite point both
+    // retargetings clutch on. A tracked hand's side is never clutched.
+    const gripOf = (ctrl: ControllerState): boolean =>
+      (ctrl?.gamepad['xr-standard-squeeze']?.button ?? 0) >= GRIP_THRESHOLD;
+    telemetry.clutch = {
+      left: trackedLeft === null && gripOf(left),
+      right: trackedRight === null && gripOf(right),
+    };
+    // A change goes out AT ONCE and before this frame's pose: the agent must
+    // see the squeeze before the frame it arms on, and a release-and-squeeze
+    // shorter than a beat must not be lost between two beats.
+    if (streaming && !sameClutch(telemetry.clutch, sentClutch.current)) beat();
     telemetry.driving = stickDriving;
     telemetry.vx = vx;
     telemetry.vy = vy;

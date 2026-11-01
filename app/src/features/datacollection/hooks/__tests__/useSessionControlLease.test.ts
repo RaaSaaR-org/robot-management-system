@@ -76,7 +76,7 @@ describe('useSessionControlLease', () => {
     );
     await waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
     const ws = FakeSocket.last();
-    expect(ws.url).toBe('ws://agent:41243/ws/keyboard-teleop');
+    expect(ws.url).toBe(`ws://${window.location.host}/api/robots/g1-1/teleop/ws`);
     act(() => ws.open());
     expect(result.current.connected).toBe(true);
 

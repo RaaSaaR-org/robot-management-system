@@ -37,6 +37,7 @@ DDS domains: 0 = real robot, 1 = sim, 9 = mock/tests.
 """
 from __future__ import annotations
 
+import collections
 import argparse
 import base64
 import io
@@ -74,13 +75,21 @@ try:
     from .cine_recorder import RecorderConfig, RecorderSlot, parse_size
     from .joints import ARM_REST, BASE_JOINTS, BODY, LHAND, N_BODY, N_HAND, RHAND, WEIGHT_IDX
     from .loco_service import LocoSimService
-    from .loco_state import UINT32_MAX, LocoState, pose_relative_to, wrap_angle
+    from .loco_state import BALANCE_FSM, UINT32_MAX, LocoState, pose_relative_to, wrap_angle
 except ImportError:  # plain-script invocation
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from cine_recorder import RecorderConfig, RecorderSlot, parse_size  # type: ignore[no-redef]
     from joints import ARM_REST, BASE_JOINTS, BODY, LHAND, N_BODY, N_HAND, RHAND, WEIGHT_IDX
     from loco_service import LocoSimService
-    from loco_state import UINT32_MAX, LocoState, pose_relative_to, wrap_angle
+    from loco_state import (  # type: ignore[no-redef]
+        BALANCE_FSM, UINT32_MAX, LocoState, pose_relative_to, wrap_angle,
+    )
+
+# dex3_faults lives one level up (hardware/), shared with g1_sidecar.py.
+_HW_DIR = str(Path(__file__).resolve().parents[1])
+if _HW_DIR not in sys.path:
+    sys.path.insert(0, _HW_DIR)
+import dex3_faults  # noqa: E402
 
 DEFAULT_SCENE = (
     Path(__file__).resolve().parents[1]
@@ -514,6 +523,33 @@ def _cast_ray_fan(model, data, origin_world, base_x: float, base_y: float,
     }
 
 
+def _loco_health(node) -> dict:
+    """The TASK-398 /health fields. getattr: test doubles carry a subset."""
+    loco = getattr(node, "loco", None)
+    return {
+        "loco_fsm_id": None if loco is None else loco.fsm_id,
+        "fsm_history": list(getattr(node, "fsm_history", ())),
+        "arm_sdk_frames": getattr(node, "arm_cmd_count", 0),
+        "arm_sdk_ignored_frames": getattr(node, "arm_sdk_ignored_frames", 0),
+    }
+
+
+def _hand_health_fields(node) -> dict:
+    """The TASK-404 /health fields. The sim's lowstate is produced in-process,
+    so it is never stale; the hands are both present and fault-free unless
+    SIM_DEX3_FAULT / SIM_DEX3_MISSING were set at startup (`node.hand_health`,
+    filled once in main()). Test doubles without it get the default."""
+    health = getattr(node, "hand_health", None)
+    if health is None:
+        health = dex3_faults.sim_hand_health({})
+    return {"lowstate_age_s": 0.0, "hand_health": health}
+
+
+def arm_sdk_honoured(fsm_id: int) -> bool:
+    """Whether an rt/arm_sdk frame takes effect in loco FSM `fsm_id` (TASK-398)."""
+    return int(fsm_id) in BALANCE_FSM
+
+
 class SimNode:
     def __init__(self, scene: Path, domain: int, verbose: bool = True) -> None:
         self.model = mujoco.MjModel.from_xml_path(str(scene))
@@ -524,6 +560,9 @@ class SimNode:
 
         self.lock = threading.Lock()
         self.loco = LocoState()
+        # (wall time, fsm id) per SetFsmId the sport service applied, newest
+        # last -- lets a check order a damp against the arm_sdk frames it saw.
+        self.fsm_history: "collections.deque[tuple[float, int]]" = collections.deque(maxlen=32)
         self._render_queue: list[RenderRequest] = []
         self._reset_queue: list[PoseResetRequest] = []
         self._range_queue: list[RangeRequest] = []
@@ -555,7 +594,8 @@ class SimNode:
         # The loco service shares our lock and reads simulation time, so RPC
         # handlers and the physics loop can never interleave mid-update.
         self.loco_service = LocoSimService(
-            self.loco, self.lock, lambda: self.data.time, verbose=verbose
+            self.loco, self.lock, lambda: self.data.time, verbose=verbose,
+            on_fsm_set=lambda fsm_id: self.fsm_history.append((time.time(), fsm_id)),
         )
         print(f"[SimNode] scene {scene.name}, DDS domain {domain}")
         print(f"[SimNode]   sub  {TOPIC_ARM_SDK}, rt/dex3/{{left,right}}/cmd")
@@ -645,6 +685,7 @@ class SimNode:
         self.tgt = {"body": np.zeros(N_BODY), "lh": np.zeros(N_HAND), "rh": np.zeros(N_HAND)}
         self.weight = 0.0
         self.arm_cmd_count = 0
+        self.arm_sdk_ignored_frames = 0
         # Latched fall-back pose for the (1 - weight) share of the arm_sdk blend,
         # plus the weight it was latched at. See _hold_pose.
         self._hold: dict[str, np.ndarray] | None = None
@@ -709,6 +750,14 @@ class SimNode:
 
     def _on_arm_sdk(self, msg: LowCmd_) -> None:
         with self.lock:
+            # TASK-398: a real G1 honours arm_sdk only in balance ("regular"
+            # mode). Elsewhere -- damp, lock stand -- the frame is dropped and
+            # the upper body is the robot's own, exactly what was measured on
+            # the gantry on 2026-10-17.
+            if not arm_sdk_honoured(self.loco.fsm_id):
+                self.weight = 0.0
+                self.arm_sdk_ignored_frames += 1
+                return
             self.weight = float(msg.motor_cmd[WEIGHT_IDX].q)
             self.tgt["body"] = np.array([msg.motor_cmd[i].q for i in range(N_BODY)])
             self.arm_cmd_count += 1
@@ -1573,6 +1622,20 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
         # teleop at 50 Hz. `handle_one_request` turns the resulting socket
         # timeout into `close_connection`, which ends the thread.
         timeout = 30
+        # ...and the reply must leave the moment it is written (TASK-415).
+        # `end_headers()` writes the status line and headers, then `_send`
+        # writes the body: two small segments on one socket. With Nagle on, the
+        # body waits for the client to ACK the headers, and the client delays
+        # that ACK by ~40 ms on a connection that is no longer in quick-ACK
+        # mode -- which a keep-alive connection is, from its second request on.
+        # Measured from Node `fetch` against `/state/fast` on this facade: every
+        # other request took 43 ms (median 2.4 ms, mean 22 ms), capping a
+        # 30 fps recorder at 11-15 fps of distinct samples. curl never saw it
+        # because it opens a fresh connection per run. HTTP/1.0 hid it too:
+        # closing the socket pushes the held segment out at once.
+        # `StreamRequestHandler.setup()` sets TCP_NODELAY on the accepted
+        # socket when this is true.
+        disable_nagle_algorithm = True
 
         def _send(self, code: int, payload: dict) -> None:
             body = json.dumps(payload).encode()
@@ -1662,7 +1725,13 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                                  # agent then treats it as real odometry.
                                  "odom_frame": "world" if node.odom_origin is None else "boot",
                                  "behind_s": round(node.behind_s, 3),
-                                 "boot_id": BOOT_ID})
+                                 "boot_id": BOOT_ID,
+                                 # TASK-398: the loco FSM, every SetFsmId the
+                                 # sport service took (wall clock), and the
+                                 # arm_sdk frames dropped outside balance.
+                                 **_loco_health(node),
+                                 # TASK-404: freshness + Dex3 faults.
+                                 **_hand_health_fields(node)})
             elif path == "/cameras":
                 self._send(200, {"cameras": node.camera_names()})
             elif path == "/record":
@@ -2000,7 +2069,8 @@ def parse_spawn(text: str) -> tuple[float, float, float]:
     return (x, y, math.radians(yaw_deg))
 
 
-def main(argv: list[str] | None = None) -> int:
+def make_arg_parser() -> argparse.ArgumentParser:
+    """The command line, separate from main() so tests can parse it."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--scene", type=Path, default=DEFAULT_SCENE)
     ap.add_argument("--domain", type=int,
@@ -2015,6 +2085,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--iface", default=os.environ.get("G1_SIM_DDS_IFACE", "lo0"))
     ap.add_argument("--http-port", type=int, default=0,
                     help="serve the sidecar-compatible facade on this port (0 = off)")
+    # TASK-416: the supervisor's sim profile passes 127.0.0.1 so a rehearsal's
+    # facade is not reachable from the LAN. The default keeps today's
+    # behaviour for the dev stack and the Mac sim.
+    ap.add_argument("--host", default="0.0.0.0",
+                    help="address the HTTP facade binds (default 0.0.0.0)")
     ap.add_argument("--viewer", action="store_true",
                     help="open a live MuJoCo window (needs mjpython on macOS)")
     ap.add_argument("--quiet", action="store_true")
@@ -2025,6 +2100,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="world: odometry IS the MJCF world (default). boot: odometry "
                          "starts at the pose the base has at start-up, like a real "
                          "robot's -- /health reports odom_frame=boot")
+    ap.add_argument("--initial-fsm", type=int, default=500,
+                    help="loco FSM id at start-up (default 500 = balance, as before). "
+                         "1 starts in damp like a real G1 after power-on (TASK-398)")
     ap.add_argument("--spawn", metavar="X,Y,YAWDEG", type=parse_spawn,
                     help="start the base at this world pose (metres, degrees)")
     ap.add_argument("--record", metavar="OUT.mp4",
@@ -2034,10 +2112,23 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--record-fps", type=int, default=30)
     ap.add_argument("--record-size", default="1080x1920",
                     help="WxH; default is vertical 1080x1920 for Reels/Shorts")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = make_arg_parser().parse_args(argv)
 
     if not args.scene.exists():
         print(f"[SimNode] scene not found: {args.scene}", file=sys.stderr)
+        return 2
+
+    # TASK-404: Dex3 fault injection, read once here and never again (no
+    # runtime route: one write surface fewer on a sidecar-shaped server). A
+    # spec that does not parse stops the sim rather than injecting nothing.
+    try:
+        hand_health = dex3_faults.sim_hand_health(os.environ)
+    except ValueError as exc:
+        print(f"[SimNode] {exc}", file=sys.stderr)
         return 2
 
     if args.iface:
@@ -2046,6 +2137,18 @@ def main(argv: list[str] | None = None) -> int:
         ChannelFactoryInitialize(args.domain)
 
     node = SimNode(args.scene, args.domain, verbose=not args.quiet)
+    node.hand_health = hand_health
+    for side in ("left", "right"):
+        h = hand_health[side]
+        if not h["present"] or h["motor_faults"]:
+            print(f"[SimNode]   Dex3 {side}: "
+                  + ("ABSENT (SIM_DEX3_MISSING)" if not h["present"] else
+                     "fault " + ", ".join(f["joint"] + "=" + f["code"] for f in h["motor_faults"])
+                     + " (SIM_DEX3_FAULT)"))
+    if args.initial_fsm != node.loco.fsm_id:
+        node.loco.set_fsm_id(args.initial_fsm)
+        print(f"[SimNode]   initial loco FSM {args.initial_fsm} "
+              f"(arm_sdk {'honoured' if arm_sdk_honoured(args.initial_fsm) else 'IGNORED'})")
     if args.spawn is not None:
         if not node.has_base:
             print(f"[SimNode] --spawn ignored: scene {args.scene.name} has no planar base",
@@ -2063,7 +2166,7 @@ def main(argv: list[str] | None = None) -> int:
     httpd = None
     if args.http_port:
         bridge = _LocoBridge()
-        httpd = ThreadingHTTPServer(("0.0.0.0", args.http_port),
+        httpd = ThreadingHTTPServer((args.host, args.http_port),
                                     make_handler(node, bridge))
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
@@ -2080,7 +2183,7 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:  # noqa: BLE001
                 print(f"[SimNode]   loco bridge not warm yet: {exc}")
         threading.Thread(target=_warm, daemon=True).start()
-        print(f"[SimNode]   http :{args.http_port} "
+        print(f"[SimNode]   http {args.host}:{args.http_port} "
               f"(/health /cameras /cameras/<n>/{{snapshot,stream}} /state "
               f"/action /estop /loco/* /pointcloud/*) "
               f"-- point HARDWARE_SIDECAR_URL here")

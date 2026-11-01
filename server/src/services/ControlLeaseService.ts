@@ -829,6 +829,15 @@ function clientFor(robot: ControlLeaseRobot): HttpClient {
   return new HttpClient(robot.baseUrl.replace(/\/$/, ''), AGENT_CALL_TIMEOUT_MS, agentServiceAuthHeaders());
 }
 
+/**
+ * Whether the agent's renew answer reports a bound control socket. The agent
+ * sends a count (`bound: 1`); a bare `true` is accepted too. Anything else,
+ * including a missing field, fails closed as unbound.
+ */
+export function isBound(bound: unknown): boolean {
+  return bound === true || (typeof bound === 'number' && Number.isFinite(bound) && bound > 0);
+}
+
 /** The real server→agent calls (TASK-314 routes on the robot agent). */
 export const httpControlLeaseAgent: ControlLeaseAgentPort = {
   async install(robot, body) {
@@ -854,13 +863,14 @@ export const httpControlLeaseAgent: ControlLeaseAgentPort = {
 
   async renew(robot, generation, ttlMs) {
     try {
-      const answer = await clientFor(robot).post<{ renewed?: boolean; bound?: boolean }>(
+      const answer = await clientFor(robot).post<{ renewed?: boolean; bound?: boolean | number }>(
         leasePath(robot, '/renew'),
         { generation, ttlMs }
       );
       // Anything but an explicit renewal is treated as a refusal (fail closed).
+      // The agent reports `bound` as the number of sockets bound to the lease.
       return answer?.renewed === true
-        ? { ok: true, bound: answer.bound === true }
+        ? { ok: true, bound: isBound(answer.bound) }
         : { ok: false, reason: 'rejected' };
     } catch (error) {
       // Only the agent's own 409 (not_installed | expired) says the lease is

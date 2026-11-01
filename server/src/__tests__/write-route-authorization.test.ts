@@ -58,7 +58,15 @@ const app = createApp();
 // TASK-353 adds two on the guarded /api/datasets mount: POST /robot-types and
 // PUT /:id/robot-type.
 // TASK-371 adds one on the guarded /api/datasets mount: POST /:id/import/cancel.
-const EXPECTED_WRITE_ROUTES = 373;
+// TASK-398 adds one on the guarded /api/robots mount: POST /:id/base-mode
+// (writeRoleGuard + memberOrAbove).
+// TASK-408 adds three on the guarded /api/teleoperation mount: POST
+// /sessions/:id/episodes/start, /stop and /discard-last.
+// TASK-409 adds six on the guarded /api/robots mount: POST /:id/bringup/start,
+// /stop, /sidecar-mode, /lan-up and /steps/:step/adopt|leave (memberOrAbove).
+// TASK-412 adds two on the guarded /api/robots mount: POST /:id/quest/connect
+// and /:id/quest/open (memberOrAbove).
+const EXPECTED_WRITE_ROUTES = 385;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;
@@ -533,6 +541,7 @@ describe('write-route inventory', () => {
     expect(guardedWrites).toContainEqual({ method: 'DELETE', path: '/api/robots/:id' });
     expect(guardedWrites).toContainEqual({ method: 'POST', path: '/api/robots/:id/command' });
     expect(guardedWrites).toContainEqual({ method: 'PUT', path: '/api/settings' });
+    expect(guardedWrites).toContainEqual({ method: 'POST', path: '/api/robots/:id/base-mode' });
     // Registered on routers mounted inside routers (skills.routes.ts `/chains`,
     // training.routes.ts `/workers`) — present only if the walk recursed.
     expect(writes).toContainEqual({ method: 'POST', path: '/api/skills/chains/:id/execute' });
