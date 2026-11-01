@@ -8,8 +8,9 @@ uses for the head:
     uint32 be length | uint64 be ns timestamp | <length> bytes of JPEG
 
 Every test runs the publisher on a real socket with a fake frame source in place of
-OpenCV, so the framing, the shared encode, the slow-client drop and the reopen after a
-USB re-enumeration are exercised for real. The last test points the sidecar's own pc2cam
+OpenCV, so the framing, the shared encode, the slow-client drop, the reopen after a
+USB re-enumeration and the refused connect while the camera is down are exercised for
+real. The last test points the sidecar's own pc2cam
 reader at a running publisher and takes a frame out of /cameras/head_camera/snapshot.
 
 @status test
@@ -71,6 +72,7 @@ class FakeSource:
         self.encodes = 0
         self.fail_grabs = 0     # the next N grabs fail
         self.fail_opens = 0     # the next N opens fail
+        self.fail_encodes = 0   # the next N encodes return nothing
         self.is_open = False
         self._frame = 0
         self._lock = threading.Lock()
@@ -96,6 +98,9 @@ class FakeSource:
     def retrieve_jpeg(self, quality):
         with self._lock:
             self.encodes += 1
+            if self.fail_encodes > 0:
+                self.fail_encodes -= 1
+                return None
             return JPEG + struct.pack("!I", self._frame)
 
     def close(self):
@@ -117,6 +122,7 @@ def publisher(source):
                                      reopen_delay_s=0.05, log=logs.append)
     pub.logs = logs
     pub.start()
+    assert _wait_until(lambda: pub.accepting), "the publisher never took clients"
     yield pub
     pub.stop()
 
@@ -144,6 +150,15 @@ def _connect(pub):
     sock = socket.create_connection(("127.0.0.1", pub.port), timeout=5.0)
     sock.settimeout(5.0)
     return sock
+
+
+def _refused(port):
+    """True when a connect to the port is refused, i.e. nothing listens on it."""
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1.0).close()
+    except ConnectionRefusedError:
+        return True
+    return False
 
 
 def _wait_until(pred, timeout=5.0):
@@ -215,6 +230,7 @@ def test_a_read_failure_reopens_the_camera_and_drops_the_clients(publisher, sour
         assert frame is None
     assert _wait_until(lambda: source.opens == 2)
     assert source.closes >= 1
+    assert _wait_until(lambda: publisher.accepting)
     with _connect(publisher) as sock:
         assert _read_frame(sock) is not None, "serving resumes after the reopen"
     assert sum("read failed, reopening" in line for line in publisher.logs) == 1
@@ -230,18 +246,96 @@ def test_an_outage_is_logged_once_however_long_it_lasts(publisher, source):
     assert not any("cannot open" in line for line in publisher.logs)
 
 
-def test_a_camera_absent_at_start_is_waited_for(source):
-    source.fail_opens = 5
+def test_a_camera_absent_at_start_is_refused_until_it_opens(source):
+    source.fail_opens = 10 ** 6
     logs = []
     pub = camera_pub.CameraPublisher(source, port=0, bind="127.0.0.1",
                                      reopen_delay_s=0.02, log=logs.append).start()
     try:
-        # The port is up even while the camera is not, so the sidecar can connect.
+        assert pub.port != 0, "start() binds the port, so it is known at once"
+        assert _wait_until(lambda: source.fail_opens <= 10 ** 6 - 3)
+        # A connect is refused while the camera cannot open, so nothing that probes the
+        # port takes a missing camera for one that is up but silent.
+        assert not pub.accepting
+        for _ in range(5):
+            assert _refused(pub.port)
+            time.sleep(0.02)
+        source.fail_opens = 0
+        assert _wait_until(lambda: pub.accepting)
         with _connect(pub) as sock:
             assert _read_frame(sock) is not None
     finally:
         pub.stop()
     assert sum("cannot open the camera" in line for line in logs) == 1
+    assert any("camera back" in line for line in logs)
+
+
+def test_stop_while_the_camera_is_absent_ends_every_thread(source):
+    source.fail_opens = 10 ** 6
+    pub = camera_pub.CameraPublisher(source, port=0, bind="127.0.0.1",
+                                     reopen_delay_s=0.02, log=lambda _m: None).start()
+    port = pub.port
+    assert _wait_until(lambda: source.fail_opens <= 10 ** 6 - 2)
+    pub.stop()
+    assert not any(t.is_alive() for t in pub._threads)
+    assert _refused(port)
+    # The port is free again: a fresh publisher binds it straight away.
+    again = camera_pub.CameraPublisher(FakeSource(), port=port, bind="127.0.0.1",
+                                       log=lambda _m: None).start()
+    try:
+        assert again.port == port
+        assert _wait_until(lambda: again.accepting)
+    finally:
+        again.stop()
+
+
+def test_a_read_outage_refuses_connects_until_the_camera_is_back(publisher, source):
+    port = publisher.port
+    with _connect(publisher) as sock:
+        assert _read_frame(sock) is not None
+        source.fail_opens = 10 ** 6
+        source.fail_grabs = 1
+        assert _wait_until(lambda: not publisher.accepting)
+        assert _wait_until(lambda: publisher.client_count == 0)
+    assert _wait_until(lambda: source.fail_opens <= 10 ** 6 - 3)
+    for _ in range(5):
+        assert _refused(port)
+        time.sleep(0.02)
+    source.fail_opens = 0
+    # Back on the same port, which SO_REUSEADDR lets it bind again at once although
+    # the dropped connection still sits in TIME_WAIT.
+    assert _wait_until(lambda: publisher.accepting)
+    assert publisher.port == port
+    with _connect(publisher) as sock:
+        assert _read_frame(sock) is not None, "serving resumes after the outage"
+    assert sum("read failed, reopening" in line for line in publisher.logs) == 1
+    assert sum("serving on" in line for line in publisher.logs) == 1
+
+
+def test_a_single_bad_frame_is_skipped_not_an_outage(publisher, source):
+    with _connect(publisher) as sock:
+        assert _read_frame(sock) is not None
+        source.fail_encodes = camera_pub.MAX_BAD_FRAMES - 1
+        for _ in range(10):
+            assert _read_frame(sock) is not None, "a bad frame dropped the client"
+        assert source.fail_encodes == 0
+    assert source.opens == 1 and source.closes == 0
+    assert publisher.accepting
+    assert not any("reopening" in line for line in publisher.logs)
+
+
+def test_a_run_of_bad_frames_counts_as_a_device_failure(publisher, source):
+    with _connect(publisher) as sock:
+        assert _read_frame(sock) is not None
+        source.fail_encodes = camera_pub.MAX_BAD_FRAMES
+        deadline = time.time() + 5.0
+        frame = True
+        while frame is not None and time.time() < deadline:
+            frame = _read_frame(sock)
+        assert frame is None, "the clients are dropped like on a read failure"
+    assert _wait_until(lambda: source.opens == 2)
+    assert _wait_until(lambda: publisher.accepting)
+    assert sum("would not encode, reopening" in line for line in publisher.logs) == 1
 
 
 class BigFrameSource(FakeSource):
@@ -257,6 +351,7 @@ def test_a_slow_client_is_dropped_and_the_others_keep_their_frames():
     logs = []
     pub = camera_pub.CameraPublisher(source, port=0, bind="127.0.0.1",
                                      client_backlog=2, log=logs.append).start()
+    assert _wait_until(lambda: pub.accepting)
     slow = socket.socket()
     slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
     slow.connect(("127.0.0.1", pub.port))  # and never read from it
@@ -348,7 +443,15 @@ def test_sigterm_closes_the_sockets_and_the_device(tmp_path):
             if line.startswith("PORT "):
                 port = int(line.split()[1])
         assert port, "the publisher never came up"
-        client = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+        client = None
+        deadline = time.time() + 10.0
+        while client is None:
+            try:  # the port takes clients from the first frame on, a moment after start
+                client = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+            except ConnectionRefusedError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.02)
         client.settimeout(5.0)
         assert _read_frame(client) is not None
         proc.send_signal(signal.SIGTERM)

@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # A wrist camera publisher serves a USB camera in the head camera's wire format
@@ -80,3 +80,12 @@ that points the sidecar's existing pc2cam reader (`G1_PC2_CAMERA_HOST=127.0.0.1`
 `G1_PC2_CAMERA_PORT=<test port>`) at a running publisher and gets a frame through
 `/cameras/head_camera/snapshot`. If a USB webcam is attached to the lab PC, a manual check
 with the real device (note the result in the PR).
+
+## Notes
+
+- 2026-11-01: review fix — the port now takes connections only while the camera delivers
+  frames (bound once at start to fail fast, listening from the first good frame, closed
+  with the clients during an outage, SO_REUSEADDR for the re-listen), so a TCP connect
+  means "camera up" for the Set up step (TASK-446) and the sidecar's availability check
+  (TASK-445). A single frame that will not encode is skipped; `MAX_BAD_FRAMES` (5) in a
+  row count as a device failure.

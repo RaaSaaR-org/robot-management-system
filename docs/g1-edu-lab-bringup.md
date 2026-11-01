@@ -246,8 +246,12 @@ Each wrist camera is one USB (UVC) camera served by its own process,
 timestamp | JPEG`. It encodes only while a client is connected, serves several
 clients from one encode, drops a client that cannot keep up, and on a read
 failure (USB re-enumeration) logs `read failed, reopening` once, drops its
-clients and reopens the camera every second until it is back. The sidecar reads
-it with the reader it already uses for the head camera.
+clients and reopens the camera every second until it is back. A single frame
+that will not encode is skipped; five in a row count as a read failure. The
+port takes connections **only while the camera delivers frames**: until the
+first frame and throughout an outage a connect is refused, so a successful
+connect means the camera is up. The sidecar reads it with the reader it already
+uses for the head camera.
 
 | Camera | Port | systemd unit |
 | --- | --- | --- |
@@ -286,11 +290,12 @@ follows the camera to its new node.
 python3 robot-agent/hardware/camera_pub.py \
   --device /dev/v4l/by-id/usb-<vendor>_<model>_<serial>-video-index0 \
   --port 5601 --name left_wrist_camera
-# [camera_pub left_wrist_camera] serving on 0.0.0.0:5601
 # [camera_pub left_wrist_camera] camera open (640x480@30 MJPG)
+# [camera_pub left_wrist_camera] serving on 0.0.0.0:5601
 ```
 
-The second log line is the mode the camera actually agreed to. Other flags:
+The first log line is the mode the camera actually agreed to; the port listens
+from the second line on. Other flags:
 `--bind` (default `0.0.0.0`), `--width 640 --height 480 --fps 30`,
 `--quality 85`. Ctrl-C or SIGTERM closes the sockets and the camera.
 
@@ -337,8 +342,10 @@ same unit works as a user unit (`~/.config/systemd/user/`, without `User=` and
 `SupplementaryGroups=`, `WantedBy=default.target`, `systemctl --user ...`); the
 user must already be in the `video` group.
 
-The publisher listens even while its camera is unplugged and picks the camera
-up when it appears, so the unit need not wait for the USB device. The sidecar
+The unit need not wait for the USB device: the publisher starts without its
+camera, refuses connections while the camera is unplugged, and starts listening
+when the camera appears. "Connection refused" on 5601/5602 therefore means the
+camera is missing or failing (see `journalctl`), not that the unit is down. The sidecar
 learns about the wrist publishers from
 `G1_WRIST_CAMERAS="left_wrist_camera@<host>:5601,right_wrist_camera@<host>:5602"`
 (TASK-445); a robot profile sets that from its `wristCameras` field (TASK-446).

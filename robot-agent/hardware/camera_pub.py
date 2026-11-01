@@ -19,7 +19,14 @@ Behaviour the sidecar relies on, kept identical to the head publisher:
   • A read failure (USB re-enumeration, a loose cable) closes the device, drops the
     clients, and reopens it once a second until it is back, logging once per outage.
     Dropping the clients is what makes the sidecar clear its cached frame: a frozen
-    picture labelled LIVE is worse than an honest empty panel.
+    picture labelled LIVE is worse than an honest empty panel. A single frame that
+    will not encode is skipped; MAX_BAD_FRAMES in a row count as a read failure.
+  • The port takes connections ONLY while the camera delivers frames. It is bound at
+    start (so a port in use fails at once) but listens only from the first good frame;
+    an outage closes the listener with the clients, and it listens again on the same
+    port once the camera is back. So a successful TCP connect means "this camera is up" — the
+    sidecar's availability check and the supervisor's Set up step rely on that, and a
+    missing wrist camera is refused rather than accepted and left silent.
 
 Pass the device by a stable path — `/dev/v4l/by-id/...` or `/dev/v4l/by-path/...` — so
 the camera keeps its identity when it re-enumerates as a different `/dev/videoN`. The
@@ -56,6 +63,17 @@ DEFAULT_PORT = 5601
 REOPEN_DELAY_S = 1.0
 #: How long a client may block one send before it counts as gone.
 CLIENT_SEND_TIMEOUT_S = 5.0
+#: How often the accept loop wakes to see whether it should stop.
+ACCEPT_POLL_S = 0.5
+#: Frames in a row that grab but will not decode or encode before the camera counts as
+#: failed. A single bad frame is skipped; a run of them means the device is broken.
+MAX_BAD_FRAMES = 5
+
+# What one pass of the capture loop came to (CameraPublisher._grab_and_publish).
+_SENT = "sent"
+_GRABBED = "grabbed"
+_BAD_FRAME = "bad_frame"
+_READ_FAILED = "read_failed"
 
 
 class UvcCamera:
@@ -193,7 +211,14 @@ class _Client:
 
 
 class CameraPublisher:
-    """Serves one frame source on a TCP port in the head camera's wire format."""
+    """Serves one frame source on a TCP port in the head camera's wire format.
+
+    `start()` binds the port once to check it, so a port already in use fails at once,
+    and then lets go of it: the port listens only while the camera delivers frames.
+    Before the first frame and during an outage no socket is open on it, so a connect
+    is refused and a probe that can connect knows the camera is up. (A socket bound
+    without listening would not do: macOS drops the SYN instead of refusing it.)
+    """
 
     def __init__(self, source, port: int = DEFAULT_PORT, bind: str = "0.0.0.0",
                  quality: int = 85, name: str = "camera",
@@ -207,7 +232,16 @@ class CameraPublisher:
         self.client_backlog = max(1, client_backlog)
         self._log = log or (lambda msg: print(msg, flush=True))
         self._requested_port = port
-        self._listener = None  # type: Optional[socket.socket]
+        self._port = None  # type: Optional[int]
+        # The listening socket, open only while the camera is up. A new one after each
+        # outage, since a socket cannot stop listening without being closed.
+        self._sock = None  # type: Optional[socket.socket]
+        self._accepting = False
+        self._accept_thread = None  # type: Optional[threading.Thread]
+        self._accept_closing = None  # type: Optional[threading.Event]
+        self._sock_lock = threading.Lock()
+        self._listen_error = ""
+        self._served_before = False
         self._clients = []  # type: List[_Client]
         self._clients_lock = threading.Lock()
         self._stop = threading.Event()
@@ -217,31 +251,19 @@ class CameraPublisher:
     # -- lifecycle ----------------------------------------------------------------
 
     def start(self) -> "CameraPublisher":
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            srv.bind((self.bind, self._requested_port))
-            srv.listen(8)
-        except OSError:
-            srv.close()
-            raise
-        srv.settimeout(0.5)
-        self._listener = srv
-        self.log("serving on %s:%d" % (self.bind, self.port))
-        for target in (self._accept_loop, self._capture_loop):
-            t = threading.Thread(target=target, daemon=True)
-            t.start()
-            self._threads.append(t)
+        # Bind once to fail fast on a port in use and to learn the port when 0 was asked
+        # for, then release it until the camera delivers its first frame.
+        probe = self._bind_socket(self._requested_port)
+        self._port = probe.getsockname()[1]
+        self._close_quietly(probe)
+        t = threading.Thread(target=self._capture_loop, daemon=True)
+        t.start()
+        self._threads.append(t)
         return self
 
     def stop(self, timeout: float = 3.0) -> None:
         self._stop.set()
-        if self._listener is not None:
-            try:
-                self._listener.close()
-            except OSError:
-                pass
-        self._drop_clients()
+        self._stop_accepting()
         for t in self._threads:
             t.join(timeout)
         # The capture thread closes the source on its way out. When it is still stuck
@@ -250,9 +272,12 @@ class CameraPublisher:
 
     @property
     def port(self) -> int:
-        if self._listener is None:
-            return self._requested_port
-        return self._listener.getsockname()[1]
+        return self._requested_port if self._port is None else self._port
+
+    @property
+    def accepting(self) -> bool:
+        """True while the port takes connections, i.e. while the camera is up."""
+        return self._accepting
 
     @property
     def client_count(self) -> int:
@@ -262,16 +287,97 @@ class CameraPublisher:
     def log(self, msg: str) -> None:
         self._log("[camera_pub %s] %s" % (self.name, msg))
 
+    # -- the port -----------------------------------------------------------------
+
+    def _bind_socket(self, port: int) -> socket.socket:
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # SO_REUSEADDR so the port can be bound again right after start() or an outage,
+        # while the connections just dropped still sit in TIME_WAIT.
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            srv.bind((self.bind, port))
+        except OSError:
+            srv.close()
+            raise
+        return srv
+
+    @staticmethod
+    def _close_quietly(sock: socket.socket) -> None:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+    def _start_accepting(self) -> bool:
+        """Listen on the port and start taking clients; False when that failed."""
+        with self._sock_lock:
+            if self._stop.is_set():
+                return False
+            if self._accepting:
+                return True
+            try:
+                self._sock = self._bind_socket(self.port)
+                self._sock.listen(8)
+                self._sock.settimeout(ACCEPT_POLL_S)
+            except OSError as e:
+                if self._sock is not None:
+                    self._close_quietly(self._sock)
+                    self._sock = None
+                if str(e) != self._listen_error:
+                    self._listen_error = str(e)
+                    self.log("cannot listen on %s:%d: %s; retrying every %gs"
+                             % (self.bind, self.port, e, self.reopen_delay_s))
+                return False
+            self._listen_error = ""
+            closing = threading.Event()
+            thread = threading.Thread(target=self._accept_loop, args=(self._sock, closing),
+                                      daemon=True)
+            self._accept_closing = closing
+            self._accept_thread = thread
+            self._accepting = True
+            thread.start()
+            if not self._served_before:
+                self._served_before = True
+                self.log("serving on %s:%d" % (self.bind, self.port))
+            return True
+
+    def _stop_accepting(self) -> None:
+        """Close the listener and drop every client; a connect is refused from here on.
+
+        The accept thread is joined before the clients are dropped, so no client it
+        accepted can slip in after the drop.
+        """
+        with self._sock_lock:
+            if self._accepting:
+                self._accepting = False
+                sock, thread, closing = self._sock, self._accept_thread, self._accept_closing
+                self._sock = self._accept_thread = self._accept_closing = None
+                if closing is not None:
+                    closing.set()
+                if sock is not None:
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)  # wakes accept() where it can
+                    except OSError:
+                        pass
+                if thread is not None:
+                    thread.join(ACCEPT_POLL_S * 4)
+                if sock is not None:
+                    self._close_quietly(sock)
+        self._drop_clients()
+
     # -- clients ------------------------------------------------------------------
 
-    def _accept_loop(self) -> None:
-        while not self._stop.is_set():
+    def _accept_loop(self, srv: socket.socket, closing: threading.Event) -> None:
+        while not closing.is_set():
             try:
-                conn, addr = self._listener.accept()
+                conn, addr = srv.accept()
             except socket.timeout:
                 continue
             except OSError:
-                break  # listener closed by stop()
+                break  # listener closed: an outage, or stop()
+            if closing.is_set():
+                self._close_quietly(conn)
+                break
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             conn.settimeout(CLIENT_SEND_TIMEOUT_S)
             client = _Client(conn, addr, self.client_backlog, self._client_gone)
@@ -311,6 +417,8 @@ class CameraPublisher:
     def _capture_loop(self) -> None:
         opened = False
         ever_opened = False
+        bad_frames = 0
+        listen_retry_at = 0.0
         # Set from the first failure until the next good frame, so an outage is logged
         # once however many reopen attempts it takes, and a camera that opens and then
         # fails at once (flapping) does not log every second.
@@ -323,63 +431,88 @@ class CameraPublisher:
                         if outage_since is None:
                             outage_since = time.time()
                             why = (": " + self._last_open_error) if self._last_open_error else ""
-                            self.log("cannot open the camera%s; retrying every %gs"
+                            self.log("cannot open the camera%s; retrying every %gs; "
+                                     "refusing clients until it opens"
                                      % (why, self.reopen_delay_s))
                         self._stop.wait(self.reopen_delay_s)
                         continue
                     opened = True
+                    bad_frames = 0
                     if not ever_opened and outage_since is None:
                         self.log("camera open (%s)" % self._describe_source())
                     ever_opened = True
 
-                if self._grab_and_publish():
-                    if outage_since is not None:
+                result = self._grab_and_publish()
+                failure = ""
+                if result == _READ_FAILED:
+                    failure = "read failed, reopening"  # the head publisher's words
+                elif result == _BAD_FRAME:
+                    bad_frames += 1
+                    if bad_frames >= MAX_BAD_FRAMES:
+                        failure = ("%d frames in a row would not encode, reopening"
+                                   % bad_frames)
+                else:
+                    if result == _SENT:
+                        bad_frames = 0
+                    # A frame came off the camera: it is up, so the port takes clients.
+                    if not self._accepting and time.time() >= listen_retry_at:
+                        if not self._start_accepting():
+                            listen_retry_at = time.time() + self.reopen_delay_s
+                    if outage_since is not None and self._accepting:
                         self.log("camera back after %.1fs (%s)"
                                  % (time.time() - outage_since, self._describe_source()))
                         outage_since = None
+                if not failure:
                     continue
 
                 if outage_since is None:
-                    # The head publisher's words, so one grep finds both in a journal.
-                    self.log("read failed, reopening")
+                    self.log(failure + "; refusing clients until the camera is back")
                     outage_since = time.time()
+                # Clients first: they see the stream end, and a new connect is refused
+                # from here until the camera delivers frames again.
+                self._stop_accepting()
                 self.source.close()
                 opened = False
-                self._drop_clients()
                 self._stop.wait(self.reopen_delay_s)
         finally:
+            # However the loop ends, nobody may stay connected to a camera that is no
+            # longer being read.
+            self._stop_accepting()
             try:
                 self.source.close()
             except Exception:  # noqa: BLE001
                 pass
 
-    def _grab_and_publish(self) -> bool:
+    def _grab_and_publish(self) -> str:
         """One frame: grab always, encode and send only while someone watches.
 
-        False on a read failure, which the caller turns into a reopen.
+        Returns `_READ_FAILED` when the grab failed (the caller reopens), `_BAD_FRAME`
+        when the grabbed frame would not decode or encode (the caller skips it, and
+        reopens only after `MAX_BAD_FRAMES` in a row), `_GRABBED` when nobody watches,
+        and `_SENT` when the frame went out.
         """
         try:
             if not self.source.grab():
-                return False
+                return _READ_FAILED
         except Exception:  # noqa: BLE001
-            return False
+            return _READ_FAILED
         ts_ns = time.time_ns()
         with self._clients_lock:
             clients = list(self._clients)
         if not clients:
-            return True
+            return _GRABBED
         try:
             jpeg = self.source.retrieve_jpeg(self.quality)
         except Exception:  # noqa: BLE001
             jpeg = None
         if not jpeg:
-            return False
+            return _BAD_FRAME
         packet = FRAME_HEADER.pack(len(jpeg), ts_ns) + jpeg
         for client in clients:
             if not client.offer(packet):
                 self.log("client %s cannot keep up; dropping it" % client.label)
                 client.close()
-        return True
+        return _SENT
 
 
 def serve_until_signalled(publisher: CameraPublisher) -> int:
@@ -394,7 +527,7 @@ def serve_until_signalled(publisher: CameraPublisher) -> int:
     try:
         publisher.start()
     except OSError as e:
-        print("[camera_pub %s] cannot listen on %s:%d: %s"
+        print("[camera_pub %s] cannot bind %s:%d: %s"
               % (publisher.name, publisher.bind, publisher.port, e), file=sys.stderr, flush=True)
         return 1
     try:
