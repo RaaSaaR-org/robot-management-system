@@ -3,7 +3,7 @@ id: "TASK-444"
 aliases: []
 title: "A wrist camera publisher serves a USB camera in the head camera's wire format"
 slug: "a-wrist-camera-publisher-serves-a-usb-camera-in-the-head"
-status: "review"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -66,12 +66,12 @@ process on PC2 or on the lab PC, and the sidecar reads it like the head camera.
 
 ## Acceptance Criteria
 
-- [ ] With a fake frame source, a client reading the socket receives frames in the exact
+- [x] With a fake frame source, a client reading the socket receives frames in the exact
       wire format (length, ns timestamp, valid JPEG), two clients get the same frames, no
       encode happens with zero clients, and a read failure is followed by a reopen.
-- [ ] The file imports under Python 3.8 syntax rules (portability test passes) and without
+- [x] The file imports under Python 3.8 syntax rules (portability test passes) and without
       OpenCV installed.
-- [ ] Hardware pytest suite green (`HARDWARE_PYTHON`).
+- [x] Hardware pytest suite green (`HARDWARE_PYTHON`).
 
 ## Test Strategy
 
