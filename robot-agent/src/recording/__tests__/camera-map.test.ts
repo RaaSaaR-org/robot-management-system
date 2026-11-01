@@ -7,15 +7,17 @@
 import { describe, it, expect } from 'vitest';
 import { datasetCameraKey, datasetImageFeature, mapCameras } from '../camera-map.js';
 
+const G1_SCENES = [
+  'g1_dex3_house_scene.xml',
+  'g1_dex3_room_scene.xml',
+  'g1_warehouse_scene.xml',
+  'g1_dex3_pickplace_scene.xml',
+  'g1_apple_pnp_scene.xml',
+];
+
 describe('datasetCameraKey', () => {
   it('gives the head camera a Unitree key in every scene we ship', () => {
-    for (const scene of [
-      'g1_dex3_house_scene.xml',
-      'g1_dex3_room_scene.xml',
-      'g1_warehouse_scene.xml',
-      'g1_dex3_pickplace_scene.xml',
-      'g1_apple_pnp_scene.xml',
-    ]) {
+    for (const scene of G1_SCENES) {
       expect(datasetCameraKey(scene, 'head_camera')).toBe('cam_right_high');
     }
   });
@@ -39,9 +41,11 @@ describe('datasetCameraKey', () => {
     expect(datasetCameraKey(null, 'head_camera')).toBe('cam_right_high');
   });
 
-  it('names wrist cameras correctly if a scene ever grows one', () => {
-    expect(datasetCameraKey(null, 'left_wrist_camera')).toBe('cam_left_wrist');
-    expect(datasetCameraKey(null, 'right_wrist_camera')).toBe('cam_right_wrist');
+  it('names the wrist cameras with the Unitree wrist keys in every G1 scene', () => {
+    for (const scene of [null, ...G1_SCENES]) {
+      expect(datasetCameraKey(scene, 'left_wrist_camera')).toBe('cam_left_wrist');
+      expect(datasetCameraKey(scene, 'right_wrist_camera')).toBe('cam_right_wrist');
+    }
   });
 });
 
@@ -54,6 +58,14 @@ describe('datasetImageFeature', () => {
 });
 
 describe('mapCameras', () => {
+  it('maps head + both wrists to three distinct columns in every G1 scene', () => {
+    for (const scene of G1_SCENES) {
+      expect(
+        mapCameras(scene, ['head_camera', 'left_wrist_camera', 'right_wrist_camera']).map((c) => c.key),
+      ).toEqual(['cam_right_high', 'cam_left_wrist', 'cam_right_wrist']);
+    }
+  });
+
   it('maps a list in order', () => {
     expect(mapCameras('g1_dex3_house_scene.xml', ['head_camera', 'house_iso'])).toEqual([
       { camera: 'head_camera', key: 'cam_right_high' },

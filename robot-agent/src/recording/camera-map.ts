@@ -19,9 +19,12 @@
  * grows a real stereo pair can add `cam_left_high` beside it without renaming a
  * column that datasets already carry.
  *
- * No scene in this repo defines a wrist camera, so `cam_*_wrist` is never
- * produced. That is a gap in the scenes, not something to paper over by
- * relabelling a third-person view as a wrist view.
+ * Every G1 Dex3 scene has a `left_wrist_camera` and a `right_wrist_camera`
+ * (TASK-440), mounted on the wrist yaw links of the robot includes in
+ * `hardware/sim_evaluator/mjcf/g1_dex3/` and named like the real robot's, so they
+ * reach `cam_left_wrist` / `cam_right_wrist` through the default table below —
+ * no scene needs its own entry for them. A scene without them must never fill
+ * those columns by relabelling a third-person view as a wrist view.
  *
  * A scene camera with no entry becomes `cam_<name>` — legible, obviously
  * non-standard, and impossible to mistake for a Unitree key.
