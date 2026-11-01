@@ -169,11 +169,11 @@ title, so the operator knows someone is watching.
 5. **Open the session on the headset** (Get ready step 4). Press **Open on
    headset**. The Quest
    browser opens `/data-collection/live?robot=<id>`, which lands on the robot's
-   live session: a session that is recording or paused, or a READY one created
-   in the last 4 hours. With exactly one such session it opens it; with more it
-   lists them and the operator picks one; with none it waits, looks again every
-   2 s, and names any older READY session it is ignoring. So the headset can be
-   opened before the session exists.
+   live session: a session that is recording or paused and was last active in
+   the last 12 hours, or a READY one created in the last 4 hours. With exactly
+   one such session it opens it; with more it lists them and the operator picks
+   one; with none it waits, looks again every 2 s, and names any older session
+   it is ignoring. So the headset can be opened before the session exists.
 6. **Enter VR** (operator, inside the headset; Get ready step 5, "Operator
    enters VR", turns done when the headset is in VR). Press **Launch VR**, then
    **Take control**, then **Enter VR**. Enter VR stays disabled until this

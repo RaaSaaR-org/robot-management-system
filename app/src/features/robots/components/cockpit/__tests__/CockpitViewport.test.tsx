@@ -1,7 +1,8 @@
 /**
  * @file CockpitViewport.test.tsx
  * @description Asking for the robot's camera must never answer with a rendering
- *   of the robot.
+ *   of the robot. TASK-448: a camera feed that leaves the panel closes its
+ *   stream.
  * @feature robots
  */
 
@@ -102,6 +103,19 @@ describe('CockpitViewport', () => {
 
     await waitFor(() => expect(screen.queryByText(/no camera feed/i)).not.toBeInTheDocument());
     expect(mockTicket).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes the stream when the view goes back to the model (TASK-448)', async () => {
+    mockList.mockResolvedValue({ cameras: ['head_camera'], source: 'realsense' });
+
+    render(<CockpitViewport {...props} />);
+    await userEvent.click(await screen.findByRole('button', { name: /head_camera/i }));
+    const feed = await screen.findByAltText('head_camera camera feed');
+    expect(feed.getAttribute('src')).toContain('ticket=tkt-1');
+
+    await userEvent.click(screen.getByRole('button', { name: /model/i }));
+    await waitFor(() => expect(feed.getAttribute('src')).toBe(''));
+    expect(feed.isConnected).toBe(false);
   });
 
   it('still shows the posed model when the model source is the one selected', async () => {
