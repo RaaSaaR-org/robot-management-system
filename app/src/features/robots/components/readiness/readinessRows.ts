@@ -33,6 +33,7 @@ export type RowId =
   | 'hand_left'
   | 'hand_right'
   | 'camera'
+  | 'wrist_cameras'
   | 'control'
   | 'quest';
 

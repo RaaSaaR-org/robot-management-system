@@ -121,14 +121,15 @@ class FakePublisher:
 
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch):
-    monkeypatch.setattr(g1_sidecar, "_pc2cam_reader", None, raising=False)
-    monkeypatch.setattr(g1_sidecar, "_pc2cam_absent_until", 0.0, raising=False)
+    # Every endpoint's reader and cooldown, the head's included (TASK-445).
+    monkeypatch.setattr(g1_sidecar, "_pc2cam_endpoints", {})
     monkeypatch.setenv("G1_CAMERA_SOURCE", "pc2cam")
     monkeypatch.setenv("G1_PC2_CAMERA_HOST", "127.0.0.1")
+    monkeypatch.delenv("G1_WRIST_CAMERAS", raising=False)
     yield
-    reader = getattr(g1_sidecar, "_pc2cam_reader", None)
-    if reader is not None:
-        reader._stop.set()
+    for state in list(g1_sidecar._pc2cam_endpoints.values()):
+        if state.reader is not None:
+            state.reader._stop.set()
 
 
 @pytest.fixture
@@ -345,3 +346,384 @@ def test_a_stream_does_not_reprobe_the_sources_ahead_of_it(monkeypatch, publishe
         f"the source was re-resolved {len(probes)} times mid-stream; each one is "
         "a second the viewer spends looking at a frozen picture labelled LIVE"
     )
+
+
+# ---------------------------------------------------------------------------
+# Wrist cameras (TASK-445)
+# ---------------------------------------------------------------------------
+# A wrist camera is its own publisher in the same wire format, named in
+# G1_WRIST_CAMERAS. The properties pinned below are the ones an operator would
+# otherwise discover on the robot: that each name shows its own camera and never
+# the head's, that a missing wrist takes nothing else down with it, and that a
+# robot with no wrist cameras configured answers exactly what it did before.
+
+import json  # noqa: E402
+import urllib.request  # noqa: E402
+from http.server import ThreadingHTTPServer  # noqa: E402
+
+JPEG_LEFT = b"\xff\xd8\xff\xdb\x00\x01LEFT\xff\xd9"
+JPEG_RIGHT = b"\xff\xd8\xff\xdb\x00\x01RIGHT\xff\xd9"
+
+
+def _dead_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+@pytest.fixture
+def sidecar():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), g1_sidecar.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+    server.server_close()
+
+
+def _get_json(url, timeout=10):
+    with urllib.request.urlopen(url, timeout=timeout) as res:
+        return res.status, json.loads(res.read())
+
+
+def _mjpeg_frames(res, count, timeout):
+    """`[(arrival time, jpeg)]` from a multipart MJPEG response."""
+    frames = []
+    deadline = time.time() + timeout
+    while len(frames) < count and time.time() < deadline:
+        line = res.readline()
+        if not line:
+            break
+        if line.strip() != b"--FRAME":
+            continue
+        length = None
+        while True:
+            header = res.readline().strip()
+            if not header:
+                break
+            if header.lower().startswith(b"content-length:"):
+                length = int(header.split(b":", 1)[1])
+        frames.append((time.time(), res.read(length)))
+    return frames
+
+
+@pytest.fixture
+def three_cameras(monkeypatch, publisher):
+    """A head publisher plus a left and a right wrist publisher on their own ports."""
+    left = FakePublisher(frames=(JPEG_LEFT,)).start()
+    right = FakePublisher(frames=(JPEG_RIGHT,)).start()
+    monkeypatch.setenv(
+        "G1_WRIST_CAMERAS",
+        f"left_wrist_camera@127.0.0.1:{left.port},right_wrist_camera@127.0.0.1:{right.port}",
+    )
+    yield publisher, left, right
+    left.stop()
+    right.stop()
+
+
+# --- G1_WRIST_CAMERAS parsing -------------------------------------------------
+
+def test_wrist_cameras_parse_in_order_and_skip_blanks(monkeypatch):
+    monkeypatch.setenv("G1_WRIST_CAMERAS",
+                       " left_wrist_camera@10.0.0.2:5601, ,right_wrist_camera@[::1]:5602,")
+    assert list(g1_sidecar._wrist_camera_endpoints().items()) == [
+        ("left_wrist_camera", ("10.0.0.2", 5601)),
+        ("right_wrist_camera", ("::1", 5602)),
+    ]
+
+
+@pytest.mark.parametrize("raw", ["", "   ", ",,"])
+def test_no_wrist_cameras_when_unset_or_empty(monkeypatch, raw):
+    monkeypatch.setenv("G1_WRIST_CAMERAS", raw)
+    assert g1_sidecar._wrist_camera_endpoints() == {}
+
+
+def test_a_malformed_entry_is_skipped_and_logged_once(monkeypatch, capsys):
+    monkeypatch.setattr(g1_sidecar, "_wrist_cameras_logged", set())
+    raw = ("left_wrist_camera@10.0.0.2:5601,"
+           "nohost:5601,"                      # no @
+           "bad name@10.0.0.2:5603,"           # name outside [A-Za-z0-9_-]
+           "x@10.0.0.2:notaport,"
+           "y@10.0.0.2:70000,"
+           "head_camera@10.0.0.2:5604,"        # would alias the head camera
+           "left_wrist_camera@10.0.0.3:5605,"  # duplicate name
+           "right_wrist_camera@10.0.0.2:5602")
+    assert g1_sidecar._parse_wrist_cameras(raw) == {
+        "left_wrist_camera": ("10.0.0.2", 5601),
+        "right_wrist_camera": ("10.0.0.2", 5602),
+    }
+    first = capsys.readouterr().out
+    assert first.count("G1_WRIST_CAMERAS: skipping") == 6
+    g1_sidecar._parse_wrist_cameras(raw)
+    assert "skipping" not in capsys.readouterr().out, "logged again on the next request"
+
+
+def test_the_cameras_off_switch_turns_the_wrists_off_too(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("probed a wrist camera with G1_CAMERA_SOURCE off")
+
+    monkeypatch.setenv("G1_WRIST_CAMERAS", "left_wrist_camera@127.0.0.1:5601")
+    monkeypatch.setattr(g1_sidecar, "_pc2cam_available", boom)
+    for value in ("none", "off"):
+        monkeypatch.setenv("G1_CAMERA_SOURCE", value)
+        assert g1_sidecar._wrist_camera_endpoints() == {}
+        assert g1_sidecar._camera_listing() == (None, (), None, g1_sidecar._no_camera_source_detail())
+        jpeg, _, _, kind = g1_sidecar._grab_camera_jpeg("left_wrist_camera")
+        assert jpeg is None and kind == "no_source"
+
+
+# --- Head-only: what it was before -------------------------------------------
+
+def test_head_only_cameras_body_is_todays_plus_configured(sidecar, publisher):
+    # The epic's first acceptance criterion: no G1_WRIST_CAMERAS, and /cameras
+    # is today's answer with one additive field and nothing else.
+    _wait_for_frame()
+    status, body = _get_json(f"{sidecar}/cameras")
+    assert status == 200
+    assert body == {"cameras": ["head_camera"], "source": "pc2cam", "configured": ["head_camera"]}
+
+
+def test_head_only_without_a_camera_answers_exactly_as_before(sidecar, monkeypatch):
+    monkeypatch.setenv("G1_PC2_CAMERA_PORT", str(_dead_port()))
+    status, body = _get_json(f"{sidecar}/cameras")
+    assert status == 200
+    # No `configured` at all: a robot with nothing configured has nothing to add.
+    assert set(body) == {"cameras", "source", "detail"}
+    assert body["cameras"] == [] and body["source"] is None
+    assert body["detail"].startswith(
+        "no camera source available. The robot's head camera is served by PC2 — "
+        "check `systemctl status g1-head-cam` on 127.0.0.1")
+    assert "wrist" not in body["detail"]
+
+
+def test_head_only_stream_resolves_once_and_probes_no_wrist(monkeypatch, sidecar, publisher):
+    _wait_for_frame()
+    probed = []
+    real = g1_sidecar._pc2cam_available
+
+    def spy(name=None):
+        probed.append(name)
+        return real(name)
+
+    monkeypatch.setattr(g1_sidecar, "_pc2cam_available", spy)
+    res = urllib.request.urlopen(f"{sidecar}/cameras/head_camera/stream", timeout=10)
+    frames = _mjpeg_frames(res, 5, 3.0)
+    res.close()
+    assert len(frames) == 5
+    assert {f for _, f in frames} <= {JPEG_A, JPEG_B}
+    assert set(probed) == {None}
+
+
+# --- Head + two wrists ----------------------------------------------------------
+
+def test_all_three_are_listed_head_first(sidecar, three_cameras):
+    _wait_for_frame()
+    status, body = _get_json(f"{sidecar}/cameras")
+    assert status == 200
+    assert body == {
+        "cameras": ["head_camera", "left_wrist_camera", "right_wrist_camera"],
+        "source": "pc2cam",
+        "configured": ["head_camera", "left_wrist_camera", "right_wrist_camera"],
+    }
+
+
+def _snapshot_jpeg(base, name, timeout=8.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        _, body = _get_json(f"{base}/cameras/{name}/snapshot")
+        if body.get("ok"):
+            import base64
+            return body["source"], base64.b64decode(body["jpeg_base64"])
+        time.sleep(0.05)
+    pytest.fail(f"no snapshot from {name}")
+
+
+def test_each_snapshot_is_that_cameras_own_frame(sidecar, three_cameras):
+    assert _snapshot_jpeg(sidecar, "head_camera")[1] in (JPEG_A, JPEG_B)
+    assert _snapshot_jpeg(sidecar, "left_wrist_camera") == ("pc2cam", JPEG_LEFT)
+    assert _snapshot_jpeg(sidecar, "right_wrist_camera") == ("pc2cam", JPEG_RIGHT)
+
+
+def test_each_raw_snapshot_is_that_cameras_own_frame(sidecar, three_cameras):
+    _snapshot_jpeg(sidecar, "left_wrist_camera")  # starts the reader
+    for name, expected in (("left_wrist_camera", {JPEG_LEFT}),
+                           ("right_wrist_camera", {JPEG_RIGHT}),
+                           ("head_camera", {JPEG_A, JPEG_B})):
+        _snapshot_jpeg(sidecar, name)
+        with urllib.request.urlopen(
+                f"{sidecar}/cameras/{name}/snapshot?shadows=0&format=raw&quality=90",
+                timeout=10) as res:
+            assert res.headers["Content-Type"] == "image/jpeg"
+            assert res.read() in expected
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("left_wrist_camera", JPEG_LEFT),
+    ("right_wrist_camera", JPEG_RIGHT),
+])
+def test_a_wrist_stream_serves_only_that_wrist(monkeypatch, sidecar, three_cameras, name, expected):
+    # A wrist stream never even resolves the head's sources: it is pinned by
+    # name to its own publisher.
+    resolved = []
+    real = g1_sidecar._head_source_and_names
+    monkeypatch.setattr(g1_sidecar, "_head_source_and_names",
+                        lambda: resolved.append(1) or real())
+    res = urllib.request.urlopen(f"{sidecar}/cameras/{name}/stream", timeout=10)
+    frames = _mjpeg_frames(res, 10, 4.0)
+    res.close()
+    assert len(frames) == 10
+    assert {f for _, f in frames} == {expected}
+    assert resolved == []
+
+
+def test_a_down_wrist_is_configured_but_not_served(monkeypatch, sidecar, publisher):
+    right = FakePublisher(frames=(JPEG_RIGHT,)).start()
+    dead = _dead_port()
+    monkeypatch.setenv(
+        "G1_WRIST_CAMERAS",
+        f"left_wrist_camera@127.0.0.1:{dead},right_wrist_camera@127.0.0.1:{right.port}",
+    )
+    try:
+        _wait_for_frame()
+        _, body = _get_json(f"{sidecar}/cameras")
+        assert body["cameras"] == ["head_camera", "right_wrist_camera"]
+        assert body["configured"] == ["head_camera", "left_wrist_camera", "right_wrist_camera"]
+        assert body["source"] == "pc2cam"
+        assert "detail" not in body, "the head is up: there is no 'no camera' to explain"
+
+        # The missing wrist names its own endpoint, on the stream and the snapshot.
+        try:
+            urllib.request.urlopen(f"{sidecar}/cameras/left_wrist_camera/stream", timeout=10)
+            pytest.fail("a down wrist answered a stream")
+        except urllib.error.HTTPError as e:
+            assert e.code == 503
+            err = json.loads(e.read())["error"]
+            assert f"127.0.0.1:{dead}" in err and "left_wrist_camera" in err
+        _, snap = _get_json(f"{sidecar}/cameras/left_wrist_camera/snapshot")
+        assert snap["ok"] is False and f"127.0.0.1:{dead}" in snap["error"]
+
+        # And the others are untouched.
+        assert _snapshot_jpeg(sidecar, "right_wrist_camera")[1] == JPEG_RIGHT
+        assert _snapshot_jpeg(sidecar, "head_camera")[1] in (JPEG_A, JPEG_B)
+    finally:
+        right.stop()
+
+
+def test_a_down_head_does_not_hide_live_wrists(monkeypatch, sidecar):
+    left = FakePublisher(frames=(JPEG_LEFT,)).start()
+    monkeypatch.setenv("G1_PC2_CAMERA_PORT", str(_dead_port()))
+    dead = _dead_port()
+    monkeypatch.setenv(
+        "G1_WRIST_CAMERAS",
+        f"left_wrist_camera@127.0.0.1:{left.port},right_wrist_camera@127.0.0.1:{dead}",
+    )
+    try:
+        _, body = _get_json(f"{sidecar}/cameras")
+        assert body["cameras"] == ["left_wrist_camera"]
+        assert body["source"] == "pc2cam"
+        assert body["configured"] == ["head_camera", "left_wrist_camera", "right_wrist_camera"]
+        # The reason names the head, and the wrist that is down — not the live one.
+        assert body["detail"].startswith("no head camera source available.")
+        assert f"127.0.0.1:{dead}" in body["detail"]
+        assert f"127.0.0.1:{left.port}" not in body["detail"]
+        assert _snapshot_jpeg(sidecar, "left_wrist_camera")[1] == JPEG_LEFT
+    finally:
+        left.stop()
+
+
+def test_nothing_up_lists_every_configured_camera(monkeypatch, sidecar):
+    monkeypatch.setenv("G1_PC2_CAMERA_PORT", str(_dead_port()))
+    monkeypatch.setenv("G1_WRIST_CAMERAS", f"left_wrist_camera@127.0.0.1:{_dead_port()}")
+    _, body = _get_json(f"{sidecar}/cameras")
+    assert body["cameras"] == [] and body["source"] is None
+    assert body["configured"] == ["head_camera", "left_wrist_camera"]
+    assert "Wrist camera 'left_wrist_camera' does not answer" in body["detail"]
+
+
+def _slow_connect_for(monkeypatch, ports, delay=1.0):
+    """Make a connect to `ports` behave like a host that is gone: the full
+    timeout, then a failure. Every other connect is the real one."""
+    real = socket.create_connection
+    slow = []
+
+    def fake(address, *args, **kwargs):
+        if address[1] in ports:
+            slow.append(address[1])
+            time.sleep(delay)
+            raise OSError("timed out")
+        return real(address, *args, **kwargs)
+
+    monkeypatch.setattr(g1_sidecar.socket, "create_connection", fake)
+    return slow
+
+
+def test_missing_wrists_are_probed_side_by_side_and_then_cached(monkeypatch, publisher):
+    a, b = _dead_port(), _dead_port()
+    monkeypatch.setenv("G1_WRIST_CAMERAS",
+                       f"left_wrist_camera@127.0.0.1:{a},right_wrist_camera@127.0.0.1:{b}")
+    _wait_for_frame()
+    slow = _slow_connect_for(monkeypatch, {a, b})
+
+    t0 = time.time()
+    assert g1_sidecar._camera_source_and_names() == ("pc2cam", ("head_camera",))
+    first = time.time() - t0
+    t1 = time.time()
+    assert g1_sidecar._camera_source_and_names() == ("pc2cam", ("head_camera",))
+    cached = time.time() - t1
+
+    assert sorted(slow) == sorted([a, b]), "each missing wrist is probed exactly once"
+    assert first < 1.6, f"two missing wrists cost {first:.2f} s: they were probed one after the other"
+    assert cached < 0.1, "a missing wrist must be cached, not re-probed per /cameras"
+
+
+def test_a_flapping_wrist_never_stalls_the_head_stream(monkeypatch, sidecar, three_cameras):
+    """The head stream keeps its rate while a wrist drops its clients over and
+    over, a third wrist's host is gone, and /cameras is polled throughout —
+    every one of which used to share the head's lock and its probe."""
+    head, left, right = three_cameras
+    gone = _dead_port()
+    monkeypatch.setenv(
+        "G1_WRIST_CAMERAS",
+        f"left_wrist_camera@127.0.0.1:{left.port},"
+        f"right_wrist_camera@127.0.0.1:{right.port},"
+        f"third_wrist_camera@127.0.0.1:{gone}",
+    )
+    monkeypatch.setattr(g1_sidecar, "_PC2CAM_ABSENT_COOLDOWN_S", 0.2)
+    _slow_connect_for(monkeypatch, {gone})
+    monkeypatch.setenv("G1_CAMERA_STREAM_FPS", "15")
+    _wait_for_frame()
+    _snapshot_jpeg(sidecar, "left_wrist_camera")
+
+    stop = threading.Event()
+
+    def flap():
+        while not stop.is_set():
+            left.drop_clients()
+            stop.wait(0.3)
+
+    def poll():
+        while not stop.is_set():
+            try:
+                _get_json(f"{sidecar}/cameras")
+                _get_json(f"{sidecar}/cameras/left_wrist_camera/snapshot")
+            except Exception:  # noqa: BLE001 — the flapping wrist may refuse
+                pass
+
+    workers = [threading.Thread(target=flap, daemon=True),
+               threading.Thread(target=poll, daemon=True)]
+    res = urllib.request.urlopen(f"{sidecar}/cameras/head_camera/stream", timeout=10)
+    try:
+        for w in workers:
+            w.start()
+        frames = _mjpeg_frames(res, 60, 6.0)
+    finally:
+        stop.set()
+        res.close()
+        for w in workers:
+            w.join(timeout=5)
+
+    assert len(frames) == 60, f"the head stream delivered {len(frames)} of 60 frames"
+    assert {f for _, f in frames} <= {JPEG_A, JPEG_B}, "a wrist frame reached the head stream"
+    gaps = [b[0] - a[0] for a, b in zip(frames, frames[1:])]
+    assert max(gaps) < 0.4, f"the head stream froze for {max(gaps):.2f} s"

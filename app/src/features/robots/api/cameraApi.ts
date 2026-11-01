@@ -69,6 +69,12 @@ export interface RobotCameraList {
   source: string | null;
   /** Why the list is empty, when it is. Written for an operator to read. */
   detail?: string;
+  /**
+   * Every camera the robot is set up to serve, head first, whether or not it
+   * is up right now (TASK-439). Absent from older sidecars and the sim: read
+   * it as `cameras`.
+   */
+  configured?: string[];
 }
 
 /**
@@ -87,5 +93,7 @@ export async function fetchRobotCameras(robotId: string): Promise<RobotCameraLis
     cameras: Array.isArray(data?.cameras) ? data.cameras : [],
     source: data?.source ?? null,
     ...(data?.detail ? { detail: data.detail } : {}),
+    // Absent stays absent: "read it as `cameras`" is the caller's rule.
+    ...(Array.isArray(data?.configured) ? { configured: data.configured } : {}),
   };
 }

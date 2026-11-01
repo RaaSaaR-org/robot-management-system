@@ -66,3 +66,31 @@ describe('SystemsStrip', () => {
     expect(screen.getByTestId('systems-summary')).toHaveTextContent('Hands: Right lost');
   });
 });
+
+describe('SystemsStrip grid (TASK-442)', () => {
+  const cell = (id: StripCell['id']): StripCell => ({ id, label: id, value: 'ok', status: 'ok', reason: null });
+  const grid = () => screen.getByTestId('systems-cell-robot').parentElement!;
+
+  it('keeps seven cells at 4 + 3, one row from 1440 px', () => {
+    render(<SystemsStrip cells={(['robot', 'control', 'arm_control', 'mode', 'headset', 'arms', 'hands'] as const).map(cell)} renderBody={body} />);
+    expect(grid().className).toContain('grid-cols-4 min-[1440px]:grid-cols-7');
+  });
+
+  it('lays eight cells (a Cameras cell) out as 4 + 4, one row from 1440 px', () => {
+    render(<SystemsStrip cells={(['robot', 'control', 'arm_control', 'mode', 'headset', 'arms', 'hands', 'cameras'] as const).map(cell)} renderBody={body} />);
+    expect(grid().className).toContain('grid-cols-4 min-[1440px]:grid-cols-8');
+    expect(grid().className).not.toContain('grid-cols-7');
+    const cameras = screen.getByTestId('systems-cell-cameras').className;
+    expect(cameras).toContain('max-[1439px]:border-t');
+    expect(cameras).toContain('min-[1440px]:border-l');
+    expect(screen.getByTestId('systems-cell-headset').className).toContain('min-[1440px]:border-l');
+  });
+
+  it('keeps three cells in one row, and puts four in one row', () => {
+    const { unmount } = render(<SystemsStrip cells={(['robot', 'control', 'input'] as const).map(cell)} renderBody={body} />);
+    expect(grid().className).toContain('grid-cols-3');
+    unmount();
+    render(<SystemsStrip cells={(['robot', 'control', 'input', 'cameras'] as const).map(cell)} renderBody={body} />);
+    expect(grid().className).toContain('grid-cols-4');
+  });
+});

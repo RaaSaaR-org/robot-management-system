@@ -31,6 +31,7 @@ import type {
   QuickCheck,
 } from '../types/teleoperation.types.js';
 import { DEFAULT_QUALITY_THRESHOLDS } from '../types/teleoperation.types.js';
+import { ConflictError } from '../utils/errors.js';
 import { dataQualityService } from './DataQualityService.js';
 import { LeRobotExportService } from './LeRobotExportService.js';
 import { RustFSClient } from '../storage/rustfs-client.js';
@@ -55,7 +56,6 @@ import {
   type LiveBase,
 } from './teleoperation/liveState.js';
 import { TakeLedger } from './teleoperation/takeLedger.js';
-import { ConflictError } from '../utils/errors.js';
 import {
   SimFrameRecorder,
   type RecordedFrame,
@@ -126,6 +126,19 @@ function joinModes(modes: readonly string[] | undefined): string | null {
 function splitModes(stored: string | null | undefined): string[] | undefined {
   if (stored === null || stored === undefined) return undefined;
   return stored === '' ? [] : stored.split('+');
+}
+
+/**
+ * The session's camera list as stored (TASK-441): a JSON array of names, or
+ * null for the head-camera default. A row that predates the column, or a value
+ * that is not an array of strings, reads as the default — never as `[]`, which
+ * the recorder would take to mean "joints only".
+ */
+function sessionCameras(stored: string | null | undefined): string[] | null {
+  const parsed = parseJson<unknown>(stored);
+  return Array.isArray(parsed) && parsed.length > 0 && parsed.every((c) => typeof c === 'string')
+    ? (parsed as string[])
+    : null;
 }
 
 /**
@@ -292,6 +305,7 @@ export class TeleoperationService extends EventEmitter {
         numEpisodes: dto.numEpisodes ?? null,
         episodeTimeS: dto.episodeTimeS ?? null,
         datasetRepoId: dto.datasetRepoId ?? null,
+        cameras: dto.cameras ? JSON.stringify(dto.cameras) : null,
       },
     });
 
@@ -522,6 +536,7 @@ export class TeleoperationService extends EventEmitter {
     let recorderKind: 'agent' | 'sim' | 'sidecar' | null = sidecarStarted ? 'sidecar' : null;
 
     if (!sidecarStarted && !session.sidecarDatasetPath) {
+      const cameras = sessionCameras(session.cameras);
       let agentStatus;
       try {
         agentStatus = await agentRecordingService.start(session.robotId, {
@@ -532,6 +547,10 @@ export class TeleoperationService extends EventEmitter {
           // Optional per-take auto-stop (TASK-406); an agent before TASK-402
           // ignores the field. Omitted when unset, i.e. the operator stops takes.
           ...(session.episodeTimeS != null ? { episodeTimeS: session.episodeTimeS } : {}),
+          // TASK-441: only a session that named its cameras sends them. `[]`
+          // would mean "joints only" to the recorder, and absent is the
+          // head-camera default every session before this one recorded with.
+          ...(cameras ? { cameras } : {}),
           // D3 (TASK-408): the session opens BETWEEN takes and the first take
           // begins on purpose. Auto-opening take 0 lost a whole session on
           // 2026-10-16.
@@ -549,6 +568,12 @@ export class TeleoperationService extends EventEmitter {
         // writing the previous session — and stopping its recording then would
         // lose that dataset, so it goes out as the robot's own sentence.
         if (err instanceof AgentRecordingRefused) {
+          // A camera the session asked for is not up: the robot's own sentence
+          // names it and says what to do, and "stop the recording" would be
+          // the wrong advice — nothing is recording (TASK-441).
+          if (err.code === 'CAMERA_NOT_SERVED') {
+            throw new ConflictError(`The robot cannot record this session: ${err.message}.`);
+          }
           throw new ConflictError(
             err.statusCode >= 500
               ? err.message
@@ -3000,6 +3025,7 @@ export class TeleoperationService extends EventEmitter {
       exportedDatasetId: session.exportedDatasetId,
       errorMessage: session.errorMessage,
       numEpisodes: session.numEpisodes ?? null,
+      cameras: sessionCameras(session.cameras),
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
     };

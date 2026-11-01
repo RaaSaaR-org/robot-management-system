@@ -21,6 +21,12 @@
         G1PickPlaceEnv, legs+waist are held at 0.
       * Mounted `head_camera` on torso_link: 640x480, fovy 89 (vertical) ~=
         HFOV 105.5 deg at 4:3, yawed/tilted so bottle AND crate are in frame.
+      * Mounted `left_wrist_camera` / `right_wrist_camera` on the wrist yaw
+        links (TASK-440): 8 cm above the wrist axis, 2 cm behind the yaw
+        joint, looking along the fingers 30 deg down and 10 deg toward the
+        palm side, fovy 80 - the hand's own index finger and thumb, and the
+        object between them, are in frame. Declared AFTER head_camera so it
+        keeps the lowest camera id. Cameras carry no mass: no physics change.
       * Dropped upstream <sensor>/<keyframe>/scene-setup blocks (keyframe qpos
         no longer matches without the freejoint; scene provides floor/lights).
     ==========================================================================
@@ -264,6 +270,7 @@
                             mass="0.457415" diaginertia="0.00105989 0.000895419 0.000323842"/>
                           <joint name="left_wrist_yaw_joint" axis="0 0 1" range="-1.61443 1.61443"
                             actuatorfrcrange="-5 5"/>
+                          <camera name="left_wrist_camera" pos="-0.02 0 0.08" xyaxes="-0.1736 -0.9848 0 0.4924 -0.0868 0.8660" fovy="80"/>
                           <geom class="visual" mesh="left_wrist_yaw_link"/>
                           <geom class="collision" mesh="left_wrist_yaw_link"/>
                           <geom pos="0.0415 0.003 0" quat="1 0 0 0" class="visual" mesh="left_hand_palm_link"/>
@@ -389,6 +396,7 @@
                             mass="0.457415" diaginertia="0.00105989 0.000895419 0.000323842"/>
                           <joint name="right_wrist_yaw_joint" axis="0 0 1" range="-1.61443 1.61443"
                             actuatorfrcrange="-5 5"/>
+                          <camera name="right_wrist_camera" pos="-0.02 0 0.08" xyaxes="0.1736 -0.9848 0 0.4924 0.0868 0.8660" fovy="80"/>
                           <geom class="visual" mesh="right_wrist_yaw_link"/>
                           <geom class="collision" mesh="right_wrist_yaw_link"/>
                           <geom pos="0.0415 -0.003 0" quat="1 0 0 0" class="visual" mesh="right_hand_palm_link"/>
