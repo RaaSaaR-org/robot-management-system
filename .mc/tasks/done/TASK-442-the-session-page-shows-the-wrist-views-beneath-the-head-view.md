@@ -3,7 +3,7 @@ id: "TASK-442"
 aliases: []
 title: "The session page shows the wrist views beneath the head view"
 slug: "the-session-page-shows-the-wrist-views-beneath-the-head-view"
-status: "review"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -16,7 +16,7 @@ spe: 5
 effort: "medium"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # The session page shows the wrist views beneath the head view
@@ -84,12 +84,12 @@ cameras looks and behaves exactly as today.
 
 ## Acceptance Criteria
 
-- [ ] Head-only session (cameras null): DOM, test ids, streams and readiness identical to
+- [x] Head-only session (cameras null): DOM, test ids, streams and readiness identical to
       `main` (existing LiveView and SessionDetailPage tests pass unchanged).
-- [ ] Head + wrists session: head big, two wrist tiles beneath (left/right correct), swap
+- [x] Head + wrists session: head big, two wrist tiles beneath (left/right correct), swap
       works, offline plate when a wrist is not served, Record blocked with a plain reason.
-- [ ] No horizontal scroll at phone width; E-STOP clearance unchanged at 1512 and 1280.
-- [ ] App typecheck + vitest green; a Playwright spec with mocked cameras covers both cases.
+- [x] No horizontal scroll at phone width; E-STOP clearance unchanged at 1512 and 1280.
+- [x] App typecheck + vitest green; a Playwright spec with mocked cameras covers both cases.
 
 ## Test Strategy
 
