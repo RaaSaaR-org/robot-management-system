@@ -1,12 +1,13 @@
 /**
  * @file preflight.test.ts
  * @description The pre-flight checklist logic (TASK-392): which checks block,
- *              which warn, and the single next action.
+ *              which warn, and the single next action. TASK-442: the wrist
+ *              cameras a session records, and a head-only session unchanged.
  * @feature datacollection
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildPreflight, summarizePreflight, type PreflightInputs } from '../preflight';
+import { buildPreflight, summarizePreflight, wristCamerasRow, type PreflightInputs } from '../preflight';
 
 const base: PreflightInputs = {
   robot: { name: 'G1 EDU', online: true },
@@ -83,5 +84,48 @@ describe('buildPreflight', () => {
     expect(level({ ...leased, lease: { enabled: true, bound: true } }, 'control')).toBe('ok');
     expect(level({ ...leased, lease: { enabled: false, bound: false } }, 'control')).toBeUndefined();
     expect(level({ ...leased, sessionType: 'vr_quest', vrSupported: true }, 'control')).toBeUndefined();
+  });
+});
+
+describe('wrist cameras (TASK-442)', () => {
+  const WRISTS = ['left_wrist_camera', 'right_wrist_camera'];
+  const served = (...names: string[]) => ({ loading: false, names, source: 'pc2cam' });
+
+  it('adds nothing to a head-only session', () => {
+    expect(buildPreflight({ ...base, wristCameras: [] })).toEqual(buildPreflight(base));
+    expect(buildPreflight(base).some((i) => i.id === 'wrist_cameras')).toBe(false);
+  });
+
+  it('is ok when every chosen wrist is served', () => {
+    const items = buildPreflight({ ...base, wristCameras: WRISTS, cameras: served('head_camera', ...WRISTS) });
+    expect(items.map((i) => i.id)).toEqual(['robot', 'recorder', 'camera', 'wrist_cameras', 'input']);
+    expect(items.find((i) => i.id === 'wrist_cameras')).toMatchObject({ label: 'Wrist cameras', level: 'ok', detail: '2 of 2 live' });
+    expect(summarizePreflight(items).blocking).toBe(false);
+  });
+
+  it('blocks Record on a chosen wrist the robot does not serve, with a plain reason', () => {
+    const items = buildPreflight({ ...base, wristCameras: WRISTS, cameras: served('head_camera', 'right_wrist_camera') });
+    const wrist = items.find((i) => i.id === 'wrist_cameras')!;
+    expect(wrist).toMatchObject({ level: 'blocking', detail: 'Left wrist offline' });
+    const s = summarizePreflight(items);
+    expect(s.blocking).toBe(true);
+    expect(s.next).toMatch(/^Left wrist camera is not being served\./);
+    expect(wristCamerasRow(wrist)).toMatchObject({ id: 'wrist_cameras', label: 'Wrist cameras', status: 'fail', value: 'Left wrist offline' });
+  });
+
+  it('names both wrists when neither is served', () => {
+    const items = buildPreflight({ ...base, wristCameras: WRISTS, cameras: served('head_camera') });
+    const wrist = items.find((i) => i.id === 'wrist_cameras')!;
+    expect(wrist.detail).toBe('Both wrists offline');
+    expect(wrist.action).toMatch(/^Left wrist camera and right wrist camera are not being served\./);
+  });
+
+  it('waits while the robot is offline or the list is loading, without blocking on the wrists', () => {
+    const loading = buildPreflight({ ...base, wristCameras: WRISTS, cameras: { loading: true, names: [] } });
+    expect(loading.find((i) => i.id === 'wrist_cameras')?.level).toBe('checking');
+    expect(summarizePreflight(loading).blocking).toBe(false);
+    const offline = buildPreflight({ ...base, robot: { name: 'G1 EDU', online: false }, wristCameras: WRISTS });
+    expect(offline.find((i) => i.id === 'wrist_cameras')?.level).toBe('unknown');
+    expect(wristCamerasRow(loading.find((i) => i.id === 'wrist_cameras')!).status).toBe('pending');
   });
 });

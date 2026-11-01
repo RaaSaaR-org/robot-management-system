@@ -3,7 +3,7 @@ id: "TASK-442"
 aliases: []
 title: "The session page shows the wrist views beneath the head view"
 slug: "the-session-page-shows-the-wrist-views-beneath-the-head-view"
-status: "todo"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -16,7 +16,7 @@ spe: 5
 effort: "medium"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # The session page shows the wrist views beneath the head view
@@ -64,7 +64,9 @@ cameras looks and behaves exactly as today.
    the twin keeps its PiP. Take the tile row's height from the main view so the console
    height is unchanged; check 1512 and 1280 wide and phone width.
 3. Clicking a wrist tile swaps it into the main view and puts the head view in that tile;
-   clicking again (or the head tile) swaps back. The view switch keeps listing every camera.
+   clicking again (or the head tile) swaps back. The view switch lists every camera the page
+   shows: a wrist the session does not record shows nowhere — a head-only session on a wrist
+   robot looks like a robot without wrist cameras (D2); other cameras stay (2026-10-31).
 4. A wrist camera the session records but the robot does not serve right now → its tile
    shows a small "Left wrist camera offline" plate (no stream opened).
 5. Hidden tiles open no stream; tiles unmount while the VR modal is open (as the page does
@@ -73,19 +75,21 @@ cameras looks and behaves exactly as today.
    (e.g. "2 of 2 live" / "Left wrist offline"); a chosen wrist camera that is not served is a
    **blocker** for Record with the reason "Left wrist camera is not being served". Head-only
    sessions: rows, labels and verdicts unchanged (do not turn tomorrow's Set up amber).
-7. Show the session's camera set (`cameraSetLabel`) in the Record systems strip (a
-   `SystemsCell` "Cameras · Head + 2 wrists") — only when the session has a camera list.
+7. Show the session's camera set in the Record systems strip — only when the session has a
+   camera list. The cell counts it ("Cameras · 3 cameras", `cameraCountLabel`) so it reads in
+   full when all eight cells share one row at 1512; its title carries `cameraSetLabel`
+   ("Head + 2 wrists") (2026-10-31).
 8. Set up preview: no wrist strip there (too small); the wrists are reachable via the view
    switch.
 
 ## Acceptance Criteria
 
-- [ ] Head-only session (cameras null): DOM, test ids, streams and readiness identical to
+- [x] Head-only session (cameras null): DOM, test ids, streams and readiness identical to
       `main` (existing LiveView and SessionDetailPage tests pass unchanged).
-- [ ] Head + wrists session: head big, two wrist tiles beneath (left/right correct), swap
+- [x] Head + wrists session: head big, two wrist tiles beneath (left/right correct), swap
       works, offline plate when a wrist is not served, Record blocked with a plain reason.
-- [ ] No horizontal scroll at phone width; E-STOP clearance unchanged at 1512 and 1280.
-- [ ] App typecheck + vitest green; a Playwright spec with mocked cameras covers both cases.
+- [x] No horizontal scroll at phone width; E-STOP clearance unchanged at 1512 and 1280.
+- [x] App typecheck + vitest green; a Playwright spec with mocked cameras covers both cases.
 
 ## Test Strategy
 
