@@ -57,7 +57,10 @@ export function SessionEStopButton({
       await triggerRobotEStop(robotId, { reason, triggeredBy });
       toast.success('Emergency stop sent', { description: robotName });
     } catch (err) {
-      toast.error("Couldn't send emergency stop", { description: `${robotName}: ${errorMessage(err)}` });
+      toast.error("Couldn't send emergency stop", {
+        description: `${robotName}: ${errorMessage(err)}. Use the hardware stop.`,
+        duration: null,
+      });
     } finally {
       setFiring(false);
     }

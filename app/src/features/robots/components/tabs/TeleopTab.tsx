@@ -409,7 +409,7 @@ export function KeyboardTeleopSection({
         title="Keyboard teleop"
         description={
           connected && robotType
-            ? `${robot.name} · ${robotType.toUpperCase()} · ${joints.length} joints · ${isSim ? 'simulation' : 'real robot'}`
+            ? `${robot.name} · ${robotType.toUpperCase()} · ${joints.length} joints · ${isSim ? 'simulated' : 'real robot'}`
             : `Drive single joints of the ${isSim ? 'simulated' : 'real'} robot ${robot.name} from the keyboard.`
         }
         actions={
