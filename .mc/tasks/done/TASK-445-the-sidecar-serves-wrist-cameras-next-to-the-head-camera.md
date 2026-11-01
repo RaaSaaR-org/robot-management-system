@@ -3,7 +3,7 @@ id: "TASK-445"
 aliases: []
 title: "The sidecar serves wrist cameras next to the head camera"
 slug: "the-sidecar-serves-wrist-cameras-next-to-the-head-camera"
-status: "review"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -16,7 +16,7 @@ spe: 5
 effort: "high"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # The sidecar serves wrist cameras next to the head camera
@@ -90,15 +90,15 @@ configured, everything is byte-identical to today.
 
 ## Acceptance Criteria
 
-- [ ] `G1_WRIST_CAMERAS` unset: `/cameras` returns `{cameras: ['head_camera'], source:
+- [x] `G1_WRIST_CAMERAS` unset: `/cameras` returns `{cameras: ['head_camera'], source:
       'pc2cam'}` plus only the additive `configured`; every existing sidecar test passes.
-- [ ] Two fake wrist publishers + a fake head: `/cameras` lists all three head-first; each
+- [x] Two fake wrist publishers + a fake head: `/cameras` lists all three head-first; each
       snapshot and stream returns that endpoint's frames (never the head's).
-- [ ] One wrist publisher down: listed as configured, not served; the head and the other
+- [x] One wrist publisher down: listed as configured, not served; the head and the other
       wrist stream without a stall (no re-probe in a running stream; a flapping wrist never
       freezes the head stream).
-- [ ] `?format=raw` returns JPEG bytes; the agent then makes one request per frame.
-- [ ] Agent and server pass `configured` through; typecheck + vitest + hardware pytest green.
+- [x] `?format=raw` returns JPEG bytes; the agent then makes one request per frame.
+- [x] Agent and server pass `configured` through; typecheck + vitest + hardware pytest green.
 
 ## Test Strategy
 
