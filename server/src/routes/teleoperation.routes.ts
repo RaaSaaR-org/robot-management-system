@@ -91,6 +91,31 @@ async function sendEpisodeFailure(
   sendFailure(res, error, fallback, 400);
 }
 
+/** A camera name as the sidecar serves it and as it ends up in a file path. */
+const CAMERA_NAME = /^[A-Za-z0-9_-]+$/;
+const MAX_SESSION_CAMERAS = 4;
+
+/**
+ * The create body's optional camera list (TASK-441): absent, or 1-4 unique
+ * names. An empty list is refused rather than stored — to the recorder `[]`
+ * means "joints only", which is never what a session form means.
+ */
+function cameraListError(cameras: unknown): string | null {
+  if (cameras === undefined) return null;
+  if (
+    !Array.isArray(cameras) ||
+    cameras.length < 1 ||
+    cameras.length > MAX_SESSION_CAMERAS ||
+    !cameras.every((c) => typeof c === 'string' && CAMERA_NAME.test(c))
+  ) {
+    return `cameras must be a list of 1-${MAX_SESSION_CAMERAS} camera names (letters, digits, _ and -)`;
+  }
+  if (new Set(cameras).size !== cameras.length) {
+    return 'cameras must not name a camera twice';
+  }
+  return null;
+}
+
 // ============================================================================
 // POST /api/teleoperation/sessions - Create new session
 // ============================================================================
@@ -122,6 +147,10 @@ teleoperationRoutes.post('/sessions', async (req: Request, res: Response) => {
       return res.status(400).json({
         error: `Invalid type. Must be one of: ${validTypes.join(', ')}`,
       });
+    }
+    const camerasError = cameraListError(dto.cameras);
+    if (camerasError) {
+      return res.status(400).json({ error: camerasError });
     }
 
     const session = await teleoperationService.createSession(dto);

@@ -2,7 +2,7 @@
  * @file teleoperation.routes.test.ts
  * @description The episode-control routes (TASK-408): body validation, who is
  *              asking, the 409 with the live state to re-sync from, and the
- *              thumbnail proxy.
+ *              thumbnail proxy; the session create body's camera list (TASK-441).
  * @feature datacollection
  */
 
@@ -25,6 +25,8 @@ const svc = vi.hoisted(() => {
   return {
     EpisodeActionError,
     service: {
+      createSession: vi.fn(),
+      startSession: vi.fn(),
       getLiveState: vi.fn(),
       startEpisode: vi.fn(),
       stopEpisode: vi.fn(),
@@ -43,6 +45,7 @@ vi.mock('../../services/TeleoperationService.js', () => ({
 }));
 
 import { teleoperationRoutes } from '../teleoperation.routes.js';
+import { ConflictError } from '../../utils/errors.js';
 
 const LIVE = { sessionId: 's1', phase: 'capturing', take: 4 };
 
@@ -216,5 +219,61 @@ describe('episode control routes (TASK-408)', () => {
       expect(res.status).toBe(400);
       expect(svc.service.episodeThumbnail).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('POST /sessions — the camera list (TASK-441)', () => {
+  const BASE = { operatorId: 'op-1', robotId: 'g1-edu-4', type: 'vr_quest' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc.service.createSession.mockImplementation(async (dto: { cameras?: string[] }) => ({
+      id: 's1',
+      cameras: dto.cameras ?? null,
+    }));
+  });
+
+  it('passes a head + wrists list through and answers it', async () => {
+    const cameras = ['head_camera', 'left_wrist_camera', 'right_wrist_camera'];
+    const res = await request(app()).post('/api/teleoperation/sessions').send({ ...BASE, cameras });
+    expect(res.status).toBe(201);
+    expect(svc.service.createSession).toHaveBeenCalledWith({ ...BASE, cameras });
+    expect(res.body.session.cameras).toEqual(cameras);
+  });
+
+  it('leaves the list out when none was sent, and the session says null', async () => {
+    const res = await request(app()).post('/api/teleoperation/sessions').send(BASE);
+    expect(res.status).toBe(201);
+    expect(svc.service.createSession).toHaveBeenCalledWith(BASE);
+    expect(res.body.session.cameras).toBeNull();
+  });
+
+  it.each([
+    ['an empty list', []],
+    ['more than four', ['a', 'b', 'c', 'd', 'e']],
+    ['a name with a slash', ['head_camera', '../etc']],
+    ['a name with a space', ['head camera']],
+    ['an empty name', ['']],
+    ['a number', ['head_camera', 3]],
+    ['a string, not a list', 'head_camera'],
+    ['null', null],
+    ['a duplicate', ['head_camera', 'head_camera']],
+  ])('refuses %s with a 400 and creates nothing', async (_label, cameras) => {
+    const res = await request(app()).post('/api/teleoperation/sessions').send({ ...BASE, cameras });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/^cameras must /);
+    expect(svc.service.createSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /sessions/:id/start — a camera that is not served (TASK-441)', () => {
+  it('answers 409 with the sentence that names the camera', async () => {
+    const why =
+      'The robot cannot record this session: left_wrist_camera is not being served — ' +
+      'check the camera or start a Head only session.';
+    svc.service.startSession.mockRejectedValue(new ConflictError(why));
+    const res = await request(app()).post('/api/teleoperation/sessions/s1/start').send({});
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe(why);
   });
 });

@@ -415,6 +415,49 @@ describe('EpisodeRecorder', () => {
     expect(status.cameras.map((c) => c.camera)).toEqual(['head_camera']);
   });
 
+  it('refuses a named camera the robot does not serve, names it, and records nothing (TASK-441)', async () => {
+    h.hooks.listCameras = async () => ['head_camera', 'right_wrist_camera'];
+    const start = rec.start({
+      sessionId: 's1',
+      cameras: ['head_camera', 'left_wrist_camera', 'right_wrist_camera'],
+    });
+    await expect(start).rejects.toMatchObject({
+      code: 'CAMERA_NOT_SERVED',
+      status: 409,
+      message: expect.stringMatching(/^left_wrist_camera is not being served — .*Head only session$/),
+    });
+    expect(rec.isRecording()).toBe(false);
+    expect(existsSync(join(dir, 'scratch', 's1'))).toBe(false);
+    expect(h.snapshotCalls).toEqual([]);
+  });
+
+  it('names every missing camera, and refuses when the camera list cannot be read', async () => {
+    h.hooks.listCameras = async () => ['head_camera'];
+    await expect(
+      rec.start({ sessionId: 's1', cameras: ['head_camera', 'left_wrist_camera', 'right_wrist_camera'] }),
+    ).rejects.toThrow(/^left_wrist_camera, right_wrist_camera are not being served/);
+    h.hooks.listCameras = async () => {
+      throw new Error('sidecar down');
+    };
+    await expect(rec.start({ sessionId: 's1', cameras: ['head_camera'] })).rejects.toThrow(
+      /^head_camera is not being served/,
+    );
+    expect(rec.isRecording()).toBe(false);
+  });
+
+  it('keeps the requested camera order, head first', async () => {
+    h.hooks.listCameras = async () => ['right_wrist_camera', 'left_wrist_camera', 'head_camera'];
+    const status = await rec.start({
+      sessionId: 's1',
+      cameras: ['head_camera', 'left_wrist_camera', 'right_wrist_camera'],
+    });
+    expect(status.cameras).toEqual([
+      { camera: 'head_camera', key: 'cam_right_high' },
+      { camera: 'left_wrist_camera', key: 'cam_left_wrist' },
+      { camera: 'right_wrist_camera', key: 'cam_right_wrist' },
+    ]);
+  });
+
   // -- the tick -------------------------------------------------------------
 
   it('records commanded and measured as different arrays', async () => {
@@ -850,6 +893,115 @@ describe.skipIf(!HAVE_FFMPEG)('EpisodeRecorder with cameras', () => {
     if (probe.status === 0) {
       expect(parseInt(probe.stdout.toString().trim(), 10)).toBe(result.totalFrames);
     }
+  }, 60_000);
+
+  it('declares each camera at its own size, and thumbnails the head (TASK-441)', async () => {
+    const still = (size: string): Buffer =>
+      spawnSync(
+        'ffmpeg',
+        ['-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc=size=${size}:rate=1`,
+         '-frames:v', '1', '-f', 'image2', '-c:v', 'mjpeg', 'pipe:1'],
+        { maxBuffer: 8 * 1024 * 1024 },
+      ).stdout;
+    const pictures: Record<string, Buffer> = {
+      head_camera: JPEG, // 64x48
+      left_wrist_camera: still('32x24'),
+      right_wrist_camera: still('48x32'),
+    };
+    const h = harness();
+    h.hooks.listCameras = async () => ['head_camera', 'left_wrist_camera', 'right_wrist_camera'];
+    h.hooks.snapshot = async (camera) => pictures[camera]!;
+    const rec = new EpisodeRecorder({
+      hooks: h.hooks,
+      robotType: 'g1_edu',
+      scratchRoot: join(dir, 'scratch'),
+      datasetRoot: join(dir, 'datasets'),
+    });
+    // The wrists listed first in the answer, the head first in the request:
+    // the dataset follows the request.
+    await rec.start({
+      sessionId: 's1',
+      fps: 20,
+      cameras: ['head_camera', 'left_wrist_camera', 'right_wrist_camera'],
+      startBetweenTakes: true,
+    });
+    await rec.beginEpisode();
+    await runUntilFrames(h, rec, 3);
+    rec.pause();
+    await advance(h, rec, 10);
+    const ended = rec.endEpisode('operator');
+    if (!ended.ok) throw new Error('end refused');
+    expect(ended.report.thumbnail?.camera).toBe('cam_right_high');
+    vi.useRealTimers();
+    expect((await rec.episodeThumbnail(0))?.equals(JPEG)).toBe(true);
+    const result = await rec.stop();
+
+    expect(result.ok).toBe(true);
+    expect(result.videoFeatures).toEqual([
+      'observation.images.cam_right_high',
+      'observation.images.cam_left_wrist',
+      'observation.images.cam_right_wrist',
+    ]);
+    const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
+    const declared = (key: string) => {
+      const f = info.features[`observation.images.${key}`];
+      return [f.shape, f.info['video.width'], f.info['video.height']];
+    };
+    expect(declared('cam_right_high')).toEqual([[48, 64, 3], 64, 48]);
+    expect(declared('cam_left_wrist')).toEqual([[24, 32, 3], 32, 24]);
+    expect(declared('cam_right_wrist')).toEqual([[32, 48, 3], 48, 32]);
+    for (const [key, size] of [['cam_right_high', '64,48'], ['cam_left_wrist', '32,24'], ['cam_right_wrist', '48,32']]) {
+      const mp4 = join(result.datasetPath!, 'videos', `observation.images.${key}`, 'chunk-000', 'file-000.mp4');
+      expect(existsSync(mp4), key).toBe(true);
+      const probe = spawnSync('ffprobe', [
+        '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'stream=width,height', '-of', 'csv=p=0', mp4,
+      ]);
+      if (probe.status === 0) expect(probe.stdout.toString().trim(), key).toBe(size);
+    }
+  }, 60_000);
+
+  it('thumbnails the first camera when the head is not recorded', async () => {
+    const h = harness();
+    h.hooks.listCameras = async () => ['house_iso', 'left_wrist_camera'];
+    const rec = new EpisodeRecorder({
+      hooks: h.hooks,
+      robotType: 'g1_edu',
+      scratchRoot: join(dir, 'scratch'),
+      datasetRoot: join(dir, 'datasets'),
+    });
+    await rec.start({ sessionId: 's1', fps: 20, cameras: ['left_wrist_camera', 'house_iso'], startBetweenTakes: true });
+    await rec.beginEpisode();
+    await runUntilFrames(h, rec, 2);
+    rec.pause();
+    await advance(h, rec, 10);
+    const ended = rec.endEpisode('operator');
+    if (!ended.ok) throw new Error('end refused');
+    expect(ended.report.thumbnail?.camera).toBe('cam_left_wrist');
+    vi.useRealTimers();
+    await rec.stop();
+  }, 60_000);
+
+  it('records only the head camera, at its size, when no cameras were named (head-only default)', async () => {
+    const h = harness();
+    h.hooks.listCameras = async () => ['head_camera', 'left_wrist_camera', 'right_wrist_camera'];
+    const rec = new EpisodeRecorder({
+      hooks: h.hooks,
+      robotType: 'g1_edu',
+      scratchRoot: join(dir, 'scratch'),
+      datasetRoot: join(dir, 'datasets'),
+    });
+    await rec.start({ sessionId: 's1', fps: 20 });
+    await runUntilFrames(h, rec, 2);
+    vi.useRealTimers();
+    const result = await rec.stop();
+    expect(result.ok).toBe(true);
+    expect(result.videoFeatures).toEqual(['observation.images.cam_right_high']);
+    expect(new Set(h.snapshotCalls.map((c) => c.camera))).toEqual(new Set(['head_camera']));
+    const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
+    const images = Object.keys(info.features).filter((k) => k.startsWith('observation.images.'));
+    expect(images).toEqual(['observation.images.cam_right_high']);
+    expect(info.features['observation.images.cam_right_high'].shape).toEqual([48, 64, 3]);
   }, 60_000);
 
   it('leaves per-episode image directories while recording', async () => {

@@ -3,7 +3,7 @@ id: "TASK-441"
 aliases: []
 title: "A session created with cameras records every one of them"
 slug: "a-session-created-with-cameras-records-every-one-of-them"
-status: "todo"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -16,7 +16,7 @@ spe: 5
 effort: "medium"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # A session created with cameras records every one of them
@@ -95,18 +95,34 @@ Also lands the app-side session type and a small camera helper the UI children r
       "Head + left wrist" …
     Unit-test it.
 
+### Demo fixtures (for the UI children's Playwright specs)
+
+12. The demo build (`VITE_DEMO_MODE=true`, MSW handlers in `app/src/mocks/`) must be able to
+    show a Head + wrists session without changing any existing demo session or robot:
+    - a demo session `demo-session-wrists` (copy the shape of `demo-session-takes`) with
+      `cameras: ['head_camera','left_wrist_camera','right_wrist_camera']` on a demo G1 whose
+      camera list includes both wrists (a new demo robot, or a demo-only override route that
+      pins a robot's camera list, mirroring the readiness fixture route
+      `/api/__demo/robots/:id/readiness` used by `app/e2e/datacollection-console.spec.ts`);
+    - the demo camera stream answers for the wrist names the way it answers for
+      `head_camera` today (a static frame is fine);
+    - existing demo sessions keep `cameras` absent (head only) and every existing e2e spec
+      passes unchanged.
+
 ## Acceptance Criteria
 
-- [ ] `POST` create with `cameras: ['head_camera','left_wrist_camera','right_wrist_camera']`
+- [x] `POST` create with `cameras: ['head_camera','left_wrist_camera','right_wrist_camera']`
       stores and returns it; invalid lists get a 400; no `cameras` → `null`.
-- [ ] Starting such a session against the dev sim with wrist cameras (TASK-440) records
+- [x] Starting such a session against the dev sim with wrist cameras (TASK-440) records
       `observation.images.cam_right_high`, `cam_left_wrist`, `cam_right_wrist`, each with its
       true size in `info.json`, and the thumbnail is the head view.
-- [ ] A requested camera that is not served → session start fails with a message naming it;
+- [x] A requested camera that is not served → session start fails with a message naming it;
       nothing half-recorded.
-- [ ] A session without `cameras`: the recorder request carries no `cameras` field and the
+- [x] A session without `cameras`: the recorder request carries no `cameras` field and the
       dataset is identical in shape to `main` (one `cam_right_high` video).
-- [ ] Server, robot-agent and app typecheck + vitest green; Prisma migration check green.
+- [x] The demo build serves `demo-session-wrists` with three cameras; existing demo
+      sessions and e2e specs are unchanged.
+- [x] Server, robot-agent and app typecheck + vitest green; Prisma migration check green.
 
 ## Test Strategy
 
@@ -116,3 +132,15 @@ refusal on a missing camera, thumbnail = head, head-only default unchanged (~413
 `lerobot-writer.test.ts` with mixed sizes; app `cameras.ts` helper tests. Manual: against
 the dev sim (`sim_node.py` + agent on :41246/:8777) create a session via the API with the
 three cameras, record one take, inspect `info.json` and the three mp4s with ffprobe.
+
+## Notes
+
+- Verified against the dev sim on 2026-11-01, in the review before merge, on main + TASK-440 +
+  TASK-445 + this branch: `g1_dex3_pickplace_scene.xml`, with an agent and a server on scratch
+  ports. A session created with `['head_camera','left_wrist_camera','right_wrist_camera']`
+  recorded 119 frames into a v3.0 dataset. Its `info.json` has three video features
+  (`cam_right_high`, `cam_left_wrist`, `cam_right_wrist`), each `[480,640,3]` at 30 fps, and each
+  has a `stats.json` entry. ffprobe gives 119 frames at 640x480 for every mp4, and the thumbnail
+  is the head camera. Asking for `bogus_camera` gave 409 "...is not being served — check the
+  camera or start a Head only session" and wrote nothing. A session with no `cameras` recorded
+  head-only. A take needs engaged teleop; with no command the robot records 0 frames.
