@@ -3,7 +3,7 @@ id: "TASK-441"
 aliases: []
 title: "A session created with cameras records every one of them"
 slug: "a-session-created-with-cameras-records-every-one-of-them"
-status: "review"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -111,18 +111,18 @@ Also lands the app-side session type and a small camera helper the UI children r
 
 ## Acceptance Criteria
 
-- [ ] `POST` create with `cameras: ['head_camera','left_wrist_camera','right_wrist_camera']`
+- [x] `POST` create with `cameras: ['head_camera','left_wrist_camera','right_wrist_camera']`
       stores and returns it; invalid lists get a 400; no `cameras` → `null`.
-- [ ] Starting such a session against the dev sim with wrist cameras (TASK-440) records
+- [x] Starting such a session against the dev sim with wrist cameras (TASK-440) records
       `observation.images.cam_right_high`, `cam_left_wrist`, `cam_right_wrist`, each with its
       true size in `info.json`, and the thumbnail is the head view.
-- [ ] A requested camera that is not served → session start fails with a message naming it;
+- [x] A requested camera that is not served → session start fails with a message naming it;
       nothing half-recorded.
-- [ ] A session without `cameras`: the recorder request carries no `cameras` field and the
+- [x] A session without `cameras`: the recorder request carries no `cameras` field and the
       dataset is identical in shape to `main` (one `cam_right_high` video).
-- [ ] The demo build serves `demo-session-wrists` with three cameras; existing demo
+- [x] The demo build serves `demo-session-wrists` with three cameras; existing demo
       sessions and e2e specs are unchanged.
-- [ ] Server, robot-agent and app typecheck + vitest green; Prisma migration check green.
+- [x] Server, robot-agent and app typecheck + vitest green; Prisma migration check green.
 
 ## Test Strategy
 
