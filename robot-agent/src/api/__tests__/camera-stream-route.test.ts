@@ -6,7 +6,9 @@
  *              the things worth checking here are all transport behaviour:
  *              the personal-data gate, an honest error before the multipart
  *              header goes out, and hanging up on the sidecar when the viewer
- *              leaves.
+ *              leaves. Also the camera list next to it, `GET
+ *              /api/v1/robots/:id/cameras`, and the `configured` field it
+ *              passes on (TASK-445).
  * @feature robots
  * @status test
  */
@@ -52,6 +54,9 @@ vi.mock('../../vla/skill-executor.js', () => ({
 import { createRestRoutes, MEMORY_TOKEN_ENV } from '../rest-routes.js';
 import type { RobotStateManager } from '../../robot/state.js';
 
+/** What the stand-in sidecar answers for `GET /cameras`. */
+let cameraList: unknown = { cameras: ['head_camera'], source: 'pc2cam' };
+
 /** What the stand-in sidecar did, so the tests can assert on its side too. */
 interface SidecarLog {
   paths: string[];
@@ -80,6 +85,11 @@ describe('camera stream route', () => {
     // 200, known camera → an endless multipart body.
     sidecar = http.createServer((req, res) => {
       log.paths.push(req.url ?? '');
+      if (req.url === '/cameras') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(cameraList));
+        return;
+      }
       if (!req.url?.includes('/cameras/head_camera/')) {
         res.writeHead(503, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: 'no camera' }));
@@ -121,6 +131,25 @@ describe('camera stream route', () => {
   });
 
   const stream = (path: string, init?: RequestInit) => fetch(`${base}${path}`, init);
+
+  describe('the camera list (TASK-445)', () => {
+    it('passes configured through next to the served cameras', async () => {
+      cameraList = {
+        cameras: ['head_camera', 'right_wrist_camera'],
+        source: 'pc2cam',
+        configured: ['head_camera', 'left_wrist_camera', 'right_wrist_camera'],
+      };
+      const res = await stream('/robots/robot-1/cameras');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(cameraList);
+    });
+
+    it('adds nothing for a sidecar that does not send configured', async () => {
+      cameraList = { cameras: ['head_camera'], source: 'mujoco' };
+      const res = await stream('/robots/robot-1/cameras');
+      expect(await res.json()).toEqual({ cameras: ['head_camera'], source: 'mujoco' });
+    });
+  });
 
   it('streams the sidecar multipart body through, unchanged', async () => {
     const controller = new AbortController();

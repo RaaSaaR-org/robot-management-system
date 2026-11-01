@@ -226,6 +226,27 @@ describe('GET /robots/:id/readiness (TASK-405)', () => {
     expect(w.cameraCalls).toBe(1);
   });
 
+  it('passes the configured cameras through when the sidecar names them (TASK-445)', async () => {
+    w.cameras = {
+      kind: 'ok',
+      cameras: ['head_camera'],
+      source: 'pc2cam',
+      configured: ['head_camera', 'left_wrist_camera', 'right_wrist_camera'],
+    };
+    const { body } = await get();
+    expect(body.camera).toEqual({
+      source: 'pc2cam',
+      cameras: ['head_camera'],
+      detail: null,
+      configured: ['head_camera', 'left_wrist_camera', 'right_wrist_camera'],
+    });
+  });
+
+  it('a head-only camera block carries no configured', async () => {
+    const { body } = await get();
+    expect(body.camera).toEqual({ source: 'mujoco', cameras: ['head_camera'], detail: null });
+  });
+
   it('is read-only: nothing but GET is routed', async () => {
     const res = await fetch(`${base}/api/v1/robots/robot-1/readiness`, { method: 'POST' });
     expect(res.status).toBe(404);

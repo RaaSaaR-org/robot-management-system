@@ -13,7 +13,18 @@ import { getSidecarUrl } from './HardwareClient.js';
 
 /** What the sidecar's camera list said, or why there is none. */
 export type CameraListResult =
-  | { kind: 'ok'; cameras: string[]; source: string | null; detail?: string }
+  | {
+      kind: 'ok';
+      cameras: string[];
+      source: string | null;
+      detail?: string;
+      /**
+       * Every camera the robot is set up to serve, head first, whether or not
+       * it is up right now (TASK-445). Absent from older sidecars and the sim:
+       * read it as `cameras` then.
+       */
+      configured?: string[];
+    }
   /** The sidecar answered with a non-200 status. */
   | { kind: 'bad_status'; status: number }
   /** The sidecar answered 200 with something that is not JSON. */
@@ -24,6 +35,11 @@ export type CameraListResult =
   | { kind: 'unreachable' };
 
 export const SIDECAR_UNREACHABLE_DETAIL = 'cannot reach the hardware sidecar';
+
+/** `configured` as the sidecar sent it, or undefined when it is not a list of names. */
+export function configuredCameras(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((v) => typeof v === 'string') ? value : undefined;
+}
 
 export interface CameraListOptions {
   /** Abort the upstream request (the caller's client went away). */
@@ -53,11 +69,13 @@ export function readCameraList(opts: CameraListOptions = {}): Promise<CameraList
           }
           try {
             const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            const configured = configuredCameras(body?.configured);
             done({
               kind: 'ok',
               cameras: Array.isArray(body?.cameras) ? body.cameras : [],
               source: body?.source ?? null,
               ...(body?.detail ? { detail: String(body.detail) } : {}),
+              ...(configured ? { configured } : {}),
             });
           } catch {
             done({ kind: 'bad_body' });
