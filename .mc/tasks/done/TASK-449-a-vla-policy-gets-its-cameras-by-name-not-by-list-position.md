@@ -3,7 +3,7 @@ id: "TASK-449"
 aliases: []
 title: "A VLA policy gets its cameras by name, not by list position"
 slug: "a-vla-policy-gets-its-cameras-by-name-not-by-list-position"
-status: "review"
+status: "done"
 priority: 3
 owner: "claude"
 projects: []
@@ -76,14 +76,14 @@ Replace the positional mapping with a name lookup per vla-server camera name:
 
 ## Acceptance Criteria
 
-- [ ] `g1_dex3_2cam` in the pickplace sim (sidecar lists head + wrist cameras) gets the head
+- [x] `g1_dex3_2cam` in the pickplace sim (sidecar lists head + wrist cameras) gets the head
       frame in both `cam_left_high` and `cam_right_high`, never a wrist frame.
-- [ ] `cam_left_high` gets `ego_camera` when the sidecar lists it.
-- [ ] `cam_left_wrist` / `cam_right_wrist` get only the matching wrist camera, and the head
+- [x] `cam_left_high` gets `ego_camera` when the sidecar lists it.
+- [x] `cam_left_wrist` / `cam_right_wrist` get only the matching wrist camera, and the head
       camera when that wrist is absent.
-- [ ] An unknown policy camera name gets the head camera.
-- [ ] The result does not depend on the order the sidecar lists its cameras.
-- [ ] One-camera configs (apple GR00T/pi05/lingbot/unifolm, `g1_dex3_1cam`) behave exactly
+- [x] An unknown policy camera name gets the head camera.
+- [x] The result does not depend on the order the sidecar lists its cameras.
+- [x] One-camera configs (apple GR00T/pi05/lingbot/unifolm, `g1_dex3_1cam`) behave exactly
       as before.
 
 ## Test Strategy
