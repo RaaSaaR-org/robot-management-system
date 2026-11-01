@@ -132,3 +132,15 @@ refusal on a missing camera, thumbnail = head, head-only default unchanged (~413
 `lerobot-writer.test.ts` with mixed sizes; app `cameras.ts` helper tests. Manual: against
 the dev sim (`sim_node.py` + agent on :41246/:8777) create a session via the API with the
 three cameras, record one take, inspect `info.json` and the three mp4s with ffprobe.
+
+## Notes
+
+- Verified against the dev sim on 2026-11-01, in the review before merge, on main + TASK-440 +
+  TASK-445 + this branch: `g1_dex3_pickplace_scene.xml`, with an agent and a server on scratch
+  ports. A session created with `['head_camera','left_wrist_camera','right_wrist_camera']`
+  recorded 119 frames into a v3.0 dataset. Its `info.json` has three video features
+  (`cam_right_high`, `cam_left_wrist`, `cam_right_wrist`), each `[480,640,3]` at 30 fps, and each
+  has a `stats.json` entry. ffprobe gives 119 frames at 640x480 for every mp4, and the thumbnail
+  is the head camera. Asking for `bogus_camera` gave 409 "...is not being served — check the
+  camera or start a Head only session" and wrote nothing. A session with no `cameras` recorded
+  head-only. A take needs engaged teleop; with no command the robot records 0 frames.
