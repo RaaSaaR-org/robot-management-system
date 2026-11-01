@@ -74,6 +74,7 @@ export interface SessionCommandBarProps {
   simulatedInput?: boolean;
   /** End session (Record only), still behind the page's confirm. */
   onEnd?: () => void;
+  /** The End request is out: the robot is saving the takes, which can take minutes. */
   endPending?: boolean;
   /** The Testing tools rows. Kept mounted in a hidden popover; no popover without them. */
   tools?: ReactNode;
@@ -438,6 +439,7 @@ export function SessionCommandBar({
               <Button
                 variant="secondary"
                 isLoading={endPending}
+                loadingText="Saving takes on the robot…"
                 leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />}
                 onClick={onEnd}
                 data-testid="session-end"
