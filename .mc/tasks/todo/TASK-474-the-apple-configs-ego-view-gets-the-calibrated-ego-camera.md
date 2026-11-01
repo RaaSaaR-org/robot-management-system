@@ -41,7 +41,7 @@ required one-camera configs to behave exactly as before.
 `policyCameraSources`.
 
 **Evidence.**
-- `robot-agent/hardware/sim_evaluator/mjcf/.../g1_43dof_fixedbase_realism.xml` defines
+- `robot-agent/hardware/sim_evaluator/mjcf/g1_dex3/g1_43dof_fixedbase_realism.xml` defines
   `ego_camera` (fovy 44). The head camera has fovy 89 and is yawed toward the old crate
   scene.
 - `robot-agent/hardware/sim_evaluator/envs/g1_apple_env.py` (~:17-18, :393) renders
