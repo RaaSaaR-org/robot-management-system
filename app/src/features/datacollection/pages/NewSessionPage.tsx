@@ -32,7 +32,7 @@ import { useRobotsStore } from '../../robots/store/robotsStore';
 import { useRobotReadiness } from '../../robots/hooks/useRobotReadiness';
 import { RobotReadinessPanel } from '../../robots/components/readiness/RobotReadinessPanel';
 import { useRobotCameras } from '../../robots/hooks/useRobotCameras';
-import { WRIST_CAMERAS, robotWristCameras } from '../utils/cameras';
+import { robotWristCameras, wristCameraLabel } from '../utils/cameras';
 import { useAuthStore } from '@/features/auth/store/authStore';
 import { TELEOPERATION_TYPE_LABELS } from '../types/datacollection.types';
 import type { TeleoperationType, CreateSessionRequest } from '../types/datacollection.types';
@@ -72,11 +72,6 @@ const CAMERA_CHOICES: { value: CameraChoice; label: string; hint: string }[] = [
   { value: 'head_wrists', label: 'Head + wrists', hint: 'Head view plus left and right wrist views, all recorded.' },
   { value: 'head_only', label: 'Head only', hint: 'Like a robot without wrist cameras.' },
 ];
-
-const WRIST_LABELS: Record<string, string> = {
-  [WRIST_CAMERAS.left]: 'Left wrist camera',
-  [WRIST_CAMERAS.right]: 'Right wrist camera',
-};
 
 export function NewSessionPage() {
   const navigate = useNavigate();
@@ -332,7 +327,7 @@ export function NewSessionPage() {
               </p>
               {cameraChoice === 'head_wrists' && offlineWrists.map((c) => (
                 <p key={c} className="text-xs text-signal-unknown" data-testid="wrist-offline-note">
-                  {WRIST_LABELS[c] ?? c} is offline right now.
+                  {wristCameraLabel(c) ?? c} camera is offline right now.
                 </p>
               ))}
             </div>
