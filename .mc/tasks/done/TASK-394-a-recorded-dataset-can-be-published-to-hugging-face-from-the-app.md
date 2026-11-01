@@ -3,7 +3,7 @@ id: "TASK-394"
 aliases: []
 title: "A recorded dataset can be published to Hugging Face from the app"
 slug: "a-recorded-dataset-can-be-published-to-hugging-face-from-the-app"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
@@ -187,3 +187,12 @@ the final link, straight from the dataset directory on local disk.
     attribution names `HF_PUBLISH_INSTITUTION` only when it is set, fixtures use `acme`/`alice`.
   - The root `README.md`, `meta/info.json` and `meta/tasks.jsonl` are read with `lstat` first;
     a symlinked README.md is left out with a warning and a card is generated instead.
+- Merged on 2026-11-01 without a real Hub round trip, by the owner's decision. Everything above
+  is verified against a mocked Hub client only. Still unverified against huggingface.co:
+  LFS/Xet upload of the mp4s, the codebase-version tag, keeping an existing hand-written card,
+  the `REPO_IS_PUBLIC` visibility read, and `LeRobotDataset(repo_id)` loading a published repo.
+  The first real publish is that test.
+- Known gap, outside this task: path confinement stops a publish from reading outside the
+  server's dataset roots. It does not stop a member from registering, through
+  `POST /api/datasets`, a `storagePath` to another tenant's dataset inside those roots. Closing
+  that needs an ownership check in `DatasetService.create`.
