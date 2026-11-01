@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # A session shows which recorder records it, and a real robot never records joints only
@@ -43,7 +43,7 @@ Checked on `main` at `a600c27e`.
 - `server/src/services/AgentRecordingService.ts:207-218`, `classify`: a 4xx
   other than 404 throws `AgentRecordingRefused`. Everything else (5xx, a
   timeout, a network error) logs and returns `null`, "this agent cannot
-  record". TASK-450, in progress on its own branch, turns a 5xx with a JSON
+  record". TASK-450 (merged in #473) turns a 5xx with a JSON
   `code` into a refusal. Timeouts and network errors still return `null` after it.
 - `server/src/services/TeleoperationService.ts:509-570`, `startSession`:
   - `:521`: `recorderKind` starts as `'sidecar'` or `null`;
@@ -127,8 +127,8 @@ Checked on `main` at `a600c27e`.
 
 - Found by the 2026-10-31 pre-session bug hunt (session hunt finding 1 and its
   first improvement; data hunt finding 5).
-- Land after TASK-450, which edits `AgentRecordingService.classify` and the same
-  `startSession` block. Rebase on it, do not duplicate its 5xx mapping.
+- TASK-450 (merged in #473) already edited `AgentRecordingService.classify` and
+  the same `startSession` block. Build on it; do not duplicate its 5xx mapping.
 - TASK-441 (PR #463, open) also changes `toSessionResponse` and
   `SessionResponse` (adds `cameras`). Expect a small merge.
 - Workaround: after each Start, check the server log for `agent-side recording
