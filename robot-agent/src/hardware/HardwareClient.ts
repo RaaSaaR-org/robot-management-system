@@ -1474,12 +1474,13 @@ export class HardwareClient {
   /**
    * One-shot camera snapshot as raw JPEG bytes.
    *
-   * Prefers the sim facade's `?format=raw`, which answers `image/jpeg` and
-   * skips a base64 round trip the recorder would only undo.
+   * Prefers `?format=raw`, which the sim facade and `g1_sidecar.py` (since
+   * TASK-445) answer with `image/jpeg`, skipping a base64 round trip the
+   * recorder would only undo.
    *
-   * A sidecar that does not know the parameter does NOT quietly ignore it:
-   * `g1_sidecar.py` matches its routes on the whole path, so the query string
-   * makes the request miss and come back 404. So the fallback is a real retry
+   * An older sidecar that does not know the parameter does NOT quietly ignore
+   * it: it matches its routes on the whole path, so the query string makes the
+   * request miss and come back 404. So the fallback is a real retry
    * on the plain URL, not a hopeful `if` on the content type — and it happens
    * once per snapshot, not once per process, because a recorder that guessed
    * wrong at startup would drop every frame of the session.
