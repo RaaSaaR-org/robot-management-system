@@ -11,6 +11,7 @@ import {
   ARM_REFUSAL_FRESH_MS,
   PANEL_COLORS,
   cameraPanelLine,
+  wristPanelLine,
   pickWhyLine,
   type ServerWhy,
   type WhyNotFollowing as Why,
@@ -266,5 +267,28 @@ describe('pickWhyLine (D4)', () => {
   it('never outranks a latched E-stop', () => {
     const latched: Why = { code: 'estop_latched', severity: 'block', text: 'E-stop latched', short: 'E-STOP' };
     expect(pickWhyLine(latched, serverBlock).from).toBe('local');
+  });
+});
+
+describe('wristPanelLine (TASK-443)', () => {
+  it('says nothing without wrist panels, or while every wrist is live', () => {
+    expect(wristPanelLine({}, 'g1')).toBeNull();
+    expect(wristPanelLine({
+      left_wrist_camera: { robotId: 'g1', state: 'live' },
+      right_wrist_camera: { robotId: 'g1', state: 'live' },
+    }, 'g1')).toBeNull();
+  });
+
+  it('names each side once one is not live, left first', () => {
+    expect(wristPanelLine({
+      right_wrist_camera: { robotId: 'g1', state: 'offline' },
+      left_wrist_camera: { robotId: 'g1', state: 'live' },
+    }, 'g1')).toMatchObject({ id: 'wrists', text: 'WRISTS L live · R offline', color: PANEL_COLORS.bad });
+    expect(wristPanelLine({ left_wrist_camera: { robotId: 'g1', state: 'stale' } }, 'g1'))
+      .toMatchObject({ text: 'WRISTS L stale', color: PANEL_COLORS.warn });
+  });
+
+  it('ignores panels showing another robot', () => {
+    expect(wristPanelLine({ left_wrist_camera: { robotId: 'other', state: 'offline' } }, 'g1')).toBeNull();
   });
 });
