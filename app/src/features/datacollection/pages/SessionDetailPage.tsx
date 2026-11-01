@@ -79,7 +79,7 @@ import { TestingToolsRow } from '../components/console/TestingTools';
 import { HeadsetHero, RobotSetupDisclosure } from '../components/console/HeadsetHero';
 import { SetupRail, type SetupStepContent } from '../components/console/SetupRail';
 import { LiveView, cameraLabel } from '../components/console/LiveView';
-import { buildSetupModel, leaseWorkDone, modeWord, type SetupStep, type SystemsCellId, type SystemsCellStatus } from '../utils/setupSteps';
+import { buildSetupModel, leaseWorkDone, modeWord, slotReasonCell, type SetupStep, type SystemsCellId, type SystemsCellStatus } from '../utils/setupSteps';
 import { useLeaseHandOver, useLeaseTake } from '../hooks/useLeaseTake';
 import { PageLeaseLine, PageLeaseLostLine } from '../components/console/PageLeaseLine';
 import { useDeviceRole, detectDeviceRole, type DeviceRole } from '../hooks/useDeviceRole';
@@ -952,7 +952,7 @@ export function SessionDetailPage() {
   const operatorState = operator?.state ?? null;
   const operatorInVrNow = operatorState?.inVr === true;
   const recordCells = phase === 'record' && setupModel ? setupModel.cells : [];
-  const reasonCellNow = recordCells.find((c) => c.reason) ?? null;
+  const reasonCellNow = slotReasonCell(recordCells);
   const reasonOwner = reasonCellNow?.id ?? null;
   const reason = reasonCellNow?.reason ?? null;
   const modeReason = reasonOwner === 'mode' ? reason : null;
