@@ -231,7 +231,8 @@ still E-stopped"* with its own reset button.
 
 ### The robot panel inside the headset (TASK-407)
 
-A panel hangs about 0.9 m out and 30° to the right of the robot's forward,
+A panel hangs about 0.9 m out and 40° to the right of the robot's forward
+(30° until TASK-418, when its corner covered the camera screen's grippers),
 beside the head-camera screen, and turns with it on a recenter. It reads MODE,
 ARMS (with the sidecar's dead-man), GRIP per hand and any `HELD` refusal, HANDS,
 LEASE and LINK, and one bold line saying **why the arms are not following**
@@ -256,6 +257,26 @@ blocking reason also takes line 1 of the wrist HUD.
   `{type:'state'}` when an arm moved, or `{type:'state', held:true, side, reason}`
   when it refused (≤ 20 Hz) — so a refused arm shows as `HELD R: arm_gate` and a
   why line, never as *Link lost*.
+
+### The wrist views below the head screen (TASK-443)
+
+A session that records wrist cameras (*Head + wrists* on New session) shows two
+small screens directly below the head-camera screen: the left wrist on the left,
+the right wrist on the right, each 0.36 m wide (4:3), at the head screen's
+distance, tilted up toward the eyes and marked **L** / **R**. They turn with the
+robot on a recenter like the other panels and stay within 20° of straight ahead,
+so a glance down shows the fingers up close without turning the head.
+
+They are quieter than the head screen on purpose. A wrist has no take strip and
+no red E-stop frame, uploads at most 10 frames a second (the head: 20), and a
+frozen wrist shows its own STALE badge and red surround **without** a haptic
+pulse — the controllers buzz only for the head camera, the picture the operator
+steers by. A wrist that is not served shows the CAMERA OFFLINE plate in its own
+screen and keeps retrying; the head screen is untouched. While a wrist is not
+live the robot panel adds one line, e.g. `WRISTS L live · R offline`.
+
+A head-only session, and the VR tab on the robot's own page, show exactly the
+scene they did before: no wrist screens, no wrist ticket, no wrist stream.
 
 ### A Dex3 hand that sends nothing
 

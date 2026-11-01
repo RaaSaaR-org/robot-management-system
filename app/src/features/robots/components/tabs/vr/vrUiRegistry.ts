@@ -62,6 +62,7 @@ export function resetVrUiRegistry(): void {
   vrUiDebug.panelTitle = '';
   vrUiDebug.board = [];
   vrUiDebug.strip = '';
+  vrUiDebug.wristCameras = [];
   vrUiDebug.rays.left = { ...EMPTY_RAY };
   vrUiDebug.rays.right = { ...EMPTY_RAY };
 }
@@ -278,6 +279,8 @@ export const vrUiDebug: {
   board: string[];
   /** The camera screen's strip as last drawn (TASK-418); '' when it shows none. */
   strip: string;
+  /** The wrist cameras with a panel mounted (TASK-443); empty without wrist cameras. */
+  wristCameras: string[];
 } = {
   clicks: [],
   rays: { left: { ...EMPTY_RAY }, right: { ...EMPTY_RAY } },
@@ -286,4 +289,5 @@ export const vrUiDebug: {
   panelTitle: '',
   board: [],
   strip: '',
+  wristCameras: [],
 };

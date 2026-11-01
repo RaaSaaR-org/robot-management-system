@@ -8,7 +8,9 @@
  *              thumbnails and a details list. The action is never on the
  *              band's top row, which lies under the E-STOP; below 640 px it
  *              spans the band under the readouts. The Details "Dataset" row
- *              names the dataset and never holds a second button.
+ *              names the dataset and never holds a button. Once exported, a
+ *              ghost publish-dataset under the action opens the Hugging Face
+ *              publish dialog (TASK-394).
  *              Keeps the dataset-card / open-dataset / review-episodes /
  *              episode-input-N / session-frames / session-warning test ids.
  *              TASK-418: never FRAMES 0 for a session whose takes hold
@@ -18,12 +20,13 @@
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowRight, Check, Database, OctagonX, Pencil, Plus } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, CloudUpload, Database, OctagonX, Pencil, Plus } from 'lucide-react';
 import {
   Button, DataTable, LinkButton, Panel, StatusTag, type DataTableColumn,
 } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { PublishDatasetDialog } from '@/features/training/components/PublishDatasetDialog';
 import type { EpisodeActor, EpisodeSummary, TeleoperationSession } from '../../types/datacollection.types';
 import {
   TELEOPERATION_TYPE_LABELS, formatDuration, formatEpisodeStat, formatRetargetModes,
@@ -259,6 +262,7 @@ export function SessionCompleted({ session, robotName, episodes, onEditTask, onC
   const action = wrapAction(session, framesSettling);
   const fps = measuredFps(kept) ?? session.fps;
   const sentence = wrapSentence(session, kept.length, episodes.length - kept.length, action);
+  const [isPublishOpen, setIsPublishOpen] = useState(false);
 
   const icon = <Database className="h-[18px] w-[18px]" strokeWidth={1.75} />;
   const cta = action === 'open-dataset' ? (
@@ -355,7 +359,20 @@ export function SessionCompleted({ session, robotName, episodes, onEditTask, onC
           </dl>
         </div>
         {/* The one action: its own column, vertically centred, never on the band's top row under the E-STOP. */}
-        <div className="self-center">{cta}</div>
+        <div className="flex flex-col items-stretch gap-2 self-center">
+          {cta}
+          {action === 'open-dataset' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="publish-dataset"
+              onClick={() => setIsPublishOpen(true)}
+              leftIcon={<CloudUpload className="h-4 w-4" strokeWidth={1.75} />}
+            >
+              Publish to Hugging Face
+            </Button>
+          )}
+        </div>
       </Panel>
 
       {/* Side by side from 1440 px: below that the takes table needs the full width to show all its columns. */}
@@ -419,6 +436,10 @@ export function SessionCompleted({ session, robotName, episodes, onEditTask, onC
           </dl>
         </Panel>
       </div>
+
+      {datasetId && isPublishOpen && (
+        <PublishDatasetDialog isOpen onClose={() => setIsPublishOpen(false)} datasetId={datasetId} />
+      )}
     </div>
   );
 }

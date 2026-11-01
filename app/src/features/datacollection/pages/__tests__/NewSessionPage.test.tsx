@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { screen, within, waitFor } from '@testing-library/react';
+import { act, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '@/test/utils';
 import { useAuthStore } from '@/features/auth/store/authStore';
@@ -280,5 +280,107 @@ describe('NewSessionPage — an offline robot (TASK-419)', () => {
     // give the readiness read time to land
     await new Promise((r) => setTimeout(r, 100));
     expect(screen.queryByTestId('robot-readiness-compact')).toBeNull();
+  });
+});
+
+describe('NewSessionPage — cameras (TASK-447)', () => {
+  const camerasFor = (list: { cameras: string[]; configured?: string[] } | 'fail') =>
+    server.use(
+      http.get('*/api/robots/:id/cameras', () =>
+        list === 'fail'
+          ? HttpResponse.json({ error: 'down' }, { status: 500 })
+          : HttpResponse.json({ source: 'sidecar', ...list }),
+      ),
+    );
+  const BOTH = ['head_camera', 'left_wrist_camera', 'right_wrist_camera'];
+
+  const submit = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.type(screen.getByPlaceholderText(/Pick up the red block/), 'Pick up the apple');
+    await user.click(screen.getByRole('button', { name: 'Start session' }));
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+    return createSession.mock.calls[0][0];
+  };
+
+  it.each([
+    ['no wrist cameras', { cameras: ['head_camera'] }],
+    ['a failed camera list', 'fail' as const],
+  ])('with %s: no Cameras control and the same request as before', async (_, list) => {
+    camerasFor(list);
+    const user = userEvent.setup();
+    render();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByRole('group', { name: 'Cameras' })).not.toBeInTheDocument();
+    const request = await submit(user);
+    expect(request).toEqual({
+      operatorId: 'user-7', robotId: 'g1-edu-4', type: 'vr_quest', fps: 30, languageInstr: 'Pick up the apple',
+    });
+  });
+
+  it('with both wrist cameras: Head + wrists by default, the three names head-first', async () => {
+    camerasFor({ cameras: BOTH });
+    const user = userEvent.setup();
+    render();
+    const group = await screen.findByRole('group', { name: 'Cameras' });
+    expect(within(group).getByRole('button', { name: 'Head + wrists' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/Head view plus left and right wrist views/)).toBeInTheDocument();
+    expect(screen.queryByTestId('wrist-offline-note')).not.toBeInTheDocument();
+    const request = await submit(user);
+    expect(request.cameras).toEqual(BOTH);
+  });
+
+  it('Head only sends no cameras', async () => {
+    camerasFor({ cameras: BOTH });
+    const user = userEvent.setup();
+    render();
+    await user.click(await screen.findByRole('button', { name: 'Head only' }));
+    expect(screen.getByText(/Like a robot without wrist cameras/)).toBeInTheDocument();
+    const request = await submit(user);
+    expect(request).not.toHaveProperty('cameras');
+  });
+
+  it('re-reads the cameras as soon as the chosen robot comes online, not on the next poll', async () => {
+    let online = false;
+    let reads = 0;
+    server.use(
+      http.get('*/api/robots/:id/cameras', () => {
+        reads += 1;
+        return HttpResponse.json({ source: 'sidecar', cameras: online ? BOTH : [] });
+      }),
+    );
+    const user = userEvent.setup();
+    render();
+    await user.selectOptions(screen.getAllByRole('combobox')[0], 'sim-1');
+    await waitFor(() => expect(reads).toBeGreaterThan(0));
+    expect(screen.queryByRole('group', { name: 'Cameras' })).not.toBeInTheDocument();
+    online = true;
+    act(() => {
+      useRobotsStore.setState({
+        robots: [robot('sim-1', 'Bench sim', 'online'), robot('g1-edu-4', 'G1 EDU', 'online')],
+      });
+    });
+    expect(await screen.findByRole('group', { name: 'Cameras' }, { timeout: 2000 })).toBeInTheDocument();
+  });
+
+  it('a robot switch starts the next robot on Head + wrists, not on the last choice', async () => {
+    camerasFor({ cameras: BOTH });
+    useRobotsStore.setState({
+      robots: [robot('sim-1', 'Bench sim', 'online'), robot('g1-edu-4', 'G1 EDU', 'online')],
+    });
+    const user = userEvent.setup();
+    render();
+    await user.selectOptions(screen.getAllByRole('combobox')[0], 'g1-edu-4');
+    await user.click(await screen.findByRole('button', { name: 'Head only' }));
+    await user.selectOptions(screen.getAllByRole('combobox')[0], 'sim-1');
+    const group = await screen.findByRole('group', { name: 'Cameras' });
+    expect(within(group).getByRole('button', { name: 'Head + wrists' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('a configured wrist camera that is offline still offers Head + wrists, with a note', async () => {
+    camerasFor({ cameras: ['head_camera', 'right_wrist_camera'], configured: BOTH });
+    const user = userEvent.setup();
+    render();
+    expect(await screen.findByTestId('wrist-offline-note')).toHaveTextContent('Left wrist camera is offline right now.');
+    const request = await submit(user);
+    expect(request.cameras).toEqual(BOTH);
   });
 });

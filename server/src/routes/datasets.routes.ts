@@ -16,8 +16,6 @@ import type {
   HuggingFaceImportRequest,
   EpisodeMeta,
   FrameData,
-  PushToHubRequest,
-  PushToHubJobState,
   ImportLogResponse,
 } from '../types/dataset.types.js';
 import type { DatasetStatus } from '../types/vla.types.js';
@@ -36,9 +34,7 @@ import type {
   TriggerValidationRequest,
   UnflagTrajectoryRequest,
 } from '../types/data-quality.types.js';
-import { spawn } from 'child_process';
-import { resolve, dirname, join, sep, isAbsolute } from 'path';
-import { fileURLToPath } from 'url';
+import { resolve, join, sep, isAbsolute } from 'path';
 import { createReadStream, existsSync, statSync } from 'fs';
 import { readFile } from 'fs/promises';
 import type { Readable } from 'stream';
@@ -61,9 +57,11 @@ import { ConflictError, ServiceUnavailableError } from '../utils/errors.js';
 import { ownerOnly } from '../middleware/auth.middleware.js';
 import { sendFailure } from '../utils/routeErrors.js';
 import { parsePagination, parseIntegerParam } from '../utils/pagination.js';
-
-/** In-memory job state for push-to-hub operations */
-const pushJobs = new Map<string, PushToHubJobState>();
+import { z } from 'zod';
+import {
+  huggingFacePublishService,
+  PublishError,
+} from '../services/HuggingFacePublishService.js';
 
 // ============================================================================
 // Local on-disk datasets (synthetic / Cosmos 3 — TASK-178; v3.0 — TASK-217)
@@ -764,160 +762,72 @@ datasetRoutes.get('/:id/annotations', async (req: Request, res: Response) => {
 });
 
 // ============================================================================
-// POST /api/datasets/:id/push-to-hub - Push dataset to HuggingFace Hub
+// Publishing to the Hugging Face Hub (TASK-394)
+//
+// Replaces `push-to-hub`, which spawned a script at a path on another machine,
+// read from RustFS only and took the token from the browser. The service reads
+// the local LeRobot directory and uses the server's own token; see
+// services/HuggingFacePublishService.ts.
 // ============================================================================
 
-datasetRoutes.post('/:id/push-to-hub', async (req: Request, res: Response) => {
+/** Hub tags and SPDX-ish license ids: short, no spaces, nothing a YAML card has to escape. */
+const HUB_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9:._+-]{0,49}$/;
+
+const publishDatasetSchema = z.object({
+  repoId: z.string().trim().min(1).max(200),
+  private: z.boolean().optional(),
+  license: z.string().trim().toLowerCase().regex(HUB_TOKEN_RE).optional(),
+  tags: z.array(z.string().trim().regex(HUB_TOKEN_RE)).max(20).optional(),
+  description: z.string().max(2000).optional(),
+  force: z.boolean().optional(),
+}).strict();
+
+function sendPublishError(res: Response, error: unknown, fallback: string): void {
+  if (error instanceof PublishError) {
+    res.status(error.status).json({ error: error.message, code: error.code });
+    return;
+  }
+  sendFailure(res, error, fallback);
+}
+
+// GET /api/datasets/publish/status — is a token configured, and whose is it.
+// Two segments, so it never collides with `/:id`; registered here anyway so
+// the order reads the way it resolves.
+datasetRoutes.get('/publish/status', async (_req: Request, res: Response) => {
   try {
-    const { id } = req.params;
-    const body = req.body as PushToHubRequest;
-
-    // Validate required fields
-    if (!body.token) {
-      return res.status(400).json({ error: 'token is required' });
-    }
-    if (!body.repoId) {
-      return res.status(400).json({ error: 'repoId is required' });
-    }
-
-    // Check dataset exists and is ready
-    const dataset = await datasetService.get(id);
-    if (!dataset) {
-      return res.status(404).json({ error: 'Dataset not found' });
-    }
-    if (dataset.status !== 'ready') {
-      return res.status(400).json({
-        error: 'Dataset must be in ready state to push',
-        currentStatus: dataset.status,
-      });
-    }
-
-    // Check if a push is already running
-    const existing = pushJobs.get(id);
-    if (existing && (existing.status === 'pending' || existing.status === 'running')) {
-      return res.status(409).json({
-        error: 'A push job is already in progress for this dataset',
-        status: existing.status,
-      });
-    }
-
-    // Initialize job state
-    const jobState: PushToHubJobState = {
-      status: 'pending',
-      progress: 'Starting push...',
-      startedAt: new Date().toISOString(),
-    };
-    pushJobs.set(id, jobState);
-
-    // Resolve the Python script path
-    const scriptDir = dirname(fileURLToPath(import.meta.url));
-    const scriptPath = resolve(scriptDir, '../../scripts/hf_push_dataset.py');
-    const pythonBin = '/home/mindcube/miniconda3/envs/lerobot312/bin/python';
-
-    // Spawn Python process
-    const child = spawn(pythonBin, [scriptPath], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    // Send config via stdin
-    const stdinPayload = JSON.stringify({
-      datasetId: id,
-      storagePath: dataset.storagePath,
-      repoId: body.repoId,
-      token: body.token,
-      private: body.private ?? false,
-    });
-    child.stdin.write(stdinPayload);
-    child.stdin.end();
-
-    jobState.status = 'running';
-
-    // Collect stdout line by line
-    let stdoutBuf = '';
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdoutBuf += chunk.toString();
-      const lines = stdoutBuf.split('\n');
-      stdoutBuf = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (msg.type === 'progress') {
-            jobState.progress = msg.message;
-          } else if (msg.success === true) {
-            jobState.status = 'done';
-            jobState.url = msg.url;
-            jobState.progress = 'Push completed';
-            // Update dataset record with HF repo ID
-            datasetService.update(id, { huggingFaceRepoId: body.repoId }).catch((err) => {
-              console.error('[PushToHub] Failed to update huggingFaceRepoId:', err);
-            });
-          } else if (msg.success === false) {
-            jobState.status = 'failed';
-            jobState.error = msg.error;
-          }
-        } catch {
-          // Non-JSON output, ignore
-        }
-      }
-    });
-
-    let stderrBuf = '';
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderrBuf += chunk.toString();
-    });
-
-    child.on('close', (code: number | null) => {
-      if (code !== 0 && jobState.status !== 'done' && jobState.status !== 'failed') {
-        jobState.status = 'failed';
-        jobState.error = stderrBuf || `Process exited with code ${code}`;
-      }
-    });
-
-    res.status(202).json({
-      jobId: id,
-      message: `Push started for dataset ${dataset.name} to ${body.repoId}`,
-    });
+    res.json(await huggingFacePublishService.getStatus());
   } catch (error) {
-    console.error('[DatasetRoutes] Error starting push to hub:', error);
-    sendFailure(res, error, 'Failed to start push', 500);
+    sendFailure(res, error, 'Failed to read the Hugging Face publish status');
   }
 });
 
-// ============================================================================
-// GET /api/datasets/:id/push-status - Get push-to-hub job status
-// ============================================================================
-
-datasetRoutes.get('/:id/push-status', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-
-    const job = pushJobs.get(id);
-    if (!job) {
-      // No active job — check if dataset already has a HF repo
-      const dataset = await datasetService.get(id);
-      if (!dataset) {
-        return res.status(404).json({ error: 'Dataset not found' });
-      }
-      if (dataset.huggingFaceRepoId) {
-        return res.json({
-          status: 'done' as const,
-          url: `https://huggingface.co/datasets/${dataset.huggingFaceRepoId}`,
-        });
-      }
-      return res.json({ status: 'none' as const });
-    }
-
-    res.json({
-      status: job.status,
-      progress: job.progress,
-      url: job.url,
-      error: job.error,
-      startedAt: job.startedAt,
+// POST /api/datasets/:id/publish — start publishing; 202 with the job.
+datasetRoutes.post('/:id/publish', async (req: Request, res: Response) => {
+  const input = publishDatasetSchema.safeParse(req.body ?? {});
+  if (!input.success) {
+    const fields = input.error.issues.map((issue) => issue.path.join('.') || '(body)');
+    return res.status(400).json({
+      error: `Invalid publish request: ${[...new Set(fields)].join(', ')}`,
+      code: 'INVALID_PUBLISH_REQUEST',
+      fields,
     });
+  }
+  try {
+    const job = await huggingFacePublishService.publish(req.params.id, input.data, actorOf(req));
+    res.status(202).json(job);
   } catch (error) {
-    console.error('[DatasetRoutes] Error getting push status:', error);
-    res.status(500).json({ error: 'Failed to get push status' });
+    sendPublishError(res, error, 'Failed to start publishing');
+  }
+});
+
+// GET /api/datasets/:id/publish — the current or last publish of this dataset.
+datasetRoutes.get('/:id/publish', async (req: Request, res: Response) => {
+  try {
+    const job = await huggingFacePublishService.getJob(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Dataset not found' });
+    res.json(job);
+  } catch (error) {
+    sendPublishError(res, error, 'Failed to read the publish status');
   }
 });
 

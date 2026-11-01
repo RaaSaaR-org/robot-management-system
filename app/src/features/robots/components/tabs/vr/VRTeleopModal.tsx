@@ -409,6 +409,8 @@ export interface VRTeleopModalProps {
    * card. Without it, none of those exist.
    */
   vrSession?: VrSessionBridge;
+  /** The wrist cameras the session records (TASK-443); see `VrScene`. */
+  wristCameras?: readonly string[];
 }
 
 function makeXrStore(): XRStore {
@@ -453,6 +455,7 @@ export function VRTeleopModalBody({
   sessionSupported,
   onClose,
   vrSession,
+  wristCameras,
 }: VRTeleopModalProps) {
   const [status, setStatus] = useState<LinkStatus>('closed');
   const [robotType, setRobotType] = useState('');
@@ -1376,6 +1379,7 @@ export function VRTeleopModalBody({
           onEstop={onStopButton}
           onResetEstop={resetEstop}
           vrSession={vrSession}
+          wristCameras={wristCameras}
           modeRequest={modePrompt}
           onAllowModeRequest={allowModeRequest}
         />

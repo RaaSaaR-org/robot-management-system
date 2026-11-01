@@ -52,7 +52,12 @@ vi.mock('@react-three/xr', () => ({
 }));
 
 vi.mock('../../../visualization/RobotModel', () => ({ RobotModel: () => <div /> }));
-vi.mock('../HeadCameraPanel', () => ({ HeadCameraPanel: () => <div /> }));
+vi.mock('../HeadCameraPanel', () => ({ HeadCameraPanel: () => <div data-testid="head-camera-panel" /> }));
+vi.mock('../WristCameraPanels', () => ({
+  WristCameraPanels: ({ cameras }: { cameras: readonly string[] }) => (
+    <div data-testid="wrist-camera-panels" data-cameras={cameras.join(',')} />
+  ),
+}));
 vi.mock('../VrWristHud', () => ({ VrWristHud: () => <div /> }));
 vi.mock('../VrOrigin', () => ({
   VrOrigin: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
@@ -141,5 +146,31 @@ describe('VrScene session board (TASK-413)', () => {
     render(<VrScene {...makeProps({ vrSession: session })} />);
     expect(screen.getByTestId('session-board')).toBeInTheDocument();
     expect(screen.getByTestId('robot-panel')).toBeInTheDocument();
+  });
+});
+
+describe('VrScene wrist panels (TASK-443)', () => {
+  const WRISTS = ['left_wrist_camera', 'right_wrist_camera'];
+
+  it('mounts no wrist panels without wrist cameras — the head-only scene is unchanged', () => {
+    render(<VrScene {...makeProps()} />);
+    expect(screen.queryByTestId('wrist-camera-panels')).not.toBeInTheDocument();
+    expect(screen.getByTestId('head-camera-panel')).toBeInTheDocument();
+  });
+
+  it('mounts none for an empty list either', () => {
+    render(<VrScene {...makeProps({ wristCameras: [] })} />);
+    expect(screen.queryByTestId('wrist-camera-panels')).not.toBeInTheDocument();
+  });
+
+  it('mounts the wrist panels beside the head panel when the session records them', () => {
+    render(<VrScene {...makeProps({ wristCameras: WRISTS })} />);
+    expect(screen.getByTestId('wrist-camera-panels')).toHaveAttribute('data-cameras', WRISTS.join(','));
+    expect(screen.getByTestId('head-camera-panel')).toBeInTheDocument();
+  });
+
+  it('mounts none on the SO-101, which has no camera screen at all', () => {
+    render(<VrScene {...makeProps({ modelType: 'so101', wristCameras: WRISTS })} />);
+    expect(screen.queryByTestId('wrist-camera-panels')).not.toBeInTheDocument();
   });
 });

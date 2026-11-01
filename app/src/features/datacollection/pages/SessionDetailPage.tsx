@@ -659,6 +659,7 @@ export function SessionDetailPage() {
       onVrOpenChange={setVrModalOpen}
       showReadiness={false}
       variant={variant}
+      wristCameras={wristCameras}
     />
   );
   const jointUnit = jointPositionUnit(telemetry?.robotType ?? (robot?.metadata as Record<string, unknown> | undefined)?.robotType);

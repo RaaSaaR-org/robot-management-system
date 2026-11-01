@@ -519,6 +519,26 @@ export function cameraPanelLine(camera: CameraLineInput, robotId: string): Panel
   }
 }
 
+/**
+ * TASK-443: `WRISTS L live · R offline` — or null when no wrist panel shows
+ * this robot, or every one that does is live. The head camera's rule: the line
+ * speaks only when there is something wrong to say.
+ */
+export function wristPanelLine(
+  wrists: Readonly<Record<string, Pick<CameraLineInput, 'robotId' | 'state'>>>,
+  robotId: string,
+): PanelLine | null {
+  const shown = Object.entries(wrists)
+    .filter(([, status]) => status.robotId === robotId)
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (shown.length === 0 || shown.every(([, status]) => status.state === 'live')) return null;
+  const side = (camera: string): string =>
+    camera.startsWith('left_') ? 'L' : camera.startsWith('right_') ? 'R' : camera;
+  const text = `WRISTS ${shown.map(([camera, status]) => `${side(camera)} ${status.state}`).join(' · ')}`;
+  const bad = shown.some(([, status]) => status.state === 'offline');
+  return { id: 'wrists', text, color: bad ? PANEL_COLORS.bad : PANEL_COLORS.warn };
+}
+
 /** The server's readiness reason (TASK-411) as far as the why line needs it. */
 export interface ServerWhy {
   code: string;

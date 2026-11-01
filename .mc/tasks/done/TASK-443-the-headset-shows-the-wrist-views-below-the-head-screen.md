@@ -3,7 +3,7 @@ id: "TASK-443"
 aliases: []
 title: "The headset shows the wrist views below the head screen"
 slug: "the-headset-shows-the-wrist-views-below-the-head-screen"
-status: "todo"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -16,7 +16,7 @@ spe: 5
 effort: "medium"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # The headset shows the wrist views below the head screen
@@ -81,15 +81,15 @@ teleoperating. A session without wrist cameras sees exactly today's scene.
 
 ## Acceptance Criteria
 
-- [ ] Without wrist cameras: `VrScene` renders exactly today's meshes; no wrist ticket or
+- [x] Without wrist cameras: `VrScene` renders exactly today's meshes; no wrist ticket or
       stream request is made (existing VR tests and `vrUiDebug` unchanged apart from
       `wristCameras: []`).
-- [ ] With `['left_wrist_camera','right_wrist_camera']`: two panels below the head screen,
+- [x] With `['left_wrist_camera','right_wrist_camera']`: two panels below the head screen,
       left at −z, not overlapping the head screen, side panels or the grippers' area; a stale
       wrist shows its badge without any haptic pulse and without touching the head status.
-- [ ] Under `?xremu` on the session page of a Head + wrists session, `vrUiDebug.wristCameras`
+- [x] Under `?xremu` on the session page of a Head + wrists session, `vrUiDebug.wristCameras`
       lists both and a screenshot shows them.
-- [ ] App typecheck + vitest green.
+- [x] App typecheck + vitest green.
 
 ## Test Strategy
 

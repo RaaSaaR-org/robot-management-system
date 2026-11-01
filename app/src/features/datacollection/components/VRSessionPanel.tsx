@@ -63,6 +63,11 @@ export interface VRSessionPanelProps {
   showReadiness?: boolean;
   /** How the panel is drawn (default `card`). */
   variant?: VRSessionPanelVariant;
+  /**
+   * The wrist cameras the session records (TASK-443), for their screens in the
+   * headset. Empty or absent for a head-only session.
+   */
+  wristCameras?: readonly string[];
 }
 
 const STATUS: Record<SimInputStatus | 'off', { label: string; tone: StatusTagTone }> = {
@@ -77,6 +82,7 @@ const OFFLINE = 'Robot offline. Start the robot agent to connect a headset.';
 
 export function VRSessionPanel({
   robot, lease, simulate: simulateProp, onSimulateChange, onVrOpenChange, showReadiness = true, variant = 'card',
+  wristCameras,
 }: VRSessionPanelProps) {
   const sessionId = useDataCollectionStore((s) => s.selectedSession?.id ?? null);
   // TASK-413 (D2): one object for the headset, read through a getter from the
@@ -100,6 +106,7 @@ export function VRSessionPanel({
           <VRTeleopSection
             robot={robot}
             vrSession={vrSession}
+            wristCameras={wristCameras}
             onOpenChange={onVrOpenChange}
             showReadiness={false}
             launchDisabledReason={launchDisabledReason}
@@ -142,6 +149,7 @@ export function VRSessionPanel({
           <VRTeleopSection
             robot={robot}
             vrSession={vrSession}
+            wristCameras={wristCameras}
             onOpenChange={onVrOpenChange}
             showReadiness={false}
             launchDisabledReason={launchDisabledReason}
@@ -207,6 +215,7 @@ export function VRSessionPanel({
       <VRTeleopSection
         robot={robot}
         vrSession={vrSession}
+        wristCameras={wristCameras}
         onOpenChange={onVrOpenChange}
         showReadiness={showReadiness}
         launchDisabledReason={launchDisabledReason}

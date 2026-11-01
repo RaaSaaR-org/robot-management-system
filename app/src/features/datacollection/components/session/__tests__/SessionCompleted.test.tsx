@@ -7,7 +7,9 @@
  *              button. The review table names takes the way the session page
  *              did while recording: "Take N", 1-based (TASK-410 D2). TASK-418:
  *              a session whose takes hold frames never reads FRAMES 0 — it
- *              refetches and shows "…" until the count is final.
+ *              refetches and shows "…" until the count is final. TASK-394: an
+ *              exported session also offers Publish to Hugging Face, which
+ *              opens the publish dialog for its dataset.
  * @feature datacollection
  */
 
@@ -20,6 +22,9 @@ import type { EpisodeSummary, TeleoperationSession } from '../../../types/dataco
 
 // The thumbnails are fetched through the API client; these tests are about the band, not the frames.
 vi.mock('../../../utils/takeThumbnailCache', () => ({ loadThumbnail: vi.fn(async () => null), forgetThumbnail: vi.fn() }));
+vi.mock('@/features/training/components/PublishDatasetDialog', () => ({
+  PublishDatasetDialog: ({ datasetId }: { datasetId: string }) => <div data-testid="publish-dialog">{datasetId}</div>,
+}));
 
 const session = {
   id: 'sess-1', operatorId: 'u', robotId: 'g1', type: 'vr_quest', status: 'completed', startedAt: null, endedAt: null,
@@ -135,6 +140,21 @@ describe('SessionCompleted — the one dataset action (TASK-429)', () => {
     expect(screen.getByTestId('session-warning')).toHaveTextContent('The recorder lost the robot.');
     expect(screen.getAllByText(/recorder lost the robot/)).toHaveLength(1);
     expect(datasetControls()).toBe(1);
+  });
+});
+
+describe('SessionCompleted publish action (TASK-394)', () => {
+  it('opens the publish dialog for the session\'s dataset, without a second dataset control', async () => {
+    render({ exportedDatasetId: 'ds-1' });
+    expect(screen.queryByTestId('publish-dialog')).not.toBeInTheDocument();
+    expect(datasetControls()).toBe(1);
+    await userEvent.click(screen.getByTestId('publish-dataset'));
+    expect(screen.getByTestId('publish-dialog')).toHaveTextContent('ds-1');
+  });
+
+  it('offers no publish before there is a dataset', () => {
+    render();
+    expect(screen.queryByTestId('publish-dataset')).not.toBeInTheDocument();
   });
 });
 
