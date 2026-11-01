@@ -8,7 +8,9 @@
  *              picture covering the frame, the name left to the frame's own
  *              view switch. TASK-430: `compact` for a picture-in-picture — its
  *              bar names the camera, so the placeholder draws the reconnect
- *              line and Retry once, below that bar.
+ *              line and Retry once, below that bar. TASK-448: the stream
+ *              `<img>` empties its `src` when it leaves the page, which is what
+ *              closes the connection.
  * @feature datacollection
  */
 
@@ -17,6 +19,7 @@ import { VideoOff } from 'lucide-react';
 import { Button, StatusTag } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { useCameraStreamUrl } from '../../robots/hooks/useCameraStreamUrl';
+import { isReleasedStreamImage, useStreamImageRef } from '../../robots/hooks/useStreamImageRef';
 import { nextRetryDelayS } from '../../robots/components/tabs/vr/vrCamera';
 
 interface CameraStreamViewProps {
@@ -84,6 +87,9 @@ export function CameraStreamView({
   const [now, setNow] = useState(() => Date.now());
   const [hasSnapshot, setHasSnapshot] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
+  // Closes the stream when the `<img>` goes — unmount, offline, an error, a new
+  // ticket (TASK-448). `imgRef` still holds the live element for the snapshot.
+  const streamImageRef = useStreamImageRef(imgRef);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const { url: streamUrl, denied } = useCameraStreamUrl(offline ? null : robotId, offline ? null : cameraName, undefined, attempt);
@@ -189,11 +195,15 @@ export function CameraStreamView({
       {live && (
         <>
           <img
-            ref={imgRef}
+            ref={streamImageRef}
             src={streamUrl}
             alt={`${name} camera`}
             onLoad={() => setFailures(0)}
-            onError={() => setFailedUrl(streamUrl)}
+            onError={(e) => {
+              // The `error` an emptied `src` fires is the stream being closed, not failing.
+              if (isReleasedStreamImage(e.currentTarget)) return;
+              setFailedUrl(streamUrl);
+            }}
             className={cn('relative h-full w-full', fit ? 'object-cover' : 'object-contain')}
           />
           {!fit && (

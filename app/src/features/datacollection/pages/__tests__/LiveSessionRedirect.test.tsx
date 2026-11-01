@@ -1,9 +1,10 @@
 /**
  * @file LiveSessionRedirect.test.tsx
- * @description `/data-collection/live?robot=<id>` (TASK-412, TASK-416) against
- *              MSW: `liveCandidates` drops READY sessions older than 4 h; the
- *              page replaces itself with the single candidate, lists several
- *              instead of guessing, names a stale one it ignores, waits
+ * @description `/data-collection/live?robot=<id>` (TASK-412, TASK-416, TASK-452)
+ *              against MSW: `liveCandidates` drops READY sessions older than 4 h
+ *              and recording/paused ones idle for 12 h; the page replaces itself
+ *              with the single candidate, lists several instead of guessing,
+ *              names a stale or idle one it ignores, waits
  *              ("No live session for <robot>. Waiting…") and follows a session
  *              created after it opened, ignores other robots' and finished
  *              sessions, and keeps trying after a failed read.
@@ -16,7 +17,14 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/mocks/server';
 import { resetLiveSessionDemo } from '@/mocks/liveSessionDemoHandlers';
-import { LIVE_CREATED_MAX_AGE_MS, LiveSessionRedirect, createdAgo, liveCandidates } from '../LiveSessionRedirect';
+import {
+  LIVE_ACTIVE_MAX_IDLE_MS,
+  LIVE_CREATED_MAX_AGE_MS,
+  LiveSessionRedirect,
+  createdAgo,
+  ignoredReason,
+  liveCandidates,
+} from '../LiveSessionRedirect';
 import type { TeleoperationSession } from '../../types/datacollection.types';
 
 const ROBOT = 'g1-edu-4';
@@ -62,14 +70,42 @@ describe('liveCandidates', () => {
     expect(r.ignored.map((s) => s.id)).toEqual(['appely']);
   });
 
-  it('keeps a 2-day-old recording (and paused) session', () => {
+  it('ignores a paused (or recording) session idle for 2 days', () => {
     const r = liveCandidates(
-      [session('rec', ROBOT, 'recording', ago(2 * DAY)), session('pau', 'sim-1', 'paused', ago(2 * DAY))],
+      [session('pau', ROBOT, 'paused', ago(2 * DAY)), session('rec', ROBOT, 'recording', ago(LIVE_ACTIVE_MAX_IDLE_MS + MIN))],
       ROBOT,
       NOW,
     );
-    expect(r.candidates.map((s) => s.id)).toEqual(['rec']);
+    expect(r.candidates).toEqual([]);
+    expect(r.ignored.map((s) => s.id)).toEqual(['rec', 'pau']);
+  });
+
+  it('keeps a paused session last active 1 hour ago', () => {
+    const r = liveCandidates([session('pau', ROBOT, 'paused', ago(60 * MIN))], ROBOT, NOW);
+    expect(r.candidates.map((s) => s.id)).toEqual(['pau']);
     expect(r.ignored).toEqual([]);
+  });
+
+  it('measures idleness from updatedAt, not from when the session was created', () => {
+    const r = liveCandidates(
+      [
+        { ...session('long', ROBOT, 'recording', ago(2 * DAY)), updatedAt: ago(10 * MIN) },
+        { ...session('nodate', ROBOT, 'paused', ago(2 * DAY)), updatedAt: 'not a date', startedAt: ago(20 * MIN) },
+      ],
+      ROBOT,
+      NOW,
+    );
+    expect(r.candidates.map((s) => s.id)).toEqual(['long', 'nodate']);
+  });
+
+  it('picks the fresh recording session over a 2-day-old paused one', () => {
+    const r = liveCandidates(
+      [session('old', ROBOT, 'paused', ago(2 * DAY)), session('today', ROBOT, 'recording', ago(5 * MIN))],
+      ROBOT,
+      NOW,
+    );
+    expect(r.candidates.map((s) => s.id)).toEqual(['today']);
+    expect(r.ignored.map((s) => s.id)).toEqual(['old']);
   });
 
   it('returns two fresh candidates newest first, so the page lists them', () => {
@@ -112,6 +148,11 @@ describe('createdAgo', () => {
     expect(at(9 * DAY)).toMatch(/^created \S/);
     expect(at(9 * DAY)).not.toContain('ago');
     expect(createdAgo(session('x', ROBOT, 'created', 'not a date'), NOW)).toBe('created at an unknown time');
+  });
+
+  it('says why an ignored session does not count', () => {
+    expect(ignoredReason(session('x', ROBOT, 'created', ago(2 * DAY)), NOW)).toBe('created 2 days ago, never started');
+    expect(ignoredReason(session('x', ROBOT, 'paused', ago(2 * DAY)), NOW)).toBe('paused, last active 2 days ago');
   });
 });
 
@@ -205,13 +246,48 @@ describe('LiveSessionRedirect', () => {
     expect(screen.queryByTestId('where')).toBeNull();
   });
 
+  it('waits past a paused session idle for 2 days and names it', async () => {
+    server.use(
+      http.get('/api/teleoperation/sessions', () =>
+        HttpResponse.json({
+          sessions: [{ ...session('814249f2', ROBOT, 'paused', new Date(Date.now() - 2 * DAY).toISOString()), languageInstr: 'Remote test 1' }],
+          pagination: {},
+        }),
+      ),
+    );
+    renderAt(`/data-collection/live?robot=${ROBOT}`);
+    await waitFor(() =>
+      expect(screen.getByTestId('live-session-ignored')).toHaveTextContent(
+        "Ignoring ‘Remote test 1’ (paused, last active 2 days ago). End it on the desktop if it is not needed.",
+      ),
+    );
+    expect(screen.getByTestId('live-session-status')).toHaveAttribute('data-state', 'waiting');
+    expect(screen.queryByTestId('where')).toBeNull();
+  });
+
+  it('replaces itself with the fresh recording session, not a 2-day-old paused one', async () => {
+    server.use(
+      http.get('/api/teleoperation/sessions', () =>
+        HttpResponse.json({
+          sessions: [
+            session('s-today', ROBOT, 'recording', new Date(Date.now() - 5 * MIN).toISOString()),
+            session('814249f2', ROBOT, 'paused', new Date(Date.now() - 2 * DAY).toISOString()),
+          ],
+          pagination: {},
+        }),
+      ),
+    );
+    renderAt(`/data-collection/live?robot=${ROBOT}`);
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/data-collection/s-today'));
+  });
+
   it('keeps trying after a failed read', async () => {
     let calls = 0;
     server.use(
       http.get('/api/teleoperation/sessions', () => {
         calls++;
         if (calls === 1) return HttpResponse.json({ error: 'boom' }, { status: 500 });
-        return HttpResponse.json({ sessions: [session('s1', ROBOT, 'recording', '2026-10-18T09:00:00Z')], pagination: {} });
+        return HttpResponse.json({ sessions: [session('s1', ROBOT, 'recording', new Date(Date.now() - 5 * MIN).toISOString())], pagination: {} });
       }),
     );
     renderAt(`/data-collection/live?robot=${ROBOT}`);

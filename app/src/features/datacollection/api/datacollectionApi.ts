@@ -26,6 +26,9 @@ import type {
   CollectionPrioritiesResponse,
 } from '../types/datacollection.types';
 
+/** End session: just over the server's 300 s wait for the robot's encode. */
+export const END_SESSION_TIMEOUT_MS = 330_000;
+
 // ============================================================================
 // ENDPOINTS
 // ============================================================================
@@ -185,7 +188,13 @@ export const datacollectionApi = {
    * @returns Updated session
    */
   async endSession(id: string): Promise<TeleoperationSession> {
-    const response = await apiClient.post<{ session: TeleoperationSession }>(ENDPOINTS.sessionEnd(id));
+    const response = await apiClient.post<{ session: TeleoperationSession }>(ENDPOINTS.sessionEnd(id), undefined, {
+      // The robot encodes every kept take's video inside this call, and the
+      // server waits up to 300 s for it. The shared client aborts at 30 s,
+      // which left the operator with a timeout while the robot was still
+      // saving (TASK-450).
+      timeout: END_SESSION_TIMEOUT_MS,
+    });
     return response.data.session;
   },
 
