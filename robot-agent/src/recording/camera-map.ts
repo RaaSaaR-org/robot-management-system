@@ -19,9 +19,12 @@
  * grows a real stereo pair can add `cam_left_high` beside it without renaming a
  * column that datasets already carry.
  *
- * No scene in this repo defines a wrist camera, so `cam_*_wrist` is never
- * produced. That is a gap in the scenes, not something to paper over by
- * relabelling a third-person view as a wrist view.
+ * Every G1 Dex3 scene has a `left_wrist_camera` and a `right_wrist_camera`
+ * (TASK-440), mounted on the wrist yaw links of the robot includes in
+ * `hardware/sim_evaluator/mjcf/g1_dex3/` and named like the real robot's, so they
+ * reach `cam_left_wrist` / `cam_right_wrist` through the default table below —
+ * no scene needs its own entry for them. A scene without them must never fill
+ * those columns by relabelling a third-person view as a wrist view.
  *
  * A scene camera with no entry becomes `cam_<name>` — legible, obviously
  * non-standard, and impossible to mistake for a Unitree key.
@@ -103,4 +106,82 @@ export function mapCameras(
     seen.set(key, camera);
     return { camera, key };
   });
+}
+
+/**
+ * The dataset keys a policy can be trained on that name a robot-mounted view:
+ * the values of {@link DEFAULT_CAMERA_KEYS}. Only these are looked up by name;
+ * any other policy camera name (SmolVLA's `up`/`side`, the apple configs'
+ * `ego_view`) gets the head camera.
+ *
+ * `ego_view` getting the head camera keeps the old positional behaviour on
+ * purpose (TASK-449 AC6), but it is a known mismatch: the apple scene does have
+ * a calibrated `ego_camera`, and the sim evaluator feeds that one to the policy
+ * as `ego_view`. Mapping it by name is TASK-474.
+ */
+const POLICY_VIEW_KEYS: ReadonlySet<string> = new Set(Object.values(DEFAULT_CAMERA_KEYS));
+
+/**
+ * The inverse of {@link datasetCameraKey} for a running policy: which of the
+ * cameras a sidecar lists fills the policy camera `policyKey`.
+ *
+ * - A Unitree view key gets the listed camera that maps to it — `cam_left_high`
+ *   gets `ego_camera`, `cam_left_wrist` only `left_wrist_camera`.
+ * - Everything else, and a view key no listed camera maps to, gets the head
+ *   camera: the camera that maps to `cam_right_high`, or the first one in sorted
+ *   order when none does, so the answer never depends on list order.
+ * - An empty list gives `undefined`; the caller decides what a missing frame is.
+ *
+ * The match is chosen from the cameras in sorted order, so two cameras that
+ * resolve to one key (no scene has that today) still pick the same one
+ * whatever order the sidecar listed them in.
+ */
+export function sceneCameraForPolicyKey(
+  scene: string | null | undefined,
+  policyKey: string,
+  cameras: readonly string[],
+): string | undefined {
+  if (cameras.length === 0) return undefined;
+  const sorted = [...cameras].sort();
+  const byKey = (key: string): string | undefined =>
+    sorted.find((camera) => datasetCameraKey(scene, camera) === key);
+  if (POLICY_VIEW_KEYS.has(policyKey)) {
+    const match = byKey(policyKey);
+    if (match !== undefined) return match;
+  }
+  return byKey('cam_right_high') ?? sorted[0];
+}
+
+/**
+ * Which listed camera fills each of a policy's cameras, for a whole policy.
+ *
+ * A sidecar that lists a robot-mounted view (any camera that maps to a Unitree
+ * view key — `head_camera`, `ego_camera`, a wrist) is filled BY NAME through
+ * {@link sceneCameraForPolicyKey}. A sidecar that lists none — the SO-101 arm's
+ * `['wrist', 'top']` — has no names to match, so it keeps the positional fill
+ * it always had: the k-th policy camera gets the k-th listed camera, the last
+ * one reused when the policy wants more. Without that, a two-camera SmolVLA
+ * policy (`up`, `side`) on an SO-101 would get the wrist frame twice and never
+ * see the top camera.
+ *
+ * An empty list gives `undefined` for every policy camera.
+ */
+export function policyCameraSources(
+  scene: string | null | undefined,
+  policyKeys: readonly string[],
+  cameras: readonly string[],
+): Map<string, string | undefined> {
+  const listsRobotView = cameras.some((camera) =>
+    POLICY_VIEW_KEYS.has(datasetCameraKey(scene, camera)),
+  );
+  const sources = new Map<string, string | undefined>();
+  policyKeys.forEach((policyKey, i) => {
+    sources.set(
+      policyKey,
+      listsRobotView
+        ? sceneCameraForPolicyKey(scene, policyKey, cameras)
+        : cameras[Math.min(i, cameras.length - 1)],
+    );
+  });
+  return sources;
 }
