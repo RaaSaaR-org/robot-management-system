@@ -24,6 +24,19 @@
  * config. It is never returned, never logged, and scrubbed out of every error
  * message before one is kept.
  *
+ * WHICH DIRECTORIES. `storagePath` is a column any member can fill in (a
+ * registration takes any absolute directory with a `meta/info.json`), so it is
+ * not trusted: its realpath must sit under a directory this server keeps
+ * datasets in — `DATASET_UPLOAD_DIR` (uploads and Hub imports) or the robot
+ * agent's recording root (`RECORDING_DATASET_DIR`, the agent's own variable;
+ * unset, `robot-agent/data/workspace-<robotId>/datasets/` beside this checkout, where a
+ * simulated robot on this box writes). Anything else, a symlink out of those
+ * included, is refused with `DATASET_PATH_NOT_ALLOWED`.
+ *
+ * VISIBILITY. Private is the default, and a private publish never commits into
+ * an existing repo that is public, or whose visibility the Hub does not tell
+ * us: `REPO_IS_PUBLIC` / `REPO_VISIBILITY_UNKNOWN`, before a byte moves.
+ *
  * WHAT IS KEPT. The job lives in memory (one per dataset). The durable record
  * is the compliance log — start and outcome, with repo, commit and actor — plus
  * `huggingFaceRepoId` on rows that were not themselves imported from the Hub
@@ -31,13 +44,13 @@
  * the data came from).
  */
 
-import { lstat, readFile, readdir } from 'fs/promises';
+import { lstat, readFile, readdir, realpath } from 'fs/promises';
 import { existsSync, readFileSync, statSync } from 'fs';
 import { homedir } from 'os';
-import { isAbsolute, join, posix } from 'path';
-import { pathToFileURL } from 'url';
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
 import * as hub from '@huggingface/hub';
-import { datasetService } from './DatasetService.js';
+import { datasetService, datasetStorageRoot } from './DatasetService.js';
 import {
   buildDatasetCard,
   NEODEM_CARD_MARKER,
@@ -133,6 +146,8 @@ export interface HubWhoAmI {
 export interface HubClient {
   whoAmI(params: { accessToken: string; hubUrl?: string }): Promise<HubWhoAmI>;
   repoExists(params: { repo: hub.RepoDesignation; accessToken: string; hubUrl?: string }): Promise<boolean>;
+  /** The dataset repo's visibility, as the Hub reports it to this token. */
+  datasetInfo(params: { name: string; accessToken: string; hubUrl?: string }): Promise<{ private?: boolean }>;
   createRepo(params: {
     repo: hub.RepoDesignation;
     accessToken: string;
@@ -160,8 +175,16 @@ export interface HubClient {
   }): Promise<void>;
 }
 
+/** A directory this server keeps datasets in; `within` narrows it to matching relative paths. */
+export interface DatasetRoot {
+  dir: string;
+  within?: RegExp;
+}
+
 export interface PublishServiceOptions {
   hub?: HubClient;
+  /** The directories a published dataset must sit under. */
+  datasetRoots?: () => DatasetRoot[];
   env?: NodeJS.ProcessEnv;
   home?: string;
   now?: () => Date;
@@ -330,11 +353,56 @@ export async function replaceTagOverRest(params: Parameters<HubClient['replaceTa
 const defaultHub: HubClient = {
   whoAmI: (p) => hub.whoAmI(p) as unknown as ReturnType<HubClient['whoAmI']>,
   repoExists: (p) => hub.repoExists(p),
+  datasetInfo: (p) => hub.datasetInfo(p),
   createRepo: (p) => hub.createRepo(p),
   downloadFile: (p) => hub.downloadFile(p),
   uploadFilesWithProgress: (p) => hub.uploadFilesWithProgress(p),
   replaceTag: replaceTagOverRest,
 };
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Where this server keeps datasets: uploads and Hub imports, and what the robot
+ * agent records. The agent's default (`data/workspace-<robotId>/datasets/`) is
+ * mirrored rather than all of `robot-agent/data`, which also holds photos and
+ * journals.
+ */
+export function defaultDatasetRoots(env: NodeJS.ProcessEnv = process.env): DatasetRoot[] {
+  const roots: DatasetRoot[] = [{ dir: datasetStorageRoot() }];
+  const recording = env.RECORDING_DATASET_DIR?.trim();
+  if (recording) roots.push({ dir: resolve(recording) });
+  else roots.push({ dir: resolve(HERE, '../../../robot-agent/data'), within: /^workspace-[^/\\]+[/\\]datasets[/\\]./ });
+  return roots;
+}
+
+/**
+ * `storagePath`'s realpath when it sits strictly inside one of `roots`
+ * (each realpath'd too, so `/tmp` and `/private/tmp` agree), else null. A
+ * symlink anywhere on the way is resolved first, so one pointing out of a root
+ * is refused like the path it points to.
+ */
+export async function confineToRoots(storagePath: string, roots: DatasetRoot[]): Promise<string | null> {
+  let real: string;
+  try {
+    real = await realpath(storagePath);
+  } catch {
+    return null;
+  }
+  for (const root of roots) {
+    let base: string;
+    try {
+      base = await realpath(root.dir);
+    } catch {
+      continue; // a root that does not exist holds nothing
+    }
+    const rel = relative(base, real);
+    if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) continue;
+    if (root.within && !root.within.test(`${rel}${sep}`)) continue;
+    return real;
+  }
+  return null;
+}
 
 // ============================================================================
 // SERVICE
@@ -342,6 +410,7 @@ const defaultHub: HubClient = {
 
 export class HuggingFacePublishService {
   private readonly hub: HubClient;
+  private readonly datasetRoots: () => DatasetRoot[];
   private readonly env: NodeJS.ProcessEnv;
   private readonly home: string;
   private readonly now: () => Date;
@@ -354,6 +423,7 @@ export class HuggingFacePublishService {
   constructor(options: PublishServiceOptions = {}) {
     this.hub = options.hub ?? defaultHub;
     this.env = options.env ?? process.env;
+    this.datasetRoots = options.datasetRoots ?? (() => defaultDatasetRoots(this.env));
     this.home = options.home ?? homedir();
     this.now = options.now ?? (() => new Date());
   }
@@ -502,12 +572,21 @@ export class HuggingFacePublishService {
     if (degraded && !request.force) {
       throw new PublishError(`This dataset is degraded — ${degraded}. Publish with force to send it anyway.`, 409, 'DATASET_DEGRADED');
     }
-    const root = dataset.storagePath;
-    if (!root || !isAbsolute(root) || !existsSync(join(root, 'meta', 'info.json'))) {
+    const stored = dataset.storagePath;
+    if (!stored || !isAbsolute(stored) || !existsSync(join(stored, 'meta', 'info.json'))) {
       throw new PublishError(
         'The dataset\'s files are not on this server\'s disk (publishing reads the local LeRobot directory)',
         409,
         'DATASET_NOT_LOCAL',
+      );
+    }
+    // From here on the resolved path is used, so nothing re-reads the symlink.
+    const root = await confineToRoots(stored, this.datasetRoots());
+    if (!root) {
+      throw new PublishError(
+        'The dataset\'s directory is not under a directory this server keeps datasets in, so it cannot be published from here',
+        403,
+        'DATASET_PATH_NOT_ALLOWED',
       );
     }
 
@@ -538,10 +617,13 @@ export class HuggingFacePublishService {
     const refusal = writeRefusal(me, repoId.split('/')[0]);
     if (refusal) throw new PublishError(refusal.message, 403, refusal.code);
 
+    const isPrivate = request.private ?? true;
+    if (isPrivate) await this.refusePublicRepo(repoId, token);
+
     const job: PublishJob = {
       datasetId,
       repoId,
-      private: request.private ?? true,
+      private: isPrivate,
       license: request.license ?? 'apache-2.0',
       status: 'running',
       phase: 'preparing',
@@ -569,6 +651,46 @@ export class HuggingFacePublishService {
 
     this.runs.set(datasetId, this.run(job, dataset, root, request, token, actorId));
     return { ...job, warnings: [...job.warnings] };
+  }
+
+  /**
+   * A private publish into an existing repo that is public would publish the
+   * data, whatever the dialog said. Refused, as is one whose visibility the Hub
+   * does not tell us.
+   */
+  private async refusePublicRepo(repoId: string, token: string): Promise<void> {
+    let exists: boolean;
+    try {
+      exists = await this.hub.repoExists({ repo: { type: 'dataset', name: repoId }, accessToken: token, ...this.hubParams() });
+    } catch (error) {
+      throw new PublishError(
+        `Could not check whether ${repoId} exists on the Hub: ${scrubToken(errorMessage(error), token)}`,
+        502,
+        'HUB_UNREACHABLE',
+      );
+    }
+    if (!exists) return;
+    let isPrivate: boolean | undefined;
+    let detail = '';
+    try {
+      isPrivate = (await this.hub.datasetInfo({ name: repoId, accessToken: token, ...this.hubParams() })).private;
+    } catch (error) {
+      detail = `: ${scrubToken(errorMessage(error), token)}`;
+    }
+    if (isPrivate === true) return;
+    if (isPrivate === false) {
+      throw new PublishError(
+        `${repoId} already exists on the Hub and is public, so a private publish was not uploaded into it. ` +
+          'Make the repository private on the Hub, choose another name, or publish publicly.',
+        409,
+        'REPO_IS_PUBLIC',
+      );
+    }
+    throw new PublishError(
+      `${repoId} already exists on the Hub and its visibility could not be read${detail}, so nothing was uploaded`,
+      409,
+      'REPO_VISIBILITY_UNKNOWN',
+    );
   }
 
   private async run(
@@ -600,7 +722,7 @@ export class HuggingFacePublishService {
           license: job.license,
           ...this.hubParams(),
         });
-      } else if (request.private !== undefined) {
+      } else if (!job.private) {
         job.warnings.push('The repository already existed; its visibility was left as it is on the Hub');
       }
       job.repoCreated = !exists;
@@ -612,9 +734,12 @@ export class HuggingFacePublishService {
         content: pathToFileURL(f.absolute),
         size: f.size,
       }));
+      // lstat, as the walk does: a README.md symlink could point anywhere.
       const localReadme = join(root, 'README.md');
-      if (existsSync(localReadme)) {
-        uploads.push({ path: 'README.md', content: pathToFileURL(localReadme), size: statSync(localReadme).size });
+      const readmeStat = await lstat(localReadme).catch(() => null);
+      if (readmeStat?.isSymbolicLink()) job.warnings.push('README.md is a symlink and was left out');
+      if (readmeStat?.isFile()) {
+        uploads.push({ path: 'README.md', content: pathToFileURL(localReadme), size: readmeStat.size });
         job.card = 'local';
       } else {
         // A card that cannot be read is treated like a hand-written one:
@@ -646,6 +771,7 @@ export class HuggingFacePublishService {
             info,
             tasks: await readTasks(root),
             robotTypeName: dataset.robotType?.name ?? null,
+            institution: this.env.HF_PUBLISH_INSTITUTION?.trim() || null,
             publishedAt: this.now().toISOString(),
           });
           const blob = new Blob([card], { type: 'text/markdown' });
@@ -820,9 +946,15 @@ export async function collectFiles(root: string): Promise<{ files: LocalFile[]; 
   return { files, skipped };
 }
 
+/** A regular file's text; a symlink or anything else is not read, like the walk. */
+async function readRegular(path: string): Promise<string> {
+  if (!(await lstat(path)).isFile()) throw new Error(`${path} is not a regular file`);
+  return readFile(path, 'utf-8');
+}
+
 async function readJson(path: string): Promise<Record<string, unknown>> {
   try {
-    const value = JSON.parse(await readFile(path, 'utf-8'));
+    const value = JSON.parse(await readRegular(path));
     return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
   } catch {
     return {};
@@ -832,7 +964,7 @@ async function readJson(path: string): Promise<Record<string, unknown>> {
 /** Task instructions from `meta/tasks.jsonl` (v2.1, and written beside the v3.0 parquet by NeoDEM). */
 export async function readTasks(root: string): Promise<string[]> {
   try {
-    const text = await readFile(join(root, 'meta', 'tasks.jsonl'), 'utf-8');
+    const text = await readRegular(join(root, 'meta', 'tasks.jsonl'));
     return text
       .split('\n')
       .filter((line) => line.trim())

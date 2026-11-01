@@ -18,7 +18,7 @@ const { mockDatasetService } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../DatasetService.js', () => ({ datasetService: mockDatasetService }));
+vi.mock('../DatasetService.js', () => ({ datasetService: mockDatasetService, datasetStorageRoot: () => '/srv/uploads' }));
 
 // Belt and braces: if the injected fake were ever bypassed, the real client
 // must not be reachable from this file.
@@ -26,7 +26,7 @@ vi.mock('@huggingface/hub', () => {
   const refuse = () => {
     throw new Error('the real Hub client must not be called from a test');
   };
-  return { whoAmI: refuse, repoExists: refuse, createRepo: refuse, downloadFile: refuse, uploadFilesWithProgress: refuse };
+  return { whoAmI: refuse, repoExists: refuse, datasetInfo: refuse, createRepo: refuse, downloadFile: refuse, uploadFilesWithProgress: refuse };
 });
 
 // The default client tags over plain REST; nothing in this file may reach it.
@@ -41,6 +41,8 @@ afterEach(() => {
 });
 
 import {
+  confineToRoots,
+  defaultDatasetRoots,
   HuggingFacePublishService,
   normalizeRepoId,
   PublishError,
@@ -68,6 +70,8 @@ const INFO = {
   _neodem: { simulated: false, source: 'neodem-teleop' },
 };
 
+/** The directory the service is told it keeps datasets in; `root` sits inside it. */
+let allowed: string;
 let root: string;
 let home: string;
 
@@ -111,6 +115,8 @@ interface FakeHub extends HubClient {
 function fakeHub(
   opts: {
     exists?: boolean;
+    /** What the Hub says about an existing repo's visibility; an Error makes datasetInfo throw. */
+    visibility?: boolean | Error;
     remoteReadme?: string | null;
     fail?: Error;
     orgs?: string[];
@@ -127,13 +133,17 @@ function fakeHub(
       hub.tags.push({ repo: p.repo, tag: p.tag, revision: p.revision });
     }),
     whoAmI: vi.fn(async () => ({
-      name: 'huhn511',
+      name: 'alice',
       type: 'user',
-      orgs: (opts.orgs ?? ['zemarobotik']).map((name) => ({ name, roleInOrg: 'write' })),
+      orgs: (opts.orgs ?? ['acme']).map((name) => ({ name, roleInOrg: 'write' })),
       auth: { accessToken: { role: 'write' } },
       ...opts.me,
     })),
     repoExists: vi.fn(async () => opts.exists ?? false),
+    datasetInfo: vi.fn(async () => {
+      if (opts.visibility instanceof Error) throw opts.visibility;
+      return { private: opts.visibility ?? true };
+    }),
     createRepo: vi.fn(async (p) => {
       hub.created.push({ repo: p.repo, visibility: p.visibility, license: p.license });
       return { repoUrl: 'https://huggingface.co/datasets/x' };
@@ -145,19 +155,26 @@ function fakeHub(
       yield { event: 'phase' as const, phase: 'preuploading' as const };
       yield { event: 'fileProgress' as const, path: 'videos/observation.images.cam_right_high/chunk-000/file-000.mp4', progress: 0.5, state: 'uploading' as const };
       yield { event: 'phase' as const, phase: 'committing' as const };
-      return { commit: { oid: 'abc123', url: 'https://huggingface.co/datasets/zemarobotik/g1/commit/abc123' }, hookOutput: '' };
+      return { commit: { oid: 'abc123', url: 'https://huggingface.co/datasets/acme/g1/commit/abc123' }, hookOutput: '' };
     }) as HubClient['uploadFilesWithProgress'],
   };
   return hub;
 }
 
 function service(hub: HubClient, env: Record<string, string> = { HF_TOKEN: TOKEN }) {
-  return new HuggingFacePublishService({ hub, env, home, now: () => new Date('2026-10-17T12:00:00.000Z') });
+  return new HuggingFacePublishService({
+    hub,
+    env,
+    home,
+    datasetRoots: () => [{ dir: allowed }],
+    now: () => new Date('2026-10-17T12:00:00.000Z'),
+  });
 }
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  root = await mkdtemp(join(tmpdir(), 'hf-publish-ds-'));
+  allowed = await mkdtemp(join(tmpdir(), 'hf-publish-roots-'));
+  root = join(allowed, 'ds-1');
   home = await mkdtemp(join(tmpdir(), 'hf-publish-home-'));
   await writeDataset(root);
   mockDatasetService.get.mockResolvedValue(dataset());
@@ -166,7 +183,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(allowed, { recursive: true, force: true });
   await rm(home, { recursive: true, force: true });
 });
 
@@ -174,8 +191,8 @@ describe('HuggingFacePublishService.publish', () => {
   it('creates a private repo and uploads meta/, data/, videos/ and a generated card', async () => {
     const hub = fakeHub();
     const svc = service(hub);
-    const job = await svc.publish('ds-1', { repoId: 'zemarobotik/g1-apple-pick' }, 'user-1');
-    expect(job).toMatchObject({ status: 'running', repoId: 'zemarobotik/g1-apple-pick', private: true, license: 'apache-2.0' });
+    const job = await svc.publish('ds-1', { repoId: 'acme/g1-apple-pick' }, 'user-1');
+    expect(job).toMatchObject({ status: 'running', repoId: 'acme/g1-apple-pick', private: true, license: 'apache-2.0' });
 
     await svc.settled('ds-1');
     const done = (await svc.getJob('ds-1')) as Record<string, unknown>;
@@ -185,16 +202,16 @@ describe('HuggingFacePublishService.publish', () => {
       repoCreated: true,
       card: 'generated',
       commitOid: 'abc123',
-      url: 'https://huggingface.co/datasets/zemarobotik/g1-apple-pick',
+      url: 'https://huggingface.co/datasets/acme/g1-apple-pick',
       filesTotal: 6,
       versionTag: 'v3.0',
     });
     expect(done.bytesDone).toBe(done.bytesTotal);
     // LeRobotDataset(repo_id) refuses a repo without the codebase-version tag.
-    expect(hub.tags).toEqual([{ repo: { type: 'dataset', name: 'zemarobotik/g1-apple-pick' }, tag: 'v3.0', revision: 'abc123' }]);
+    expect(hub.tags).toEqual([{ repo: { type: 'dataset', name: 'acme/g1-apple-pick' }, tag: 'v3.0', revision: 'abc123' }]);
 
     expect(hub.created).toEqual([
-      { repo: { type: 'dataset', name: 'zemarobotik/g1-apple-pick' }, visibility: 'private', license: 'apache-2.0' },
+      { repo: { type: 'dataset', name: 'acme/g1-apple-pick' }, visibility: 'private', license: 'apache-2.0' },
     ]);
     const paths = hub.uploads[0].files.map((f) => f.path).sort();
     expect(paths).toEqual([
@@ -211,7 +228,7 @@ describe('HuggingFacePublishService.publish', () => {
     expect(card).toContain('Pick up the apple and place it on the plate');
     expect(card).toContain('Real robot');
 
-    expect(mockDatasetService.update).toHaveBeenCalledWith('ds-1', { huggingFaceRepoId: 'zemarobotik/g1-apple-pick' });
+    expect(mockDatasetService.update).toHaveBeenCalledWith('ds-1', { huggingFaceRepoId: 'acme/g1-apple-pick' });
     const actions = mockDatasetService.auditDatasetAction.mock.calls.map((c) => c[1]);
     expect(actions).toEqual(['publish.huggingface.start', 'publish.huggingface']);
     expect(mockDatasetService.auditDatasetAction.mock.calls[1][3]).toMatchObject({ status: 'done', commit: 'abc123' });
@@ -220,7 +237,7 @@ describe('HuggingFacePublishService.publish', () => {
   it('commits to an existing repo without recreating it, and keeps a hand-written card', async () => {
     const hub = fakeHub({ exists: true, remoteReadme: '# Our own card' });
     const svc = service(hub);
-    await svc.publish('ds-1', { repoId: 'zemarobotik/g1-apple-pick' }, null);
+    await svc.publish('ds-1', { repoId: 'acme/g1-apple-pick' }, null);
     await svc.settled('ds-1');
     expect(hub.createRepo).not.toHaveBeenCalled();
     expect(hub.uploads[0].files.map((f) => f.path)).not.toContain('README.md');
@@ -231,7 +248,7 @@ describe('HuggingFacePublishService.publish', () => {
     const hub = fakeHub({ exists: true });
     (hub.downloadFile as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('500'));
     const svc = service(hub);
-    await svc.publish('ds-1', { repoId: 'zemarobotik/g1-apple-pick' }, null);
+    await svc.publish('ds-1', { repoId: 'acme/g1-apple-pick' }, null);
     await svc.settled('ds-1');
     expect(hub.uploads[0].files.map((f) => f.path)).not.toContain('README.md');
     expect(await svc.getJob('ds-1')).toMatchObject({ status: 'done', card: 'kept' });
@@ -240,7 +257,7 @@ describe('HuggingFacePublishService.publish', () => {
   it('replaces a card NeoDEM generated earlier', async () => {
     const hub = fakeHub({ exists: true, remoteReadme: `---\n---\n${NEODEM_CARD_MARKER}\n# old` });
     const svc = service(hub);
-    await svc.publish('ds-1', { repoId: 'zemarobotik/g1-apple-pick' }, null);
+    await svc.publish('ds-1', { repoId: 'acme/g1-apple-pick' }, null);
     await svc.settled('ds-1');
     expect(hub.uploads[0].files.map((f) => f.path)).toContain('README.md');
   });
@@ -249,7 +266,7 @@ describe('HuggingFacePublishService.publish', () => {
     await writeFile(join(root, 'README.md'), '# Local card');
     const hub = fakeHub();
     const svc = service(hub);
-    await svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null);
+    await svc.publish('ds-1', { repoId: 'acme/g1' }, null);
     await svc.settled('ds-1');
     const readme = hub.uploads[0].files.find((f) => f.path === 'README.md')!;
     expect(readme.content).toBeInstanceOf(URL);
@@ -260,7 +277,7 @@ describe('HuggingFacePublishService.publish', () => {
     await symlink('/etc/hostname', join(root, 'data', 'chunk-000', 'escape.parquet'));
     const hub = fakeHub();
     const svc = service(hub);
-    await svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null);
+    await svc.publish('ds-1', { repoId: 'acme/g1' }, null);
     await svc.settled('ds-1');
     expect(hub.uploads[0].files.map((f) => f.path)).not.toContain('data/chunk-000/escape.parquet');
     const job = (await svc.getJob('ds-1')) as { warnings: string[] };
@@ -269,16 +286,16 @@ describe('HuggingFacePublishService.publish', () => {
 
   it('gives a bare name the default namespace', async () => {
     const hub = fakeHub();
-    const svc = service(hub, { HF_TOKEN: TOKEN, HF_PUBLISH_NAMESPACE: 'zemarobotik' });
+    const svc = service(hub, { HF_TOKEN: TOKEN, HF_PUBLISH_NAMESPACE: 'acme' });
     const job = await svc.publish('ds-1', { repoId: 'g1-apple-pick' }, null);
-    expect(job.repoId).toBe('zemarobotik/g1-apple-pick');
+    expect(job.repoId).toBe('acme/g1-apple-pick');
     await svc.settled('ds-1');
   });
 
   it('keeps a failure\'s reason with the token scrubbed out', async () => {
     const hub = fakeHub({ fail: new Error(`upload refused for Bearer ${TOKEN}`) });
     const svc = service(hub);
-    await svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null);
+    await svc.publish('ds-1', { repoId: 'acme/g1' }, null);
     await svc.settled('ds-1');
     const job = (await svc.getJob('ds-1')) as { status: string; error: string };
     expect(job.status).toBe('failed');
@@ -291,7 +308,7 @@ describe('HuggingFacePublishService.publish', () => {
   it('does not overwrite the source repo of a Hub import', async () => {
     mockDatasetService.get.mockResolvedValue(dataset({ huggingFaceRepoId: 'nvidia/source', sourceRevision: 'sha' }));
     const svc = service(fakeHub());
-    await svc.publish('ds-1', { repoId: 'zemarobotik/copy' }, null);
+    await svc.publish('ds-1', { repoId: 'acme/copy' }, null);
     await svc.settled('ds-1');
     expect(mockDatasetService.update).not.toHaveBeenCalled();
   });
@@ -308,7 +325,7 @@ describe('HuggingFacePublishService.publish', () => {
 
   it('refuses a dataset that is not ready', async () => {
     mockDatasetService.get.mockResolvedValue(dataset({ status: 'validating' }));
-    expect((await refusal(service(fakeHub()).publish('ds-1', { repoId: 'zemarobotik/g1' }, null))).code).toBe('DATASET_NOT_READY');
+    expect((await refusal(service(fakeHub()).publish('ds-1', { repoId: 'acme/g1' }, null))).code).toBe('DATASET_NOT_READY');
   });
 
   it('refuses a degraded dataset unless forced', async () => {
@@ -317,11 +334,11 @@ describe('HuggingFacePublishService.publish', () => {
     );
     const hub = fakeHub();
     const svc = service(hub);
-    const error = await refusal(svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null));
+    const error = await refusal(svc.publish('ds-1', { repoId: 'acme/g1' }, null));
     expect(error).toMatchObject({ status: 409, code: 'DATASET_DEGRADED' });
     expect(error.message).toContain('missing video');
 
-    const job = await svc.publish('ds-1', { repoId: 'zemarobotik/g1', force: true }, null);
+    const job = await svc.publish('ds-1', { repoId: 'acme/g1', force: true }, null);
     expect(job.forced).toBe(true);
     expect(job.warnings[0]).toMatch(/Published although/);
     await svc.settled('ds-1');
@@ -337,7 +354,7 @@ describe('HuggingFacePublishService.publish', () => {
   });
 
   it('refuses without a token', async () => {
-    const error = await refusal(service(fakeHub(), {}).publish('ds-1', { repoId: 'zemarobotik/g1' }, null));
+    const error = await refusal(service(fakeHub(), {}).publish('ds-1', { repoId: 'acme/g1' }, null));
     expect(error).toMatchObject({ status: 503, code: 'HF_TOKEN_MISSING' });
   });
 
@@ -351,7 +368,7 @@ describe('HuggingFacePublishService.publish', () => {
   // `repos/create` said no — after the start had been audited.
   it('refuses a read-only token before anything starts, and says how to fix it', async () => {
     const hub = fakeHub({ me: { auth: { accessToken: { role: 'read' } } } });
-    const error = await refusal(service(hub).publish('ds-1', { repoId: 'huhn511/g1' }, null));
+    const error = await refusal(service(hub).publish('ds-1', { repoId: 'alice/g1' }, null));
     expect(error).toMatchObject({ status: 403, code: 'HF_TOKEN_READ_ONLY' });
     expect(error.message).toMatch(/read-only.*write access/);
     expect(hub.repoExists).not.toHaveBeenCalled();
@@ -360,17 +377,17 @@ describe('HuggingFacePublishService.publish', () => {
   });
 
   it('refuses an org where the account is only a reader, even with a write token', async () => {
-    const hub = fakeHub({ me: { orgs: [{ name: 'zemarobotik', roleInOrg: 'read' }] } });
-    const error = await refusal(service(hub).publish('ds-1', { repoId: 'zemarobotik/g1' }, null));
+    const hub = fakeHub({ me: { orgs: [{ name: 'acme', roleInOrg: 'read' }] } });
+    const error = await refusal(service(hub).publish('ds-1', { repoId: 'acme/g1' }, null));
     expect(error).toMatchObject({ status: 403, code: 'NAMESPACE_FORBIDDEN' });
-    expect(error.message).toContain('can write to: huhn511');
+    expect(error.message).toContain('can write to: alice');
     expect(hub.createRepo).not.toHaveBeenCalled();
   });
 
   it('lets the Hub decide when the whoami answer has no token role', async () => {
     const hub = fakeHub({ me: { auth: undefined } });
     const svc = service(hub);
-    await svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null);
+    await svc.publish('ds-1', { repoId: 'acme/g1' }, null);
     await svc.settled('ds-1');
     expect(hub.uploads).toHaveLength(1);
   });
@@ -378,7 +395,7 @@ describe('HuggingFacePublishService.publish', () => {
   it('still finishes when the version tag cannot be set, and says what that breaks', async () => {
     const hub = fakeHub({ tagFail: new Error(`HTTP 403 for ${TOKEN}`) });
     const svc = service(hub);
-    await svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null);
+    await svc.publish('ds-1', { repoId: 'acme/g1' }, null);
     await svc.settled('ds-1');
     const job = (await svc.getJob('ds-1')) as { status: string; versionTag?: string; warnings: string[] };
     expect(job.status).toBe('done');
@@ -387,12 +404,89 @@ describe('HuggingFacePublishService.publish', () => {
     expect(job.warnings.join(' ')).not.toContain(TOKEN);
   });
 
+  it('refuses a directory outside the server\'s dataset roots, before the Hub is asked anything', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'hf-publish-outside-'));
+    try {
+      await writeDataset(outside);
+      mockDatasetService.get.mockResolvedValue(dataset({ storagePath: outside }));
+      const hub = fakeHub();
+      const error = await refusal(service(hub).publish('ds-1', { repoId: 'acme/g1' }, null));
+      expect(error).toMatchObject({ status: 403, code: 'DATASET_PATH_NOT_ALLOWED' });
+      expect(hub.whoAmI).not.toHaveBeenCalled();
+      expect(hub.uploads).toHaveLength(0);
+      expect(mockDatasetService.auditDatasetAction).not.toHaveBeenCalled();
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a symlink inside a root that points out of it, and a ../ path that climbs out', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'hf-publish-outside-'));
+    try {
+      await writeDataset(outside);
+      const link = join(allowed, 'looks-local');
+      await symlink(outside, link);
+      mockDatasetService.get.mockResolvedValue(dataset({ storagePath: link }));
+      expect((await refusal(service(fakeHub()).publish('ds-1', { repoId: 'acme/g1' }, null))).code).toBe('DATASET_PATH_NOT_ALLOWED');
+      mockDatasetService.get.mockResolvedValue(dataset({ storagePath: join(allowed, '..', outside.split('/').pop()!) }));
+      expect((await refusal(service(fakeHub()).publish('ds-1', { repoId: 'acme/g1' }, null))).code).toBe('DATASET_PATH_NOT_ALLOWED');
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a private publish into an existing public repo, before anything is uploaded', async () => {
+    const hub = fakeHub({ exists: true, visibility: false });
+    const error = await refusal(service(hub).publish('ds-1', { repoId: 'acme/g1' }, null));
+    expect(error).toMatchObject({ status: 409, code: 'REPO_IS_PUBLIC' });
+    expect(error.message).toContain('acme/g1');
+    expect(hub.datasetInfo).toHaveBeenCalledWith({ name: 'acme/g1', accessToken: TOKEN });
+    expect(hub.uploads).toHaveLength(0);
+    expect(mockDatasetService.auditDatasetAction).not.toHaveBeenCalled();
+  });
+
+  it('refuses a private publish when the existing repo\'s visibility cannot be read', async () => {
+    const hub = fakeHub({ exists: true, visibility: new Error(`HTTP 500 for ${TOKEN}`) });
+    const error = await refusal(service(hub).publish('ds-1', { repoId: 'acme/g1' }, null));
+    expect(error).toMatchObject({ status: 409, code: 'REPO_VISIBILITY_UNKNOWN' });
+    expect(error.message).not.toContain(TOKEN);
+    expect(hub.uploads).toHaveLength(0);
+  });
+
+  it('commits into an existing private repo, and a public publish into a public one', async () => {
+    const svc = service(fakeHub({ exists: true, visibility: true }));
+    await svc.publish('ds-1', { repoId: 'acme/g1' }, null);
+    await svc.settled('ds-1');
+    expect(await svc.getJob('ds-1')).toMatchObject({ status: 'done', private: true, repoCreated: false });
+
+    const hub = fakeHub({ exists: true, visibility: false });
+    const pub = service(hub);
+    await pub.publish('ds-1', { repoId: 'acme/g1', private: false }, null);
+    await pub.settled('ds-1');
+    expect(hub.datasetInfo).not.toHaveBeenCalled();
+    expect(await pub.getJob('ds-1')).toMatchObject({ status: 'done', private: false });
+  });
+
+  it('leaves a README.md symlink out instead of following it', async () => {
+    await symlink('/etc/hosts', join(root, 'README.md'));
+    const hub = fakeHub();
+    const svc = service(hub);
+    await svc.publish('ds-1', { repoId: 'acme/g1' }, null);
+    await svc.settled('ds-1');
+    const readme = hub.uploads[0].files.find((f) => f.path === 'README.md')!;
+    expect(readme.content).toBeInstanceOf(Blob);
+    expect(await (readme.content as Blob).text()).toContain(NEODEM_CARD_MARKER);
+    const job = (await svc.getJob('ds-1')) as { card: string; warnings: string[] };
+    expect(job.card).toBe('generated');
+    expect(job.warnings.join(' ')).toMatch(/README\.md is a symlink/);
+  });
+
   it('refuses a double click: two starts in the same tick make one publish', async () => {
     const hub = fakeHub();
     const svc = service(hub);
     const results = await Promise.allSettled([
-      svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null),
-      svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null),
+      svc.publish('ds-1', { repoId: 'acme/g1' }, null),
+      svc.publish('ds-1', { repoId: 'acme/g1' }, null),
     ]);
     expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
     const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
@@ -403,13 +497,13 @@ describe('HuggingFacePublishService.publish', () => {
 
   it('refuses a second publish while one is running', async () => {
     const svc = service(fakeHub());
-    const first = svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null);
+    const first = svc.publish('ds-1', { repoId: 'acme/g1' }, null);
     await first;
-    const error = await refusal(svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null));
+    const error = await refusal(svc.publish('ds-1', { repoId: 'acme/g1' }, null));
     expect(error.code).toBe('PUBLISH_IN_PROGRESS');
     await svc.settled('ds-1');
     // Finished: publishing again is a new commit, not a refusal.
-    await svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null);
+    await svc.publish('ds-1', { repoId: 'acme/g1' }, null);
     await svc.settled('ds-1');
   });
 });
@@ -423,11 +517,11 @@ describe('HuggingFacePublishService.getStatus', () => {
     expect(status).toEqual({
       configured: true,
       source: 'file',
-      user: 'huhn511',
-      orgs: ['zemarobotik'],
-      defaultNamespace: 'huhn511',
+      user: 'alice',
+      orgs: ['acme'],
+      defaultNamespace: 'alice',
       tokenRole: 'write',
-      writableNamespaces: ['huhn511', 'zemarobotik'],
+      writableNamespaces: ['alice', 'acme'],
     });
     expect(hub.whoAmI).toHaveBeenCalledWith({ accessToken: TOKEN });
     expect(JSON.stringify(status)).not.toContain(TOKEN);
@@ -447,11 +541,11 @@ describe('HuggingFacePublishService.getStatus', () => {
     expect(readOnly.warning).toMatch(/read-only/);
 
     const orgReader = await service(
-      fakeHub({ me: { orgs: [{ name: 'zemarobotik', roleInOrg: 'read' }] } }),
-      { HF_TOKEN: TOKEN, HF_PUBLISH_NAMESPACE: 'zemarobotik' },
+      fakeHub({ me: { orgs: [{ name: 'acme', roleInOrg: 'read' }] } }),
+      { HF_TOKEN: TOKEN, HF_PUBLISH_NAMESPACE: 'acme' },
     ).getStatus();
-    expect(orgReader).toMatchObject({ defaultNamespace: 'zemarobotik', writableNamespaces: ['huhn511'] });
-    expect(orgReader.warning).toMatch(/cannot write to zemarobotik/);
+    expect(orgReader).toMatchObject({ defaultNamespace: 'acme', writableNamespaces: ['alice'] });
+    expect(orgReader.warning).toMatch(/cannot write to acme/);
   });
 
   it('says not configured when there is no token anywhere', async () => {
@@ -481,15 +575,15 @@ describe('replaceTagOverRest', () => {
       return new Response('', { status: init?.method === 'DELETE' ? 404 : 200 });
     }) as typeof fetch;
     await replaceTagOverRest({
-      repo: { type: 'dataset', name: 'zemarobotik/g1' },
+      repo: { type: 'dataset', name: 'acme/g1' },
       tag: 'v3.0',
       revision: 'abc123',
       accessToken: TOKEN,
       hubUrl: 'http://127.0.0.1:9/',
     });
     expect(calls).toEqual([
-      { url: 'http://127.0.0.1:9/api/datasets/zemarobotik/g1/tag/v3.0', method: 'DELETE', body: undefined, auth: `Bearer ${TOKEN}` },
-      { url: 'http://127.0.0.1:9/api/datasets/zemarobotik/g1/tag/abc123', method: 'POST', body: { tag: 'v3.0' }, auth: `Bearer ${TOKEN}` },
+      { url: 'http://127.0.0.1:9/api/datasets/acme/g1/tag/v3.0', method: 'DELETE', body: undefined, auth: `Bearer ${TOKEN}` },
+      { url: 'http://127.0.0.1:9/api/datasets/acme/g1/tag/abc123', method: 'POST', body: { tag: 'v3.0' }, auth: `Bearer ${TOKEN}` },
     ]);
   });
 
@@ -503,10 +597,10 @@ describe('replaceTagOverRest', () => {
 });
 
 describe('writableNamespaces', () => {
-  const base = { name: 'huhn511', type: 'user', orgs: [{ name: 'zemarobotik', roleInOrg: 'read' }, { name: 'lab', roleInOrg: 'contributor' }] };
+  const base = { name: 'alice', type: 'user', orgs: [{ name: 'acme', roleInOrg: 'read' }, { name: 'lab', roleInOrg: 'contributor' }] };
   it('reads the token role and the org roles', () => {
     expect(writableNamespaces({ ...base, auth: { accessToken: { role: 'read' } } })).toEqual([]);
-    expect(writableNamespaces({ ...base, auth: { accessToken: { role: 'write' } } })).toEqual(['huhn511', 'lab']);
+    expect(writableNamespaces({ ...base, auth: { accessToken: { role: 'write' } } })).toEqual(['alice', 'lab']);
     expect(writableNamespaces({ ...base })).toBeNull();
   });
   it('takes repo.write scopes from a fine-grained token, and gives up on single-repo scopes', () => {
@@ -514,19 +608,46 @@ describe('writableNamespaces', () => {
       writableNamespaces({ ...base, auth: { accessToken: { role: 'fineGrained', fineGrained: { scoped } } } });
     expect(
       fg([
-        { entity: { type: 'user', name: 'huhn511' }, permissions: ['repo.content.read', 'repo.write'] },
-        { entity: { type: 'org', name: 'zemarobotik' }, permissions: ['repo.write'] },
+        { entity: { type: 'user', name: 'alice' }, permissions: ['repo.content.read', 'repo.write'] },
+        { entity: { type: 'org', name: 'acme' }, permissions: ['repo.write'] },
         { entity: { type: 'org', name: 'lab' }, permissions: ['repo.content.read'] },
       ]),
-    ).toEqual(['huhn511']);
-    expect(fg([{ entity: { type: 'dataset', name: 'huhn511/x' }, permissions: ['repo.write'] }])).toBeNull();
+    ).toEqual(['alice']);
+    expect(fg([{ entity: { type: 'dataset', name: 'alice/x' }, permissions: ['repo.write'] }])).toBeNull();
+  });
+});
+
+describe('dataset roots', () => {
+  it('confines to a root by realpath, never the root itself', async () => {
+    const real = await confineToRoots(root, [{ dir: allowed }]);
+    expect(real).toMatch(/hf-publish-roots-.*\/ds-1$/);
+    expect(await confineToRoots(allowed, [{ dir: allowed }])).toBeNull();
+    expect(await confineToRoots(join(allowed, 'missing'), [{ dir: allowed }])).toBeNull();
+    expect(await confineToRoots(root, [{ dir: join(allowed, 'missing') }])).toBeNull();
+  });
+
+  it('takes only workspace-*/datasets/* from the agent\'s default data directory', async () => {
+    const agentData = join(allowed, 'agent-data');
+    await mkdir(join(agentData, 'workspace-g1', 'datasets', 'sess-1'), { recursive: true });
+    await mkdir(join(agentData, 'workspace-g1', 'patrol-photos'), { recursive: true });
+    const within = defaultDatasetRoots({})[1].within!;
+    const roots = [{ dir: agentData, within }];
+    expect(await confineToRoots(join(agentData, 'workspace-g1', 'datasets', 'sess-1'), roots)).not.toBeNull();
+    expect(await confineToRoots(join(agentData, 'workspace-g1', 'datasets'), roots)).toBeNull();
+    expect(await confineToRoots(join(agentData, 'workspace-g1', 'patrol-photos'), roots)).toBeNull();
+  });
+
+  it('uses the upload root and RECORDING_DATASET_DIR when it is set', () => {
+    const roots = defaultDatasetRoots({ RECORDING_DATASET_DIR: '/srv/recordings' });
+    expect(roots).toEqual([{ dir: '/srv/uploads' }, { dir: '/srv/recordings' }]);
+    expect(defaultDatasetRoots({})[1].dir).toMatch(/robot-agent[/\\]data$/);
   });
 });
 
 describe('helpers', () => {
   it('normalizes repo ids', () => {
-    expect(normalizeRepoId('zemarobotik/g1', null)).toBe('zemarobotik/g1');
-    expect(normalizeRepoId('g1', 'zemarobotik')).toBe('zemarobotik/g1');
+    expect(normalizeRepoId('acme/g1', null)).toBe('acme/g1');
+    expect(normalizeRepoId('g1', 'acme')).toBe('acme/g1');
     expect(normalizeRepoId('g1', null)).toBeNull();
     expect(normalizeRepoId('a/b/c', null)).toBeNull();
     expect(normalizeRepoId('a/b--c', null)).toBeNull();
@@ -541,7 +662,7 @@ describe('helpers', () => {
 
   it('builds a card with the facts from info.json', () => {
     const card = buildDatasetCard({
-      repoId: 'zemarobotik/g1',
+      repoId: 'acme/g1',
       datasetName: 'g1',
       license: 'apache-2.0',
       tags: ['apple', 'LeRobot'],
@@ -560,8 +681,13 @@ describe('helpers', () => {
     expect(card).toContain('| Frames | 900 |');
     expect(card).toContain('`observation.images.cam_right_high` (480×640×3)');
     expect(card).toContain('| `action` | float32 | [28] |');
-    expect(card).toContain('ZeMA');
-    expect(card).toContain('LeRobotDataset("zemarobotik/g1")');
+    expect(card).toContain('Recorded and published with NeoDEM, the open Physical AI platform. Published');
+    expect(card).toContain('LeRobotDataset("acme/g1")');
+    const attributed = buildDatasetCard({
+      repoId: 'acme/g1', datasetName: 'g1', license: 'mit', tags: [], info: {}, tasks: [],
+      institution: 'Acme Robotics Lab', publishedAt: 'now',
+    });
+    expect(attributed).toContain('platform, at Acme Robotics Lab. Published now.');
   });
 
   it('says unknown rather than guessing', () => {

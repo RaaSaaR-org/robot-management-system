@@ -477,6 +477,8 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `HF_TOKEN` | No | — | Hub token the server publishes datasets with; else `HF_TOKEN_PATH`, `$HF_HOME/token`, `~/.cache/huggingface/token` (see `docs/huggingface-publish.md`) |
 | `HF_PUBLISH_NAMESPACE` | No | the token's user | Namespace the publish dialog prefills, e.g. an organisation |
 | `HF_ENDPOINT` | No | `https://huggingface.co` | Hub mirror for publishing |
+| `HF_PUBLISH_INSTITUTION` | No | — | Who recorded the data, named in a published dataset's generated card |
+| `RECORDING_DATASET_DIR` | No | `robot-agent/data/workspace-<robotId>/datasets/` | Where the robot agent writes recordings; the server publishes only from there or `DATASET_UPLOAD_DIR` |
 | `COMPLIANCE_LOG_ENCRYPTION_KEY` | Prod | — | 64-char hex key for compliance logs |
 | `OPENROUTER_API_KEY` | No | — | OpenRouter key for orchestrator LLM |
 | `ORCHESTRATOR_MODEL` | No | `stepfun/step-3.5-flash:free` | LLM model for agent routing |

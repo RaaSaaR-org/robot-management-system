@@ -60,15 +60,15 @@ describe('Dataset publish routes', () => {
 
   describe('POST /api/datasets/:id/publish', () => {
     it('starts a publish and answers 202 with the job', async () => {
-      mockPublish.publish.mockResolvedValue({ status: 'running', repoId: 'zemarobotik/g1', private: true });
+      mockPublish.publish.mockResolvedValue({ status: 'running', repoId: 'acme/g1', private: true });
       const res = await request(app)
         .post('/api/datasets/ds-1/publish')
-        .send({ repoId: 'zemarobotik/g1', tags: ['apple'], license: 'Apache-2.0' });
+        .send({ repoId: 'acme/g1', tags: ['apple'], license: 'Apache-2.0' });
       expect(res.status).toBe(202);
-      expect(res.body).toMatchObject({ status: 'running', repoId: 'zemarobotik/g1' });
+      expect(res.body).toMatchObject({ status: 'running', repoId: 'acme/g1' });
       expect(mockPublish.publish).toHaveBeenCalledWith(
         'ds-1',
-        { repoId: 'zemarobotik/g1', tags: ['apple'], license: 'apache-2.0' },
+        { repoId: 'acme/g1', tags: ['apple'], license: 'apache-2.0' },
         'user-1',
       );
     });
@@ -96,7 +96,7 @@ describe('Dataset publish routes', () => {
       [404, 'DATASET_NOT_FOUND'],
     ])('passes a %i %s refusal through with its code', async (status, code) => {
       mockPublish.publish.mockRejectedValue(new MockPublishError('refused', status, code));
-      const res = await request(app).post('/api/datasets/ds-1/publish').send({ repoId: 'zemarobotik/g1' });
+      const res = await request(app).post('/api/datasets/ds-1/publish').send({ repoId: 'acme/g1' });
       expect(res.status).toBe(status);
       expect(res.body).toEqual({ error: 'refused', code });
     });
@@ -104,10 +104,10 @@ describe('Dataset publish routes', () => {
 
   describe('GET /api/datasets/:id/publish', () => {
     it('returns the job', async () => {
-      mockPublish.getJob.mockResolvedValue({ status: 'done', url: 'https://huggingface.co/datasets/zemarobotik/g1' });
+      mockPublish.getJob.mockResolvedValue({ status: 'done', url: 'https://huggingface.co/datasets/acme/g1' });
       const res = await request(app).get('/api/datasets/ds-1/publish');
       expect(res.status).toBe(200);
-      expect(res.body.url).toBe('https://huggingface.co/datasets/zemarobotik/g1');
+      expect(res.body.url).toBe('https://huggingface.co/datasets/acme/g1');
     });
 
     it('404s for an unknown dataset', async () => {
@@ -118,10 +118,10 @@ describe('Dataset publish routes', () => {
 
   describe('GET /api/datasets/publish/status', () => {
     it('returns the account status, not a dataset', async () => {
-      mockPublish.getStatus.mockResolvedValue({ configured: true, source: 'file', user: 'huhn511', orgs: [], defaultNamespace: 'zemarobotik' });
+      mockPublish.getStatus.mockResolvedValue({ configured: true, source: 'file', user: 'alice', orgs: [], defaultNamespace: 'acme' });
       const res = await request(app).get('/api/datasets/publish/status');
       expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ configured: true, user: 'huhn511' });
+      expect(res.body).toMatchObject({ configured: true, user: 'alice' });
     });
   });
 

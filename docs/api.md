@@ -278,7 +278,7 @@ untouched.
 
 Publishing reads the dataset's directory on this server's disk and uses the
 server's own Hub token; refusals (`DATASET_DEGRADED`, `HF_TOKEN_MISSING`,
-`NAMESPACE_FORBIDDEN`, …) are listed in `docs/huggingface-publish.md`.
+`NAMESPACE_FORBIDDEN`, `DATASET_PATH_NOT_ALLOWED`, `REPO_IS_PUBLIC`, …) are listed in `docs/huggingface-publish.md`.
 
 ### Deployments (`/api/deployments`)
 

@@ -35,6 +35,8 @@ export interface DatasetCardInput {
   tasks: string[];
   /** Robot type as the database names it, used when info.json has none. */
   robotTypeName?: string | null;
+  /** Who recorded it (`HF_PUBLISH_INSTITUTION`); left out of the card when unset. */
+  institution?: string | null;
   publishedAt: string;
 }
 
@@ -190,7 +192,7 @@ export function buildDatasetCard(input: DatasetCardInput): string {
     '',
     '## Provenance',
     '',
-    `Recorded and published with NeoDEM, the open Physical AI platform, at ZeMA — Zentrum für Mechatronik und Automatisierungstechnik gGmbH. Published ${input.publishedAt}.`,
+    `Recorded and published with NeoDEM, the open Physical AI platform${input.institution?.trim() ? `, at ${input.institution.trim()}` : ''}. Published ${input.publishedAt}.`,
     '',
   );
 

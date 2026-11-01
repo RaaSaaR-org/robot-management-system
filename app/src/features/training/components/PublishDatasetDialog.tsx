@@ -10,6 +10,10 @@
  * credentials and reads the dataset straight off its disk, so the dialog asks
  * only what a person must decide: where it goes and who may see it. Private is
  * the default — a public dataset is a publication, and that is a deliberate act.
+ * A private publish into an existing public repo is refused by the server
+ * (`REPO_IS_PUBLIC`) and shown under the repository field. A poll that answers
+ * with no job means the server lost it (a restart: jobs live in memory), and
+ * the dialog says so instead of spinning.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -34,6 +38,12 @@ export interface PublishDatasetDialogProps {
 type Step = 'form' | 'publishing' | 'done' | 'failed';
 
 const POLL_MS = 1500;
+
+/** Shown when a poll finds no job: the server restarted and forgot the publish. */
+export const PUBLISH_LOST_MESSAGE = 'The server lost this publish (it restarted). Try again.';
+
+/** Refusals that are about the repository named in the field, so they are shown under it. */
+const REPO_FIELD_CODES = new Set(['NAMESPACE_FORBIDDEN', 'INVALID_REPO_ID', 'REPO_IS_PUBLIC', 'REPO_VISIBILITY_UNKNOWN']);
 
 export const LICENSE_OPTIONS = [
   { value: 'apache-2.0', label: 'Apache 2.0' },
@@ -116,7 +126,14 @@ export function PublishDatasetDialog({ isOpen, onClose, datasetId, datasetName, 
     pollRef.current = setInterval(async () => {
       try {
         const state = await trainingApi.getDatasetPublish(datasetId);
-        if ('phase' in state) follow(state);
+        if ('phase' in state) {
+          follow(state);
+        } else {
+          // Polling runs only while publishing; an answer without a job means it is gone.
+          stopPolling();
+          setJob((prev) => (prev ? { ...prev, status: 'failed', phase: 'failed', error: PUBLISH_LOST_MESSAGE } : prev));
+          setStep('failed');
+        }
       } catch {
         // A polling hiccup — keep trying.
       }
@@ -188,7 +205,7 @@ export function PublishDatasetDialog({ isOpen, onClose, datasetId, datasetName, 
       const code = (err as { code?: string }).code;
       const message = getErrorMessage(err, 'Failed to start publishing');
       if (code === 'DATASET_DEGRADED') setDegraded(message);
-      else if (code === 'NAMESPACE_FORBIDDEN' || code === 'INVALID_REPO_ID') setRepoError(message);
+      else if (code && REPO_FIELD_CODES.has(code)) setRepoError(message);
       else setFormError(message);
     } finally {
       setSubmitting(false);
@@ -257,7 +274,7 @@ export function PublishDatasetDialog({ isOpen, onClose, datasetId, datasetName, 
           )}
 
           <FormField label="Repository" required error={repoError} hint="namespace/name — the repo is created if it does not exist.">
-            <Input value={repoId} onChange={(e) => setRepoId(e.target.value)} placeholder="zemarobotik/g1-pick-apple" spellCheck={false} />
+            <Input value={repoId} onChange={(e) => setRepoId(e.target.value)} placeholder="namespace/dataset-name" spellCheck={false} />
           </FormField>
           <Switch
             checked={isPrivate}
@@ -331,7 +348,7 @@ export function PublishDatasetDialog({ isOpen, onClose, datasetId, datasetName, 
         <div className="flex flex-col items-center gap-3 py-6 text-center" role="alert">
           <XCircle className="h-8 w-8 text-signal-stopped" strokeWidth={1.75} />
           <p className="text-sm font-semibold text-ink-primary">Publish failed</p>
-          <p className="text-sm text-ink-secondary">{job?.error ?? 'The upload stopped without a reason.'}</p>
+          <p className="text-sm text-ink-secondary" data-testid="publish-error">{job?.error ?? 'The upload stopped without a reason.'}</p>
         </div>
       )}
     </Modal>

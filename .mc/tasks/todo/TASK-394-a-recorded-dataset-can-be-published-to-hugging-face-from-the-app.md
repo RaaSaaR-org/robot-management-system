@@ -16,7 +16,7 @@ spe: 8
 effort: "high"
 due_date: "2026-10-18"
 created: "2026-10-17"
-updated: "2026-10-17"
+updated: "2026-11-01"
 ---
 
 # A recorded dataset can be published to Hugging Face from the app
@@ -168,3 +168,22 @@ the final link, straight from the dataset directory on local disk.
 - Typecheck server and app.
 - Manual (not in CI, needs the real Hub): publish a small sim dataset to a private
   `zemarobotik/neodem-smoke-*` repo from the app and open the link.
+
+## Notes
+
+- 2026-11-01 — review fixes after merging `main` (TASK-429 wrap-up band: Publish to Hugging Face
+  is a ghost button under the one dataset action, so the band still has one dataset control).
+  - Path confinement: `storagePath` is no longer trusted. Its realpath must sit strictly inside
+    `DATASET_UPLOAD_DIR` (`datasetStorageRoot()`) or the robot agent's recording root
+    (`RECORDING_DATASET_DIR`, the agent's own variable; unset, only
+    `robot-agent/data/workspace-*/datasets/*` beside the server). Anything else, a symlink out of
+    a root included, is refused 403 `DATASET_PATH_NOT_ALLOWED` before the Hub is asked anything.
+  - A private publish (the default) into an existing public repo is refused 409
+    `REPO_IS_PUBLIC` before any upload; when `datasetInfo` cannot read the visibility, 409
+    `REPO_VISIBILITY_UNKNOWN`. The dialog shows both under the repository field.
+  - The dialog ends a publish whose poll answers without a job (a server restart empties the job
+    map): "The server lost this publish (it restarted). Try again."
+  - No lab names in shipped code or docs: the placeholder is `namespace/dataset-name`, the card's
+    attribution names `HF_PUBLISH_INSTITUTION` only when it is set, fixtures use `acme`/`alice`.
+  - The root `README.md`, `meta/info.json` and `meta/tasks.jsonl` are read with `lstat` first;
+    a symlinked README.md is left out with a warning and a card is generated instead.
