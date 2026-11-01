@@ -30,6 +30,8 @@ export interface SegmentedControlProps<T extends string> {
   label?: string;
   /** sm 32px · md 38px tall (default md, matching inputs) */
   size?: 'sm' | 'md';
+  /** Grow each option to a 44px touch target on phones and coarse pointers; the desktop size is unchanged. */
+  touchTarget?: boolean;
   className?: string;
 }
 
@@ -50,6 +52,7 @@ export function SegmentedControl<T extends string>({
   onChange,
   label,
   size = 'md',
+  touchTarget = false,
   className,
 }: SegmentedControlProps<T>) {
   return (
@@ -77,6 +80,7 @@ export function SegmentedControl<T extends string>({
               '[&_svg]:h-4 [&_svg]:w-4',
               focusRing,
               size === 'sm' ? 'h-[26px] px-2.5 text-xs' : 'h-8 px-3 text-[13px]',
+              touchTarget && 'max-sm:h-11 pointer-coarse:h-11',
               active
                 ? 'bg-raised text-ink-primary shadow-[0_1px_2px_rgba(0,0,0,0.18)]'
                 : 'text-ink-tertiary hover:text-ink-primary',

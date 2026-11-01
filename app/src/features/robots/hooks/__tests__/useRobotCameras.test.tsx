@@ -65,6 +65,24 @@ describe('useRobotCameras', () => {
     expect(mockList).not.toHaveBeenCalled();
   });
 
+  it('does not show the previous robot\'s cameras while asking about the next one', async () => {
+    // The New-session form names the wrist cameras it records from this list; a
+    // stale answer would send one robot's cameras for another (TASK-447).
+    mockList.mockResolvedValueOnce({ cameras: ['head_camera', 'left_wrist_camera'], source: 'sidecar' });
+    const { result, rerender } = renderHook(({ id }) => useRobotCameras(id, 0), { initialProps: { id: 'g1-a' } });
+    await waitFor(() => expect(result.current.cameras).toEqual(['head_camera', 'left_wrist_camera']));
+
+    let answer!: (list: { cameras: string[]; source: null }) => void;
+    mockList.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+    rerender({ id: 'g1-b' });
+
+    expect(result.current.loading).toBe(true);
+    expect(result.current.cameras).toEqual([]);
+    act(() => answer({ cameras: ['head_camera'], source: null }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.cameras).toEqual(['head_camera']);
+  });
+
   it('re-asks on refresh, so a camera plugged in just now shows up', async () => {
     mockList.mockResolvedValueOnce({ cameras: [], source: null, detail: 'nothing attached' });
     const { result } = renderHook(() => useRobotCameras('g1-edu-4', 0));

@@ -3,7 +3,7 @@ id: "TASK-447"
 aliases: []
 title: "New session offers Head + wrists or Head only"
 slug: "new-session-offers-head-wrists-or-head-only"
-status: "todo"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -16,7 +16,7 @@ spe: 2
 effort: "low"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # New session offers Head + wrists or Head only
@@ -58,10 +58,10 @@ choice. For a robot without wrist cameras the form is unchanged.
 
 ## Acceptance Criteria
 
-- [ ] Robot without wrist cameras: form and create request identical to `main`.
-- [ ] Robot with both wrist cameras: control shown, Head + wrists default; the request
+- [x] Robot without wrist cameras: form and create request identical to `main`.
+- [x] Robot with both wrist cameras: control shown, Head + wrists default; the request
       carries the three names head-first; Head only sends no `cameras`.
-- [ ] App typecheck + vitest green; the form fits at phone width.
+- [x] App typecheck + vitest green; the form fits at phone width.
 
 ## Test Strategy
 
