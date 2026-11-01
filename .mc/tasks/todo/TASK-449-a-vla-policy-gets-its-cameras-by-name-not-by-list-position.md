@@ -16,7 +16,7 @@ spe: 2
 effort: "low"
 due_date: ""
 created: "2026-10-31"
-updated: "2026-10-31"
+updated: "2026-11-01"
 ---
 
 # A VLA policy gets its cameras by name, not by list position
@@ -95,7 +95,7 @@ Replace the positional mapping with a name lookup per vla-server camera name:
     wrist-camera config;
   - `ego_camera` present vs absent for `cam_left_high`;
   - missing wrist and unknown names fall back to the head camera;
-  - no head camera -> first listed camera; empty list -> synthetic gray JPEG.
+  - no head camera -> first camera in sorted order; empty list -> synthetic gray JPEG.
 - `cd robot-agent && npm run typecheck && npx vitest run src/vla`.
 
 ## Notes
@@ -105,5 +105,9 @@ Replace the positional mapping with a name lookup per vla-server camera name:
 - Decided during implementation (2026-10-31): a sidecar that lists no robot-mounted view at
   all (no camera maps to a Unitree view key; the SO-101 arm's `['wrist', 'top']`) keeps the
   positional fill, so a two-camera SmolVLA policy (`up`, `side`) still gets `wrist` and `top`.
-  The "first listed camera" fallback applies only to a sidecar that lists some robot view
-  but no head camera. `policyCameraSources` in `robot-agent/src/recording/camera-map.ts`.
+  The no-head-camera fallback applies only to a sidecar that lists some robot view
+  but no head camera; it takes the first camera in sorted order (changed in review on
+  2026-11-01 from "first listed", so AC5 holds there too). `policyCameraSources` in `robot-agent/src/recording/camera-map.ts`.
+- Review on 2026-11-01: the apple configs' `ego_view` still gets the head camera, as AC6
+  requires, although the apple scene has a calibrated `ego_camera` that the sim evaluator
+  feeds as `ego_view`. Filed as TASK-474 rather than changed here.

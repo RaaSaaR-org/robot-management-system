@@ -95,8 +95,11 @@ describe('sceneCameraForPolicyKey', () => {
     ).toBe('head_camera');
   });
 
-  it('falls back to the first listed camera without a head camera, and to nothing without cameras', () => {
-    expect(sceneCameraForPolicyKey(null, 'up', ['wrist', 'top'])).toBe('wrist');
+  it('falls back to the first camera in sorted order without a head camera, and to nothing without cameras', () => {
+    expect(sceneCameraForPolicyKey(null, 'up', ['wrist', 'top'])).toBe('top');
+    expect(sceneCameraForPolicyKey(null, 'up', ['top', 'wrist'])).toBe('top');
+    expect(sceneCameraForPolicyKey(null, 'cam_right_high', ['right_wrist_camera', 'left_wrist_camera'])).toBe('left_wrist_camera');
+    expect(sceneCameraForPolicyKey(null, 'cam_right_high', ['left_wrist_camera', 'right_wrist_camera'])).toBe('left_wrist_camera');
     expect(sceneCameraForPolicyKey(null, 'cam_right_high', [])).toBeUndefined();
   });
 });

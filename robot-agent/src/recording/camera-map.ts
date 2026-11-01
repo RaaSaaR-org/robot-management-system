@@ -106,17 +106,17 @@ export function mapCameras(
 }
 
 /**
- * The dataset keys a policy can be trained on that name a robot-mounted view.
- * Only these are looked up by name; any other policy camera name (SmolVLA's
- * `up`/`side`, the apple configs' `ego_view`) has no camera of its own and
- * gets the head camera.
+ * The dataset keys a policy can be trained on that name a robot-mounted view:
+ * the values of {@link DEFAULT_CAMERA_KEYS}. Only these are looked up by name;
+ * any other policy camera name (SmolVLA's `up`/`side`, the apple configs'
+ * `ego_view`) gets the head camera.
+ *
+ * `ego_view` getting the head camera keeps the old positional behaviour on
+ * purpose (TASK-449 AC6), but it is a known mismatch: the apple scene does have
+ * a calibrated `ego_camera`, and the sim evaluator feeds that one to the policy
+ * as `ego_view`. Mapping it by name is TASK-474.
  */
-const POLICY_VIEW_KEYS: ReadonlySet<string> = new Set([
-  'cam_right_high',
-  'cam_left_high',
-  'cam_left_wrist',
-  'cam_right_wrist',
-]);
+const POLICY_VIEW_KEYS: ReadonlySet<string> = new Set(Object.values(DEFAULT_CAMERA_KEYS));
 
 /**
  * The inverse of {@link datasetCameraKey} for a running policy: which of the
@@ -125,8 +125,8 @@ const POLICY_VIEW_KEYS: ReadonlySet<string> = new Set([
  * - A Unitree view key gets the listed camera that maps to it — `cam_left_high`
  *   gets `ego_camera`, `cam_left_wrist` only `left_wrist_camera`.
  * - Everything else, and a view key no listed camera maps to, gets the head
- *   camera: the camera that maps to `cam_right_high`, or the FIRST listed one
- *   when none does. That one fallback is the only place list order matters.
+ *   camera: the camera that maps to `cam_right_high`, or the first one in sorted
+ *   order when none does, so the answer never depends on list order.
  * - An empty list gives `undefined`; the caller decides what a missing frame is.
  *
  * The match is chosen from the cameras in sorted order, so two cameras that
@@ -146,7 +146,7 @@ export function sceneCameraForPolicyKey(
     const match = byKey(policyKey);
     if (match !== undefined) return match;
   }
-  return byKey('cam_right_high') ?? cameras[0];
+  return byKey('cam_right_high') ?? sorted[0];
 }
 
 /**
