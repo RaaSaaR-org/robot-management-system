@@ -5,17 +5,25 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { datasetCameraKey, datasetImageFeature, mapCameras } from '../camera-map.js';
+import {
+  datasetCameraKey,
+  datasetImageFeature,
+  mapCameras,
+  policyCameraSources,
+  sceneCameraForPolicyKey,
+} from '../camera-map.js';
+
+const G1_SCENES = [
+  'g1_dex3_house_scene.xml',
+  'g1_dex3_room_scene.xml',
+  'g1_warehouse_scene.xml',
+  'g1_dex3_pickplace_scene.xml',
+  'g1_apple_pnp_scene.xml',
+];
 
 describe('datasetCameraKey', () => {
   it('gives the head camera a Unitree key in every scene we ship', () => {
-    for (const scene of [
-      'g1_dex3_house_scene.xml',
-      'g1_dex3_room_scene.xml',
-      'g1_warehouse_scene.xml',
-      'g1_dex3_pickplace_scene.xml',
-      'g1_apple_pnp_scene.xml',
-    ]) {
+    for (const scene of G1_SCENES) {
       expect(datasetCameraKey(scene, 'head_camera')).toBe('cam_right_high');
     }
   });
@@ -39,9 +47,11 @@ describe('datasetCameraKey', () => {
     expect(datasetCameraKey(null, 'head_camera')).toBe('cam_right_high');
   });
 
-  it('names wrist cameras correctly if a scene ever grows one', () => {
-    expect(datasetCameraKey(null, 'left_wrist_camera')).toBe('cam_left_wrist');
-    expect(datasetCameraKey(null, 'right_wrist_camera')).toBe('cam_right_wrist');
+  it('names the wrist cameras with the Unitree wrist keys in every G1 scene', () => {
+    for (const scene of [null, ...G1_SCENES]) {
+      expect(datasetCameraKey(scene, 'left_wrist_camera')).toBe('cam_left_wrist');
+      expect(datasetCameraKey(scene, 'right_wrist_camera')).toBe('cam_right_wrist');
+    }
   });
 });
 
@@ -54,6 +64,14 @@ describe('datasetImageFeature', () => {
 });
 
 describe('mapCameras', () => {
+  it('maps head + both wrists to three distinct columns in every G1 scene', () => {
+    for (const scene of G1_SCENES) {
+      expect(
+        mapCameras(scene, ['head_camera', 'left_wrist_camera', 'right_wrist_camera']).map((c) => c.key),
+      ).toEqual(['cam_right_high', 'cam_left_wrist', 'cam_right_wrist']);
+    }
+  });
+
   it('maps a list in order', () => {
     expect(mapCameras('g1_dex3_house_scene.xml', ['head_camera', 'house_iso'])).toEqual([
       { camera: 'head_camera', key: 'cam_right_high' },
@@ -65,5 +83,63 @@ describe('mapCameras', () => {
     // Two names the fallback sanitiser cannot tell apart. Without this they
     // would both write frames into videos/observation.images.cam_side_cam.
     expect(() => mapCameras(null, ['side cam', 'side-cam'])).toThrow(/both map to/);
+  });
+});
+
+describe('sceneCameraForPolicyKey', () => {
+  const listed = ['left_wrist_camera', 'head_camera', 'right_wrist_camera'];
+
+  it('is the inverse of datasetCameraKey for the Unitree view keys', () => {
+    expect(sceneCameraForPolicyKey(null, 'cam_right_high', listed)).toBe('head_camera');
+    expect(sceneCameraForPolicyKey(null, 'cam_left_wrist', listed)).toBe('left_wrist_camera');
+    expect(sceneCameraForPolicyKey(null, 'cam_right_wrist', listed)).toBe('right_wrist_camera');
+    expect(
+      sceneCameraForPolicyKey('g1_apple_pnp_scene.xml', 'cam_left_high', ['head_camera', 'ego_camera']),
+    ).toBe('ego_camera');
+  });
+
+  it('gives the head camera for an unknown name and for an unlisted view', () => {
+    expect(sceneCameraForPolicyKey(null, 'cam_left_high', listed)).toBe('head_camera');
+    expect(sceneCameraForPolicyKey(null, 'ego_view', listed)).toBe('head_camera');
+    // A scene key that is not a robot view is not looked up by name.
+    expect(
+      sceneCameraForPolicyKey('g1_dex3_house_scene.xml', 'cam_third_person', ['house_iso', 'head_camera']),
+    ).toBe('head_camera');
+  });
+
+  it('falls back to the first camera in sorted order without a head camera, and to nothing without cameras', () => {
+    expect(sceneCameraForPolicyKey(null, 'up', ['wrist', 'top'])).toBe('top');
+    expect(sceneCameraForPolicyKey(null, 'up', ['top', 'wrist'])).toBe('top');
+    expect(sceneCameraForPolicyKey(null, 'cam_right_high', ['right_wrist_camera', 'left_wrist_camera'])).toBe('left_wrist_camera');
+    expect(sceneCameraForPolicyKey(null, 'cam_right_high', ['left_wrist_camera', 'right_wrist_camera'])).toBe('left_wrist_camera');
+    expect(sceneCameraForPolicyKey(null, 'cam_right_high', [])).toBeUndefined();
+  });
+});
+
+describe('policyCameraSources', () => {
+  it('fills by name when the sidecar lists a robot-mounted view', () => {
+    const sources = policyCameraSources(
+      null,
+      ['cam_left_high', 'cam_right_high', 'cam_left_wrist'],
+      ['left_wrist_camera', 'right_wrist_camera', 'head_camera'],
+    );
+    expect([...sources]).toEqual([
+      ['cam_left_high', 'head_camera'],
+      ['cam_right_high', 'head_camera'],
+      ['cam_left_wrist', 'left_wrist_camera'],
+    ]);
+  });
+
+  it('keeps the positional fill when no listed camera is a robot-mounted view', () => {
+    expect([...policyCameraSources(null, ['up', 'side'], ['wrist', 'top'])]).toEqual([
+      ['up', 'wrist'],
+      ['side', 'top'],
+    ]);
+    expect([...policyCameraSources(null, ['a', 'b', 'c'], ['wrist', 'top'])]).toEqual([
+      ['a', 'wrist'],
+      ['b', 'top'],
+      ['c', 'top'],
+    ]);
+    expect([...policyCameraSources(null, ['up'], [])]).toEqual([['up', undefined]]);
   });
 });

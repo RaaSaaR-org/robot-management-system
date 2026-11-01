@@ -192,7 +192,7 @@ export function VRSessionPanel({
             </Button>
           }
         >
-          {showKeyboard && robot ? <KeyboardTeleopSection robot={robot} /> : null}
+          {showKeyboard && robot ? <KeyboardTeleopSection robot={robot} estop={false} /> : null}
         </TestingToolsRow>
       </div>
     );
@@ -250,7 +250,7 @@ export function VRSessionPanel({
         />
         {showKeyboard && (
           <Panel.Body>
-            <KeyboardTeleopSection robot={robot} />
+            <KeyboardTeleopSection robot={robot} estop={false} />
           </Panel.Body>
         )}
       </Panel>

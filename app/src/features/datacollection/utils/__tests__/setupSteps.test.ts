@@ -17,7 +17,7 @@ import { describe, it, expect } from 'vitest';
 import { READINESS_FIXTURES, readinessFor } from '@/mocks/readinessDemoHandlers';
 import type { RobotReadiness } from '@/features/robots/api/readinessApi';
 import { buildPreflight } from '../preflight';
-import { armControlOn, buildSetupModel, leaseWorkDone, reasonCell, reasonStep, robotSideButtons, stepOrder, type SetupModelInput } from '../setupSteps';
+import { armControlOn, buildSetupModel, leaseWorkDone, reasonCell, reasonStep, slotReasonCell, robotSideButtons, stepOrder, type SetupModelInput } from '../setupSteps';
 import { robotStop } from '../robotStop';
 import type { BringupStep } from '@/features/robots/api/readinessApi';
 
@@ -574,5 +574,19 @@ describe('the Cameras cell (TASK-442)', () => {
     const m = buildSetupModel(input({ sessionType: 'gamepad', preflight: preflight(true, true, 'gamepad'), sessionCameras: ['head_camera'] }));
     expect(m.cells.map((c) => c.id)).toEqual(['robot', 'control', 'input', 'cameras']);
     expect(m.cells[m.cells.length - 1]).toMatchObject({ value: 'Head only', status: 'ok' });
+  });
+});
+
+describe('slotReasonCell (TASK-442)', () => {
+  const cell = (id: string, severity: 'block' | 'warn' | null) =>
+    ({ id, label: id, value: '', status: 'ok', reason: severity ? { code: id, text: id, severity } : null }) as never;
+
+  it('prefers a later blocking reason over an earlier warning', () => {
+    expect(slotReasonCell([cell('robot', 'warn'), cell('mode', null), cell('cameras', 'block')])?.id).toBe('cameras');
+  });
+
+  it('falls back to the first reason when none blocks, and to null without one', () => {
+    expect(slotReasonCell([cell('robot', null), cell('mode', 'warn'), cell('cameras', 'warn')])?.id).toBe('mode');
+    expect(slotReasonCell([cell('robot', null)])).toBeNull();
   });
 });

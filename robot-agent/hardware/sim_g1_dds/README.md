@@ -128,6 +128,24 @@ One trap for whoever adds the next parameter: `do_GET` used to route on
 `self.path` whole, so **any** query string fell through to the 404 rather than
 being served with the option ignored. It now splits the path off first.
 
+### Wrist cameras
+
+Every G1 Dex3 scene has a `left_wrist_camera` and a `right_wrist_camera` next to
+`head_camera` (TASK-440) — the names the real sidecar serves them under, so the
+session page, the headset and the recorder (`cam_left_wrist` /
+`cam_right_wrist`) exercise the whole wrist-camera path without the hardware.
+They sit in the robot includes in `../sim_evaluator/mjcf/g1_dex3/` on the wrist
+yaw links, looking along the fingers, and follow the hand wherever it goes: with
+the arms hanging they film the floor. `/cameras` lists them after `head_camera`.
+They carry no mass, so the physics is the model it was
+(`test_wrist_cameras.py` compiles the scenes with and without them and compares).
+
+**Each one costs a render on the physics thread, but only while someone asks.**
+Nothing renders a camera nobody requests; a session that streams or records the
+head and both wrists pays three renders per frame instead of one, at the
+per-render cost in the table above. The recorder already asks for the cheap form,
+and with three cameras at 30 Hz it has to.
+
 ## `/state` reports the hands, and the sim clock
 
 `GET /state` and `/state/fast` list **43 joints**: the 29 body joints first, then

@@ -44,6 +44,8 @@ export interface Profile {
   /** CIDR as written in the profile, e.g. 192.168.123.222/24. */
   hostIp: string | null;
   pc2Camera: { host: string; port: number } | null;
+  /** Optional wrist camera publishers (TASK-446); absent = head camera only. */
+  wristCameras: { left?: { host: string; port: number }; right?: { host: string; port: number } } | null;
   ddsDomain: number;
   python: string;
   cycloneddsHome: string | null;
@@ -239,6 +241,21 @@ export function validateProfile(doc: unknown, opts: LoadOptions): Profile {
     pc2Camera = { host: m[1], port: port(Number(m[2]), 'profile.pc2Camera port') };
   }
 
+  let wristCameras: Profile['wristCameras'] = null;
+  if (doc.wristCameras !== undefined && doc.wristCameras !== null) {
+    if (!isRecord(doc.wristCameras)) throw new ProfileError('profile.wristCameras must be a map with left and/or right');
+    wristCameras = {};
+    for (const [k, v] of Object.entries(doc.wristCameras)) {
+      if (k !== 'left' && k !== 'right') {
+        throw new ProfileError(`profile.wristCameras.${k} is not a wrist (left or right)`);
+      }
+      const m = typeof v === 'string' ? /^([^:\s]+):(\d+)$/.exec(v.trim()) : null;
+      if (!m) throw new ProfileError(`profile.wristCameras.${k} must be host:port, got ${JSON.stringify(v)}`);
+      wristCameras[k] = { host: m[1], port: port(Number(m[2]), `profile.wristCameras.${k} port`) };
+    }
+    if (!wristCameras.left && !wristCameras.right) wristCameras = null;
+  }
+
   const python = expandVars(str(doc, 'python', where), opts, 'profile.python');
   const cyc = optStr(doc, 'cycloneddsHome', where);
   const cycloneddsHome = cyc ? expandVars(cyc, opts, 'profile.cycloneddsHome') : null;
@@ -400,6 +417,7 @@ export function validateProfile(doc: unknown, opts: LoadOptions): Profile {
     robotIp,
     hostIp,
     pc2Camera,
+    wristCameras,
     ddsDomain,
     python,
     cycloneddsHome,
@@ -497,7 +515,30 @@ export function sidecarEnvFor(profile: Profile, mode: SidecarMode, parent: NodeJ
   } else {
     delete env.G1_SIM_BACKEND;
   }
+  // TASK-446: wrist publishers, left first. A source of none/off opens no camera.
+  const wrists = wristCameraEndpoints(profile);
+  const source = (env.G1_CAMERA_SOURCE ?? '').trim().toLowerCase();
+  if (wrists.length > 0 && !('G1_WRIST_CAMERAS' in env) && source !== 'none' && source !== 'off') {
+    env.G1_WRIST_CAMERAS = wrists.map((w) => `${w.name}@${w.host}:${w.port}`).join(',');
+  }
   return env;
+}
+
+export interface WristCameraEndpoint {
+  side: 'left' | 'right';
+  name: 'left_wrist_camera' | 'right_wrist_camera';
+  host: string;
+  port: number;
+}
+
+/** The profile's wrist camera endpoints, left first; empty for a head-only profile. */
+export function wristCameraEndpoints(profile: Profile): WristCameraEndpoint[] {
+  const out: WristCameraEndpoint[] = [];
+  for (const side of ['left', 'right'] as const) {
+    const ep = profile.wristCameras?.[side];
+    if (ep) out.push({ side, name: `${side}_wrist_camera`, host: ep.host, port: ep.port });
+  }
+  return out;
 }
 
 export function sidecarSpec(profile: Profile, mode: SidecarMode, parent: NodeJS.ProcessEnv = process.env): ChildSpec {

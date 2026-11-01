@@ -87,6 +87,16 @@ export interface SystemsCell {
   title?: string;
 }
 
+/**
+ * The cell whose reason the take dock's slot shows: the first one that blocks,
+ * else the first with any reason. A blocking reason wins over an earlier cell's
+ * warning — the Cameras cell comes last, and a wrist camera that is down must
+ * not hide behind, say, a busy robot side (TASK-442).
+ */
+export function slotReasonCell(cells: readonly SystemsCell[]): SystemsCell | null {
+  return cells.find((c) => c.reason?.severity === 'block') ?? cells.find((c) => c.reason) ?? null;
+}
+
 export interface SetupModelInput {
   sessionType: TeleoperationType;
   robotName: string;

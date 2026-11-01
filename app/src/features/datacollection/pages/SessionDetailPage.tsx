@@ -79,7 +79,7 @@ import { TestingToolsRow } from '../components/console/TestingTools';
 import { HeadsetHero, RobotSetupDisclosure } from '../components/console/HeadsetHero';
 import { SetupRail, type SetupStepContent } from '../components/console/SetupRail';
 import { LiveView, cameraLabel } from '../components/console/LiveView';
-import { buildSetupModel, leaseWorkDone, modeWord, type SetupStep, type SystemsCellId, type SystemsCellStatus } from '../utils/setupSteps';
+import { buildSetupModel, leaseWorkDone, modeWord, slotReasonCell, type SetupStep, type SystemsCellId, type SystemsCellStatus } from '../utils/setupSteps';
 import { useLeaseHandOver, useLeaseTake } from '../hooks/useLeaseTake';
 import { PageLeaseLine, PageLeaseLostLine } from '../components/console/PageLeaseLine';
 import { useDeviceRole, detectDeviceRole, type DeviceRole } from '../hooks/useDeviceRole';
@@ -104,6 +104,7 @@ import {
   useDataCollectionStore, selectKept, selectTakeElapsedS, selectOperatorFor, selectStreakFor, selectViewersFor,
 } from '../store/datacollectionStore';
 import { useRobotsStore } from '../../robots/store/robotsStore';
+import { isSimRobot } from '../../robots/utils/simRobot';
 import { useTelemetryStream } from '../../robots/hooks/useTelemetryStream';
 import { JointStateGrid } from '../../robots/components/visualization';
 import { KeyboardTeleopSection } from '../../robots/components/tabs/TeleopTab';
@@ -394,17 +395,24 @@ export function SessionDetailPage() {
 
   const handlePause = () => session && run('pause', () => storePause(session.id), 'Session paused', "Couldn't pause session");
 
+  /** One End at a time: it can run for minutes while the robot saves the takes (TASK-450). A ref, because the E hotkey's handler is bound per status. */
+  const endingRef = useRef(false);
   const handleEnd = async () => {
-    if (!session) return;
-    const ok = await confirm({
-      title: 'End this session?',
-      description: 'Recording stops and the kept takes are saved. You can review them afterwards.',
-      confirmLabel: 'End session',
-      tone: 'danger',
-    });
-    if (ok) {
-      const { kept: keptNow, elapsedS, best } = summaryRef.current;
-      await run('end', () => storeEnd(session.id), 'Session ended', "Couldn't end session", () => sessionSummary(keptNow, elapsedS, best));
+    if (!session || endingRef.current) return;
+    endingRef.current = true;
+    try {
+      const ok = await confirm({
+        title: 'End this session?',
+        description: 'Recording stops and the kept takes are saved. You can review them afterwards.',
+        confirmLabel: 'End session',
+        tone: 'danger',
+      });
+      if (ok) {
+        const { kept: keptNow, elapsedS, best } = summaryRef.current;
+        await run('end', () => storeEnd(session.id), 'Session ended', "Couldn't end session", () => sessionSummary(keptNow, elapsedS, best));
+      }
+    } finally {
+      endingRef.current = false;
     }
   };
 
@@ -615,7 +623,7 @@ export function SessionDetailPage() {
   const isPaused = session.status === 'paused';
   const isLive = isRecording || isPaused || session.status === 'created';
   const isVrSession = session.type === 'vr_quest' || session.type === 'vr_vision_pro';
-  const isSim = !!robot && (robot.id.startsWith('sim-') || /sim/i.test(robot.model ?? ''));
+  const isSim = !!robot && isSimRobot(robot);
   const liveFrameCount = live && (isRecording || isPaused)
     ? live.totalFrames
     : isRecording && typeof recordingProgress?.frameCount === 'number' ? recordingProgress.frameCount : session.frameCount;
@@ -671,7 +679,7 @@ export function SessionDetailPage() {
             </Button>
           }
         >
-          {showKeyboardFallback ? <KeyboardTeleopSection robot={robot} /> : null}
+          {showKeyboardFallback ? <KeyboardTeleopSection robot={robot} estop={false} /> : null}
         </TestingToolsRow>
       ) : null}
       {isLive ? (
@@ -945,7 +953,7 @@ export function SessionDetailPage() {
   const operatorState = operator?.state ?? null;
   const operatorInVrNow = operatorState?.inVr === true;
   const recordCells = phase === 'record' && setupModel ? setupModel.cells : [];
-  const reasonCellNow = recordCells.find((c) => c.reason) ?? null;
+  const reasonCellNow = slotReasonCell(recordCells);
   const reasonOwner = reasonCellNow?.id ?? null;
   const reason = reasonCellNow?.reason ?? null;
   const modeReason = reasonOwner === 'mode' ? reason : null;
