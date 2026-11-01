@@ -628,34 +628,3 @@ export interface FrameData {
   observationState: number[];
 }
 
-// ============================================================================
-// HUGGINGFACE PUSH TYPES
-// ============================================================================
-
-/**
- * Request body for pushing a dataset to HuggingFace Hub
- */
-export interface PushToHubRequest {
-  /** HuggingFace access token */
-  token: string;
-  /** HuggingFace repo ID, e.g. "username/my-dataset" */
-  repoId: string;
-  /** Whether the repo should be private */
-  private?: boolean;
-}
-
-/**
- * Status of a push-to-hub job
- */
-export type PushToHubStatus = 'pending' | 'running' | 'done' | 'failed';
-
-/**
- * Push-to-hub job state (in-memory)
- */
-export interface PushToHubJobState {
-  status: PushToHubStatus;
-  progress?: string;
-  url?: string;
-  error?: string;
-  startedAt: string;
-}

@@ -440,6 +440,7 @@ Guidelines:
 | `docs/data-collection-two-person.md` | The data-collection session runbook — readiness panel to last take, Quest operator + desktop assistant, E-stop recovery, remote testing over Tailscale |
 | `docs/g1-edu-lab-bringup.md`     | G1 EDU lab bringup — robot supervisor install (real robot and the `sim-g1-edu-dev` rehearsal robot), arm_sdk, mode changes without the remote |
 | `docs/vr-teleop-data-collection.md` | Quest 3 teleop on the G1 through NeoDEM, single operator; Unitree `xr_teleoperate` path and LeRobot import |
+| `docs/huggingface-publish.md`    | Publishing a recorded dataset to the Hugging Face Hub |
 | `docs/regulatory-compliance.md`  | EU AI Act, GDPR compliance        |
 
 ## Current Limitations

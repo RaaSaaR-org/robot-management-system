@@ -75,6 +75,7 @@ const CATEGORY_MAP: Record<string, string> = {
   'data-collection-two-person': 'Robot Integration',
   'training-pipeline-testing': 'Training',
   'training-run-export': 'Training',
+  'huggingface-publish': 'Training',
   'research-publications': 'Research',
   'deployment': 'Operations',
   'dev-workflow': 'Operations',
