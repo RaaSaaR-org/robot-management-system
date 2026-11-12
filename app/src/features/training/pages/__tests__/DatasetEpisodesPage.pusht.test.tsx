@@ -33,6 +33,10 @@ const { trainingApiMock, datasetViewsApiMock, listRewards } = vi.hoisted(() => (
 
 vi.mock('../../api/trainingApi', () => ({ trainingApi: trainingApiMock }));
 vi.mock('../../api/datasetViewsApi', () => ({ datasetViewsApi: datasetViewsApiMock }));
+// The video ticket a <video> needs with sign-in on (TASK-478).
+vi.mock('../../api/datasetVideoApi', () => ({
+  getDatasetVideoTicket: vi.fn(async (datasetId: string) => `tkt-${datasetId}`),
+}));
 vi.mock('@/features/evaluation/api/evaluationApi', () => ({
   evaluationApi: { listRewards },
 }));
@@ -92,7 +96,13 @@ describe('the episode page on lerobot/pusht', () => {
     );
 
     await waitFor(() => expect(trainingApiMock.getEpisodeVideoUrl).toHaveBeenCalled());
-    expect(trainingApiMock.getEpisodeVideoUrl).toHaveBeenCalledWith('pusht', 0, 'observation.image', WINDOW);
+    // ...and with the dataset's video ticket, without which the request is a 401.
+    await waitFor(() =>
+      expect(trainingApiMock.getEpisodeVideoUrl).toHaveBeenCalledWith(
+        'pusht', 0, 'observation.image', WINDOW, 'tkt-pusht',
+      ),
+    );
+    await waitFor(() => expect(document.querySelector('video')).not.toBeNull());
     expect(screen.queryByTestId('no-cameras')).not.toBeInTheDocument();
     expect(screen.getByText(/1 camera\b/)).toBeInTheDocument();
   });

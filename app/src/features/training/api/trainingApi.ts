@@ -5,6 +5,7 @@
  */
 
 import { apiClient } from '@/api/client';
+import { episodeVideoUrl } from './datasetVideoApi';
 import type {
   Dataset,
   CreateDatasetInput,
@@ -265,17 +266,20 @@ export const trainingApi = {
    * chunk/file query selects the right concatenated mp4 server-side and the
    * `#t=from,to` media fragment makes the browser play only this episode's
    * slice of it.
+   *
+   * Pass the dataset's video `ticket` (`useDatasetVideoTicket`): a `<video>`
+   * cannot send the bearer token, so with sign-in on a URL without one is a
+   * 401 (TASK-478).
    */
   getEpisodeVideoUrl(
     datasetId: string,
     episodeIndex: number,
     camera: string,
-    window?: EpisodeVideoWindow
+    window?: EpisodeVideoWindow,
+    ticket?: string | null
   ): string {
     const baseUrl = apiClient.defaults.baseURL ?? '';
-    const path = `${baseUrl}/datasets/${datasetId}/episodes/${episodeIndex}/video/${camera}`;
-    if (!window) return path;
-    return `${path}?chunk=${window.chunk}&file=${window.file}#t=${window.from},${window.to}`;
+    return episodeVideoUrl(baseUrl, datasetId, episodeIndex, camera, window, ticket);
   },
 
   /**

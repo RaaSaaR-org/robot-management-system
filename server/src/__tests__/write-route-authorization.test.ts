@@ -28,6 +28,7 @@ import {
   isSafetyHalt,
 } from '../middleware/auth.middleware.js';
 import { robotManager } from '../services/RobotManager.js';
+import { datasetService } from '../services/DatasetService.js';
 import { safetyService } from '../services/SafetyService.js';
 import { settingsService } from '../services/SettingsService.js';
 
@@ -66,7 +67,9 @@ const app = createApp();
 // /stop, /sidecar-mode, /lan-up and /steps/:step/adopt|leave (memberOrAbove).
 // TASK-412 adds two on the guarded /api/robots mount: POST /:id/quest/connect
 // and /:id/quest/open (memberOrAbove).
-const EXPECTED_WRITE_ROUTES = 385;
+// TASK-478 adds one on the guarded /api/datasets mount: POST /:id/video-ticket,
+// a POST-shaped read (it mints the ticket a `<video>` is read with).
+const EXPECTED_WRITE_ROUTES = 386;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;
@@ -347,8 +350,9 @@ describe('self-service writes', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST-shaped reads', () => {
-  it('exempts the cron calculator and the camera ticket, and nothing else', () => {
+  it('exempts the cron calculator and the two media tickets, and nothing else', () => {
     expect(postShapedReadWrites.map((e) => `${e.method} ${e.path}`).sort()).toEqual([
+      'POST /api/datasets/:id/video-ticket',
       'POST /api/patrol/cron/validate',
       'POST /api/robots/:id/camera/:name/ticket',
     ]);
@@ -363,6 +367,23 @@ describe('POST-shaped reads', () => {
       .mockResolvedValue({ baseUrl: 'http://robot:41243' } as never);
     const result = await request(app)
       .post('/api/robots/test-id/camera/head_camera/ticket')
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .send({});
+
+    expect(result.status).toBe(200);
+    expect(typeof result.body.ticket).toBe('string');
+    expect(lookup).toHaveBeenCalledWith('test-id');
+  });
+
+  it('lets a viewer mint a dataset video ticket', async () => {
+    // The same wrinkle on the dataset page: the episode video is a GET, but a
+    // `<video>` cannot send the bearer token, so without this ticket a viewer's
+    // player is a black box (TASK-478).
+    const lookup = vi
+      .spyOn(datasetService, 'get')
+      .mockResolvedValue({ id: 'test-id', storagePath: 'test-id/' } as never);
+    const result = await request(app)
+      .post('/api/datasets/test-id/video-ticket')
       .set('Authorization', `Bearer ${viewerToken}`)
       .send({});
 
