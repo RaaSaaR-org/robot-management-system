@@ -3,7 +3,7 @@ id: "TASK-476"
 aliases: []
 title: "A GR00T dataset shows its joint groups and its statistics"
 slug: "a-gr00t-dataset-shows-its-joint-groups-and-its-statistics"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
