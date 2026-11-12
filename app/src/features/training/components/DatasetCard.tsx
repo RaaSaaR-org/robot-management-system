@@ -22,6 +22,7 @@ import {
 import { Button, Checkbox, Panel, StatusTag } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { trainingApi } from '../api/trainingApi';
+import { useDatasetVideoTicket } from '../hooks/useDatasetVideoTicket';
 import { datasetShape, describeSelectionOrigin, isDatasetView } from '../types';
 import type { Dataset, DatasetParentSummary } from '../types';
 import { formatDuration } from './datasets/datasetFormat';
@@ -480,7 +481,9 @@ function CosmosTag() {
 function SyntheticThumb({ datasetId }: { datasetId: string }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [failed, setFailed] = useState(false);
-  const src = `${trainingApi.getEpisodeVideoUrl(datasetId, 0, 'image_0')}#t=0.1`;
+  // A <video> cannot send the bearer token; the ticket is what opens it (TASK-478).
+  const { ticket, ready } = useDatasetVideoTicket(datasetId);
+  const src = `${trainingApi.getEpisodeVideoUrl(datasetId, 0, 'image_0', undefined, ticket)}#t=0.1`;
 
   const seekPoster = () => {
     const v = ref.current;
@@ -506,7 +509,7 @@ function SyntheticThumb({ datasetId }: { datasetId: string }) {
       onMouseEnter={() => ref.current?.play().catch(() => {})}
       onMouseLeave={() => { const v = ref.current; if (v) { v.pause(); seekPoster(); } }}
     >
-      <video
+      {ready && <video
         ref={ref}
         src={src}
         className="h-full w-full object-cover"
@@ -516,7 +519,7 @@ function SyntheticThumb({ datasetId }: { datasetId: string }) {
         preload="metadata"
         onLoadedMetadata={seekPoster}
         onError={() => setFailed(true)}
-      />
+      />}
       <CosmosTag />
       <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover/thumb:opacity-100">
         <span className="flex h-10 w-10 items-center justify-center rounded-full bg-canvas/80 text-ink-primary">

@@ -54,7 +54,9 @@ import {
 // TASK-220 — POST /compatibility, at the bottom of this file.
 import { analyzeDatasetIds, UnknownDatasetError } from '../services/lerobot/datasetCompatibility.js';
 import { ConflictError, ServiceUnavailableError } from '../utils/errors.js';
-import { ownerOnly } from '../middleware/auth.middleware.js';
+import { ownerOnly, type AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { getTenantId } from '../middleware/tenantContext.js';
+import { signDatasetVideoTicket, DATASET_VIDEO_TICKET_TTL_MS } from '../security/datasetVideoTicket.js';
 import { sendFailure } from '../utils/routeErrors.js';
 import { parsePagination, parseIntegerParam } from '../utils/pagination.js';
 import { z } from 'zod';
@@ -1208,6 +1210,50 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
     res.json({ frames: page.frames, total: page.total });
   } catch (error) {
     sendDatasetReadError(res, req.params.id, error, 'Failed to get episode frames');
+  }
+});
+
+// ============================================================================
+// POST /api/datasets/:id/video-ticket - Mint a ticket for this dataset's videos
+// ============================================================================
+
+/**
+ * The episode video is played by a `<video>`, which cannot send an
+ * `Authorization` header, so with sign-in on something has to travel in the
+ * URL. This is that something (TASK-478): a signed assertion good for this
+ * dataset's video GETs for fifteen minutes and for nothing else — not the
+ * caller's access token. The caller is authenticated normally here, and the
+ * ticket carries their identity and the tenant scope of this request forward.
+ */
+datasetRoutes.post('/:id/video-ticket', async (req: Request, res: Response) => {
+  try {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) {
+      // Only reachable if this route is ever mounted without authMiddleware.
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // A ticket for a dataset the caller cannot see would be a valid signature
+    // over nothing; the lookup runs in the caller's tenant scope.
+    const dataset = await datasetService.get(req.params.id);
+    if (!dataset) {
+      return res.status(404).json({ error: 'Dataset not found' });
+    }
+
+    const ticket = signDatasetVideoTicket({
+      datasetId: req.params.id,
+      userId: user.id,
+      // The scope this request ran in, which for an impersonating super-admin
+      // is not their own tenant — the video request has no header to repeat it.
+      tenantId: getTenantId() ?? user.tenantId ?? null,
+      role: user.role,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ticket, expiresIn: Math.floor(DATASET_VIDEO_TICKET_TTL_MS / 1000) });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error minting video ticket:', error);
+    res.status(500).json({ error: 'Failed to mint video ticket' });
   }
 });
 
