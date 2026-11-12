@@ -694,3 +694,42 @@ describe('statusFromEStopResponse', () => {
     expect(statusFromEStopResponse({ status: 'armed' })).toBeUndefined();
   });
 });
+
+// ===========================================================================
+// heartbeats survive a database timeout (TASK-433)
+// ===========================================================================
+
+describe('startHeartbeats: a failing robot lookup', () => {
+  it('logs a listRobots() that rejects, and sends the next heartbeat', async () => {
+    vi.useFakeTimers();
+    const { resetBackgroundFailureLogs } = await import('../../utils/backgroundTask.js');
+    resetBackgroundFailureLogs();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const timeout = Object.assign(new Error('Socket timeout'), { code: 'P1008' });
+      vi.mocked(robotManager.listRobots).mockRejectedValueOnce(timeout);
+      vi.mocked(robotManager.listRobots).mockResolvedValue([makeRobot()]);
+      vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
+      httpPost.mockResolvedValue({});
+
+      safetyService.startHeartbeats(500);
+
+      // First tick: the lookup times out. Unhandled, this ends the process.
+      await vi.advanceTimersByTimeAsync(500);
+      expect(robotManager.listRobots).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith('[SafetyService] heartbeat failed:', timeout);
+      expect(httpPost).not.toHaveBeenCalled();
+
+      // Second tick: the loop is alive and the robot gets its heartbeat.
+      await vi.advanceTimersByTimeAsync(500);
+      expect(robotManager.listRobots).toHaveBeenCalledTimes(2);
+      expect(httpPost).toHaveBeenCalledWith('/api/v1/robots/r1/safety/heartbeat', {});
+    } finally {
+      safetyService.stopHeartbeats();
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});

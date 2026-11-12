@@ -275,4 +275,48 @@ describe('DeploymentMetricsService', () => {
       expect(service.getMetricWindow('dep-1')).toBeDefined();
     });
   });
+
+  // --------------------------------------------------------------------------
+  // timers survive a database timeout (TASK-433)
+  // --------------------------------------------------------------------------
+
+  describe('monitoring with a failing database', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('logs a failing poll and a failing threshold check, and runs both again', async () => {
+      const { deploymentRepository } = await import('../../repositories/index.js');
+      const { resetBackgroundFailureLogs } = await import('../../utils/backgroundTask.js');
+      resetBackgroundFailureLogs();
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const timeout = Object.assign(new Error('Socket timeout'), { code: 'P1008' });
+        const findById = vi.mocked(deploymentRepository.findById);
+        findById.mockRejectedValue(timeout);
+
+        service.startMonitoring('dep-1');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(findById).toHaveBeenCalledTimes(1); // the initial poll
+
+        // 60 s: two interval polls and one threshold check, all against a dead database.
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(findById).toHaveBeenCalledTimes(4);
+        expect(errorSpy).toHaveBeenCalledWith('[DeploymentMetricsService] metrics poll failed (dep-1):', timeout);
+        expect(errorSpy).toHaveBeenCalledWith('[DeploymentMetricsService] threshold check failed (dep-1):', timeout);
+
+        // 120 s: both loops are still running.
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(findById).toHaveBeenCalledTimes(7);
+        expect(service.isMonitoring('dep-1')).toBe(true);
+      } finally {
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+      }
+    });
+  });
 });

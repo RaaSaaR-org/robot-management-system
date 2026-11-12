@@ -9,6 +9,7 @@
  * - EDPB WP251: Worker rights in automated processing
  */
 
+import { runInBackground } from '../utils/backgroundTask.js';
 import {
   approvalRequestRepository,
   approvalStepRepository,
@@ -75,13 +76,19 @@ export class ApprovalWorkflowService {
 
     // Check SLA compliance every 15 minutes
     this.slaCheckInterval = setInterval(
-      () => this.checkSLACompliance(),
+      () =>
+        runInBackground('[ApprovalWorkflowService] SLA compliance check failed:', () =>
+          this.checkSLACompliance()
+        ),
       15 * 60 * 1000
     );
 
     // Check for escalations every 30 minutes
     this.escalationCheckInterval = setInterval(
-      () => this.escalateOverdueApprovals(),
+      () =>
+        runInBackground('[ApprovalWorkflowService] overdue escalation failed:', () =>
+          this.escalateOverdueApprovals()
+        ),
       30 * 60 * 1000
     );
 

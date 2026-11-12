@@ -667,3 +667,72 @@ describe('getJobStatistics', () => {
     expect(stats.byStatus.pending).toBe(1);
   });
 });
+
+// ===========================================================================
+// simulated execution survives a database timeout (TASK-433)
+// ===========================================================================
+
+describe('submitJob: simulated execution with a failing database', () => {
+  const request: CreateSyntheticJobRequest = {
+    task: 'pick_place',
+    embodiment: 'so101',
+    trajectoryCount: 100,
+  };
+
+  it('logs a failing job lookup in the detached start instead of leaving it unhandled', async () => {
+    const { resetBackgroundFailureLogs } = await import('../../utils/backgroundTask.js');
+    resetBackgroundFailureLogs();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const svc = freshService();
+      const timeout = Object.assign(new Error('Socket timeout'), { code: 'P1008' });
+      mockPrisma.syntheticJob.create.mockResolvedValue(makeJobRow());
+      mockPrisma.syntheticJob.findUnique.mockRejectedValue(timeout);
+
+      const job = await svc.submitJob(request);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(job.id).toBe('job-1');
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[SyntheticDataService] simulated job execution failed (job-1):',
+        timeout
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('logs a failing progress tick and runs the next one', async () => {
+    vi.useFakeTimers();
+    const { resetBackgroundFailureLogs } = await import('../../utils/backgroundTask.js');
+    resetBackgroundFailureLogs();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const svc = freshService();
+      const row = makeJobRow();
+      const timeout = Object.assign(new Error('Socket timeout'), { code: 'P1008' });
+      mockPrisma.syntheticJob.create.mockResolvedValue(row);
+      mockPrisma.syntheticJob.findUnique.mockResolvedValue(row);
+      mockPrisma.syntheticJob.update.mockResolvedValue(row);
+
+      await svc.submitJob(request);
+      await vi.advanceTimersByTimeAsync(0); // the detached start settles; the interval is armed
+      const lookupsBefore = mockPrisma.syntheticJob.findUnique.mock.calls.length;
+
+      // First progress tick: the lookup times out.
+      mockPrisma.syntheticJob.findUnique.mockRejectedValueOnce(timeout);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(errorSpy).toHaveBeenCalledWith('[SyntheticDataService] progress update failed (job-1):', timeout);
+
+      // Second tick runs. A cancelled job stops the interval, which ends the test cleanly.
+      mockPrisma.syntheticJob.findUnique.mockResolvedValue(makeJobRow({ status: 'cancelled' }));
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(mockPrisma.syntheticJob.findUnique.mock.calls.length).toBeGreaterThanOrEqual(lookupsBefore + 2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      errorSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});

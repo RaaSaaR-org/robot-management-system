@@ -8,6 +8,7 @@
  * @feature simulation
  */
 
+import { runInBackground } from '../utils/backgroundTask.js';
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
 import { spawn, type ChildProcess } from 'child_process';
@@ -506,7 +507,9 @@ export class SimulationService extends EventEmitter {
 
     // Choose real or mock execution
     if (this.canRunReal()) {
-      void this.startRealJobProgression(job.jobId);
+      runInBackground(`[SimulationService] real job progression failed (${job.jobId}):`, () =>
+        this.startRealJobProgression(job.jobId)
+      );
     } else {
       this.startMockJobProgression(job.jobId);
     }

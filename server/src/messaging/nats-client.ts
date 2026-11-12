@@ -153,6 +153,8 @@ export class NatsClient {
         console.log('[NatsClient] Connection closed');
       }
       this.setStatus('closed');
+    }).catch((err) => {
+      console.error('[NatsClient] Close listener error:', err);
     });
   }
 

@@ -4,6 +4,7 @@
  * @feature datasets
  */
 
+import { runInBackground } from '../utils/backgroundTask.js';
 import { EventEmitter } from 'events';
 import { PrismaClient } from '@prisma/client';
 import type {
@@ -127,7 +128,9 @@ export class SyntheticDataService extends EventEmitter {
 
     // In a real implementation, this would publish to NATS job queue
     // For now, we simulate starting the job
-    this.simulateJobExecution(job.id);
+    runInBackground(`[SyntheticDataService] simulated job execution failed (${job.id}):`, () =>
+      this.simulateJobExecution(job.id)
+    );
 
     return this.toSyntheticJob(job);
   }
@@ -514,7 +517,7 @@ export class SyntheticDataService extends EventEmitter {
     const totalSteps = 10;
     let currentStep = 0;
 
-    const progressInterval = setInterval(async () => {
+    const progressStep = async (): Promise<void> => {
       const currentJob = await this.prisma.syntheticJob.findUnique({
         where: { id: jobId },
       });
@@ -548,6 +551,10 @@ export class SyntheticDataService extends EventEmitter {
         const outputDatasetId = `synthetic_${job.task}_${Date.now()}`;
         await this.completeJob(jobId, outputDatasetId, successfulCount);
       }
+    };
+    // A failed step (a database timeout, say) is logged; the next tick retries.
+    const progressInterval = setInterval(() => {
+      runInBackground(`[SyntheticDataService] progress update failed (${jobId}):`, progressStep);
     }, 2000); // Update every 2 seconds
   }
 

@@ -3,7 +3,7 @@ id: "TASK-433"
 aliases: []
 title: "The API server survives a database timeout in a background job"
 slug: "the-api-server-survives-a-database-timeout-in-a-background"
-status: "todo"                # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-10-30"
-updated: "2026-10-30"
+updated: "2026-11-13"
 ---
 
 # The API server survives a database timeout in a background job
@@ -127,15 +127,15 @@ Branch: `fix/task-433-the-api-server-survives-a-database-timeout-in-a-background
 
 ## Acceptance Criteria
 
-- [ ] A `markOverdue()` that rejects on an interval tick is logged, the server
+- [x] A `markOverdue()` that rejects on an interval tick is logged, the server
   keeps running, and the next tick runs.
-- [ ] Every callback in the audit list catches and logs its async work. Each
+- [x] Every callback in the audit list catches and logs its async work. Each
   "to confirm" site was read, and Notes lists what was done for each.
-- [ ] `server/src/index.ts` registers an `unhandledRejection` handler that logs
+- [x] `server/src/index.ts` registers an `unhandledRejection` handler that logs
   the reason. In dev it does not exit. The production behaviour is written down.
-- [ ] Vitest covers the overdue checker's failing tick, at least one other fixed
+- [x] Vitest covers the overdue checker's failing tick, at least one other fixed
   timer, and the process handler in dev and in production.
-- [ ] `cd server && npm run typecheck && npx vitest run` passes.
+- [x] `cd server && npm run typecheck && npx vitest run` passes.
 
 ## Test Strategy
 
@@ -155,3 +155,74 @@ Branch: `fix/task-433-the-api-server-survives-a-database-timeout-in-a-background
 
 - Filed from the TASK-424 preparation on 2026-10-30. The P1008 itself (a 1.2 GB
   SQLite file under load) is a separate question and is not in scope here.
+- 2026-11-13, implementation. Everything detached goes through one helper,
+  `runInBackground(message, task)` in `server/src/utils/backgroundTask.ts`: it
+  catches a synchronous throw and a rejection and logs `message` + the error.
+  The timer cadence is untouched (a failing tick logs, the next tick runs). What
+  backs off is the log line: a job that keeps failing logs once per 30 s and
+  then says how many failures it left out, so a 500 ms heartbeat against a dead
+  database does not write two stack traces a second.
+- Audit list, fixed with `runInBackground` at the call site:
+  - `NotificationWorkflowService.startOverdueChecker()` — interval tick and
+    immediate run both go through `runOverdueCheck()`.
+  - `SafetyService.startHeartbeats()` — `[SafetyService] heartbeat failed:`.
+  - `ApprovalWorkflowService.initialize()` — SLA check and overdue escalation.
+  - `OversightService.initialize()` — due verification check.
+  - `DeploymentMetricsService.startMonitoring()` — metrics poll and threshold check.
+  - `SyntheticDataService.simulateJobExecution()` — the progress interval.
+- Found beyond the audit list (a throwaway typescript-eslint run with
+  `no-floating-promises` + `no-misused-promises` over `server/src`, plus a read
+  of every `void <promise>` site) and fixed the same way:
+  - `SyntheticDataService.submitJob()` dropped the promise of
+    `simulateJobExecution()`, which opens with two Prisma calls.
+  - `ProcessSchedulerService.isDue()` did `void processRepository.recordScheduledRun(...)`
+    with no catch; the surrounding `try` in `tick()` does not cover a detached promise.
+  - `SimulationService.createJob()` did `void this.startRealJobProgression(...)`,
+    whose body is not wrapped as a whole.
+  - `messaging/nats-client.ts`: `connection.closed().then(...)` had no catch.
+- "To confirm" sites, each read on 2026-11-13, no change needed:
+  - `PatrolSchedulerService.ts:85` — `tick()` is one `try/finally` whose three
+    stages (route load, per-route processing, stale-run reconciliation) each
+    catch and log.
+  - `ProcessSchedulerService.ts:56` — `tick()` catches the definition load and
+    each definition; the one detached write inside it is the fix listed above.
+  - `SimFrameRecorder.ts:145` — `sample()` is `try/catch/finally` after a
+    synchronous guard; `:150` — `flush()` catches inside its own promise, and
+    `emitProgress()` is synchronous and wrapped.
+  - `ScanSessionService.ts:295` — the tick body is one `try/catch`.
+  - `jobs/patrol-photo-cleanup.ts:55`, `jobs/tour-transcript-cleanup.ts:67`,
+    `jobs/multipart-upload-sweep.ts:166`, `jobs/control-lease-sweeper.ts:48` —
+    each run is `try/catch/finally` and returns a result instead of throwing.
+    What sits before the `try` is a synchronous env read or flag check.
+- Synchronous callbacks (`TrainingOrchestrator.ts:207`, `SimulationService.ts:1267`,
+  `RobotReadinessService.ts:409`, `websocket/index.ts:233` and `:349`): the lint
+  run reports no dropped promise in any of them; `RobotReadinessService.tick()`
+  starts `poll()` with a `.catch`.
+- Queue consumers (`workers/dataset-validation.worker.ts`, `training.worker.ts`,
+  `SyntheticDataWorker.ts`): `processMessages()` is one `try/catch` and restarts
+  itself after 5 s, `handleMessage()` catches and naks/terms. No change.
+- Process handlers (`server/src/utils/processHandlers.ts`, registered first in
+  `main()`):
+  - `unhandledRejection` is logged with its stack through `console.error` and
+    pino. Outside production it does not exit. In production it exits with
+    code 1, as specified.
+  - `UNHANDLED_REJECTION_EXIT=false|true` overrides that default. Not in the
+    spec: added because the production default turns one missed promise into a
+    restart, and on a single-replica instance the restart is the outage. The
+    default is unchanged; the variable is in `server/.env.example` and
+    `docs/deployment.md`.
+  - `uncaughtException` is logged and exits with code 1 in every environment —
+    what Node does without a handler, plus a structured log line.
+- Tests: `utils/__tests__/backgroundTask.test.ts`, `processHandlers.test.ts`,
+  and `backgroundTask.process.test.ts`, which starts a real `node` without
+  `--unhandled-rejections` and reads the exit code (unguarded tick: dies;
+  through `runInBackground`: lives, three ticks; handler in dev: lives; handler
+  in production: exit 1). Failing-tick tests in the Notification, Safety,
+  Approval, DeploymentMetrics, SyntheticData and ProcessScheduler suites; all
+  eight fail with the service changes reverted.
+- Not verified here: the day-long run on the lab PC without `NODE_OPTIONS`.
+  `~/.local/bin/neodem-dev-up` is outside the repo and still sets it.
+- Out of scope, seen on the way: the server runs Express 4.22 with the v5
+  types, so an `async` route handler that rejects outside its own `try` is an
+  unhandled rejection too, not a 500. The process handler now logs it (and in
+  production exits, as before this task).
