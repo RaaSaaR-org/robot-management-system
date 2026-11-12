@@ -1271,9 +1271,16 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
     // Optional exact chunk/file coordinates from the episodes API's
     // videoWindows (v3.0 multi-file chunks, see #179); fall back to the
     // floor(ep / chunks_size) guess when absent.
-    const info = (typeof dataset.infoJson === 'string'
-      ? JSON.parse(dataset.infoJson as string)
-      : dataset.infoJson) as EpisodePathInfo | null;
+    // An unreadable infoJson must not cost the video: the helper then goes by
+    // the LeRobot default of 1000, which is what this route always assumed.
+    let info: EpisodePathInfo | null = null;
+    try {
+      info = (typeof dataset.infoJson === 'string'
+        ? JSON.parse(dataset.infoJson as string)
+        : dataset.infoJson) as EpisodePathInfo | null;
+    } catch {
+      info = null;
+    }
     const episodeChunk = episodeChunkOf(info, episodeIndex);
     const chunkQ = parseInt(String(req.query.chunk ?? ''), 10);
     const fileQ = parseInt(String(req.query.file ?? ''), 10);

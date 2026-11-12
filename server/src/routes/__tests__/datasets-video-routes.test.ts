@@ -133,6 +133,16 @@ describe('GET /datasets/:id/episodes/:index/video/:camera from RustFS', () => {
     expect((res.body as Buffer).toString()).toBe('0123456789');
   });
 
+  it('still streams when the stored infoJson is not valid JSON', async () => {
+    datasets.get.mockResolvedValue({ ...V3, lerobotVersion: 'v2.1', infoJson: '{not json' });
+    storage.objects['ds-pusht/videos/chunk-000/observation.images.top/episode_000005.mp4'] = VIDEO;
+
+    const res = await binary(request(app()).get('/api/datasets/ds-pusht/episodes/5/video/top'));
+
+    expect(res.status).toBe(200);
+    expect((res.body as Buffer).toString()).toBe('0123456789');
+  });
+
   it('refuses a camera key that is not one path segment', async () => {
     datasets.get.mockResolvedValue(V3);
     const res = await request(app()).get('/api/datasets/ds-pusht/episodes/0/video/x%2f..%2f..');
