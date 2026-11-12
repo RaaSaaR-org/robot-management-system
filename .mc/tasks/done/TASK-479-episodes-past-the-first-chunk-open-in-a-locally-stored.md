@@ -3,7 +3,7 @@ id: "TASK-479"
 aliases: []
 title: "Episodes past the first chunk open in a locally stored dataset"
 slug: "episodes-past-the-first-chunk-open-in-a-locally-stored"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
