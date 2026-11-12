@@ -2180,7 +2180,7 @@ export class DatasetService extends EventEmitter {
    * The joint groups of the dataset's state and action vectors, read from its
    * `meta/modality.json` (GR00T-style datasets). `modality` is null when the
    * dataset has no such file — most do not, and the caller falls back to the
-   * feature `names` in `info.json`.
+   * feature `names` in `info.json`. A view answers with its root's groups.
    *
    * @throws DatasetStoreError when the object store did not answer
    */
@@ -2189,7 +2189,18 @@ export class DatasetService extends EventEmitter {
     if (!dataset) {
       throw new Error(`Dataset not found: ${id}`);
     }
-    const tree = dataset.storagePath ? openDatasetTree(dataset.storagePath) : null;
+    // A view owns no bytes (`storagePath: ''`): its vectors are laid out as
+    // those of the dataset that holds the files, so that is where to read.
+    let source = dataset;
+    if (!dataset.storagePath) {
+      try {
+        const resolved = await datasetViewService.resolve(id);
+        if (resolved.isView) source = (await datasetRepository.findById(resolved.rootDatasetId)) ?? dataset;
+      } catch {
+        // A view whose chain does not resolve has no files to read groups from.
+      }
+    }
+    const tree = source.storagePath ? openDatasetTree(source.storagePath) : null;
     if (!tree || !(await tree.stat(MODALITY_PATH))) return { datasetId: id, modality: null };
     let parsed: unknown;
     try {
@@ -2198,7 +2209,7 @@ export class DatasetService extends EventEmitter {
       if (error instanceof DatasetStoreError) throw error;
       return { datasetId: id, modality: null };
     }
-    return { datasetId: id, modality: parseModality(parsed, dataset.infoJson) };
+    return { datasetId: id, modality: parseModality(parsed, source.infoJson) };
   }
 
   /**

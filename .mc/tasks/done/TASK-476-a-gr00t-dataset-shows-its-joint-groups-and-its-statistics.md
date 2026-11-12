@@ -71,6 +71,8 @@ statistics and a `MISSING_STATS` warning, and `GET /api/datasets/:id/stats` answ
   to them. `DatasetService.getModality` + `GET /api/datasets/:id/modality` read
   `meta/modality.json` through `openDatasetTree`, the same local-or-RustFS reader validation
   uses; `modality: null` when the file is absent, 503 when the store does not answer.
+  A view owns no files, so it answers with the groups of the dataset its chain resolves to —
+  the chart on a view's episode page is labelled like its parent's.
 - App: `JointChartPanel` takes `groups` and shows a joint-group switch; it opens on the group
   that moves most in the episode on screen (a standing G1's legs barely move) and keeps the
   viewer's choice across episodes. `DatasetStatsPanel` is new, below the episode grid.

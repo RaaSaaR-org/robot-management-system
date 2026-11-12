@@ -1326,6 +1326,37 @@ describe('a GR00T v2.1 dataset: aggregated stats and joint groups', () => {
     expect(modality!.state.find((g) => g.name === 'left_arm')).toEqual({ name: 'left_arm', start: 15, end: 22 });
   });
 
+  it('answers a view with the joint groups of the dataset that holds its bytes', async () => {
+    // A view's own storagePath is empty; the files are its root's.
+    const { datasetViewService } = await import('../DatasetViewService.js');
+    const resolve = vi.spyOn(datasetViewService, 'resolve').mockResolvedValue(
+      { rootDatasetId: 'root1', episodes: [], isView: true, depth: 1, viewChain: ['view1'] },
+    );
+    vi.mocked(datasetRepository.findById).mockImplementation(async (id: string) =>
+      (id === 'view1'
+        ? makeDataset({ id: 'view1', storagePath: '', infoJson: info })
+        : makeDataset({ id: 'root1', storagePath: `${localRoot}/`, infoJson: info })) as never,
+    );
+    try {
+      const answer = await datasetService.getModality('view1');
+      expect(answer.datasetId).toBe('view1');
+      expect(answer.modality!.action.find((g) => g.name === 'right_hand')).toEqual({ name: 'right_hand', start: 36, end: 43 });
+    } finally {
+      resolve.mockRestore();
+    }
+  });
+
+  it('answers modality=null for a view whose chain cannot be resolved', async () => {
+    const { datasetViewService } = await import('../DatasetViewService.js');
+    const resolve = vi.spyOn(datasetViewService, 'resolve').mockRejectedValue(new Error('View selects no episodes'));
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset({ id: 'view1', storagePath: '' }));
+    try {
+      expect(await datasetService.getModality('view1')).toEqual({ datasetId: 'view1', modality: null });
+    } finally {
+      resolve.mockRestore();
+    }
+  });
+
   it('answers modality=null for a dataset without modality.json', async () => {
     serveFromRustFs([]);
     vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
