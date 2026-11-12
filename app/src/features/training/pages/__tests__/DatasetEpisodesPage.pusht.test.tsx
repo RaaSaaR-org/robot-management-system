@@ -16,6 +16,9 @@ const { trainingApiMock, datasetViewsApiMock, listRewards } = vi.hoisted(() => (
     getDataset: vi.fn(),
     getEpisodes: vi.fn(),
     getEpisodeFrames: vi.fn(),
+    // Joint groups and statistics (TASK-476): none unless a test says so.
+    getDatasetModality: vi.fn(async () => null),
+    getDatasetStats: vi.fn(async () => ({ datasetId: "ds", hasStats: false })),
     getAnnotations: vi.fn(),
     getEpisodeVideoUrl: vi.fn(() => 'about:blank'),
     flagEpisode: vi.fn(),

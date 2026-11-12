@@ -253,6 +253,15 @@ export const handlers = [
     return HttpResponse.json({ episodes: DEMO_EPISODES });
   }),
 
+  // The demo dataset names its joints in info.json and ships no statistics (TASK-476).
+  http.get('/api/datasets/:id/modality', ({ params }) => {
+    return HttpResponse.json({ datasetId: params.id, modality: null });
+  }),
+
+  http.get('/api/datasets/:id/stats', ({ params }) => {
+    return HttpResponse.json({ datasetId: params.id, hasStats: false });
+  }),
+
   http.get('/api/datasets/:id/episodes/:index/frames', ({ params }) => {
     const ep = DEMO_EPISODES.find((e) => e.index === Number(params.index)) ?? DEMO_EPISODES[0];
     const frames = Array.from({ length: ep.frameCount }, (_, i) => ({

@@ -1,16 +1,17 @@
 /**
  * @file TrajectoryPanels.tsx
- * @description Joint trajectory chart (state solid, action dashed) and the reward-model progress curve
+ * @description Joint trajectory chart (state solid, action dashed; one joint group at a time when
+ *              the dataset names its groups) and the reward-model progress curve
  * @feature training
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Activity } from 'lucide-react';
-import { EmptyState, ErrorState, Panel, SkeletonText, StatusTag, chartColors, chartSeriesColor, chartTheme } from '@/shared/components/ui';
+import { EmptyState, ErrorState, Panel, SegmentedControl, SkeletonText, StatusTag, chartColors, chartSeriesColor, chartTheme } from '@/shared/components/ui';
 import type { EpisodeReward } from '@/features/evaluation/types/evaluation.types';
-import type { FrameData } from '../../types';
-import { scoreTone } from './episodeFormat';
+import type { ChannelGroup, FrameData } from '../../types';
+import { groupLabel, mostActiveGroup, scoreTone } from './episodeFormat';
 
 /**
  * The size a chart assumes before its container is measured. Recharts' default
@@ -22,6 +23,12 @@ export const CHART_INITIAL_SIZE = { width: 1, height: 1 } as const;
 export interface JointChartPanelProps {
   frames: FrameData[];
   jointNames: string[];
+  /**
+   * Joint groups of the vector (`meta/modality.json`). When given, the chart
+   * draws one group at a time and offers the others, instead of every channel
+   * at once — a G1 vector is 43 wide.
+   */
+  groups?: ChannelGroup[];
   isLoading: boolean;
   currentTime: number;
   /** Why the frames could not be loaded; shown instead of the chart. */
@@ -31,19 +38,35 @@ export interface JointChartPanelProps {
 
 const tsFormat = (v: number) => v.toFixed(1);
 const labelFormat = (v: unknown) => `t = ${Number(v).toFixed(2)}s`;
+/** Past the palette's six colours a series repeats one; it is drawn fainter so the two stay apart. */
+const seriesOpacity = (k: number) => (k < chartColors.series.length ? 1 : 0.5);
 
-export function JointChartPanel({ frames, jointNames, isLoading, currentTime, error, onRetry }: JointChartPanelProps) {
+export function JointChartPanel({ frames, jointNames, groups, isLoading, currentTime, error, onRetry }: JointChartPanelProps) {
+  // The viewer's choice, kept across episodes; until they make one, the group
+  // that moves most in the episode on screen.
+  const [pickedGroup, setPickedGroup] = useState<string | null>(null);
+  const autoGroup = useMemo(() => (groups?.length ? mostActiveGroup(groups, frames) : null), [groups, frames]);
+  const activeGroup = groups?.length
+    ? (groups.find((g) => g.name === pickedGroup) ?? groups.find((g) => g.name === autoGroup) ?? groups[0]!)
+    : null;
+
+  /** The channels on the chart: the active group's, or all of them. */
+  const channels = useMemo(() => {
+    const all = jointNames.map((name, index) => ({ name, index }));
+    return activeGroup ? all.slice(activeGroup.start, activeGroup.end) : all;
+  }, [jointNames, activeGroup]);
+
   const data = useMemo(
     () =>
       frames.map((frame) => {
         const point: Record<string, number> = { timestamp: frame.timestamp };
-        jointNames.forEach((name, i) => {
-          point[`action_${name}`] = frame.action[i] ?? 0;
-          point[`obs_${name}`] = frame.observationState[i] ?? 0;
-        });
+        for (const { name, index } of channels) {
+          point[`action_${name}`] = frame.action[index] ?? 0;
+          point[`obs_${name}`] = frame.observationState[index] ?? 0;
+        }
         return point;
       }),
-    [frames, jointNames],
+    [frames, channels],
   );
 
   return (
@@ -62,6 +85,16 @@ export function JointChartPanel({ frames, jointNames, isLoading, currentTime, er
           <EmptyState size="sm" icon={<Activity />} title="No trajectory data for this episode" />
         ) : (
           <>
+            {groups && activeGroup && (
+              <SegmentedControl
+                label="Joint group"
+                size="sm"
+                className="mb-3"
+                options={groups.map((g) => ({ value: g.name, label: groupLabel(g.name), title: `Channels ${g.start}–${g.end - 1}` }))}
+                value={activeGroup.name}
+                onChange={setPickedGroup}
+              />
+            )}
             <div className="h-[200px] sm:h-[280px]">
               <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_SIZE}>
                 <LineChart data={data}>
@@ -69,20 +102,20 @@ export function JointChartPanel({ frames, jointNames, isLoading, currentTime, er
                   <XAxis dataKey="timestamp" type="number" domain={['dataMin', 'dataMax']} tickFormatter={tsFormat} {...chartTheme.xAxis} />
                   <YAxis {...chartTheme.yAxis} width={40} />
                   <Tooltip {...chartTheme.tooltip} labelFormatter={labelFormat} />
-                  {jointNames.map((name, i) => (
-                    <Line key={`obs_${name}`} type="monotone" dataKey={`obs_${name}`} stroke={chartSeriesColor(i)} dot={false} strokeWidth={1.5} name={`state:${name}`} isAnimationActive={false} />
+                  {channels.map(({ name }, k) => (
+                    <Line key={`obs_${name}`} type="monotone" dataKey={`obs_${name}`} stroke={chartSeriesColor(k)} strokeOpacity={seriesOpacity(k)} dot={false} strokeWidth={1.5} name={`state:${name}`} isAnimationActive={false} />
                   ))}
-                  {jointNames.map((name, i) => (
-                    <Line key={`action_${name}`} type="monotone" dataKey={`action_${name}`} stroke={chartSeriesColor(i)} dot={false} strokeWidth={1} strokeDasharray="4 2" name={`action:${name}`} isAnimationActive={false} />
+                  {channels.map(({ name }, k) => (
+                    <Line key={`action_${name}`} type="monotone" dataKey={`action_${name}`} stroke={chartSeriesColor(k)} strokeOpacity={seriesOpacity(k)} dot={false} strokeWidth={1} strokeDasharray="4 2" name={`action:${name}`} isAnimationActive={false} />
                   ))}
                   {currentTime > 0 && <ReferenceLine x={currentTime} stroke={chartColors.primary} strokeWidth={1.5} />}
                 </LineChart>
               </ResponsiveContainer>
             </div>
-            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
-              {jointNames.map((name, i) => (
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1" data-testid="joint-chart-legend">
+              {channels.map(({ name }, k) => (
                 <span key={name} className="flex items-center gap-1.5 text-xs text-ink-tertiary">
-                  <span className="inline-block h-0.5 w-3 rounded-full" style={{ backgroundColor: chartSeriesColor(i) }} />
+                  <span className="inline-block h-0.5 w-3 rounded-full" style={{ backgroundColor: chartSeriesColor(k), opacity: seriesOpacity(k) }} />
                   {name}
                 </span>
               ))}

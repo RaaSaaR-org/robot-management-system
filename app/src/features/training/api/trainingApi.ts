@@ -24,6 +24,8 @@ import type {
   EpisodeMeta,
   EpisodeVideoWindow,
   FrameData,
+  DatasetModality,
+  DatasetStatsResponse,
   CurationResult,
   CurationSuggestResponse,
   EpisodeAnnotation,
@@ -62,6 +64,8 @@ const ENDPOINTS = {
 
   // Episodes
   datasetEpisodes: (id: string) => `/datasets/${id}/episodes`,
+  datasetStats: (id: string) => `/datasets/${id}/stats`,
+  datasetModality: (id: string) => `/datasets/${id}/modality`,
   datasetEpisodeFrames: (id: string, index: number) => `/datasets/${id}/episodes/${index}/frames`,
   datasetEpisodeFlag: (id: string, index: number) => `/datasets/${id}/episodes/${index}/flag`,
 
@@ -226,6 +230,24 @@ export const trainingApi = {
       ENDPOINTS.datasetEpisodes(datasetId)
     );
     return response.data.episodes;
+  },
+
+  /**
+   * Dataset-wide statistics per feature. `hasStats` is false for a dataset
+   * that ships neither `stats.json` nor per-episode statistics.
+   */
+  async getDatasetStats(datasetId: string): Promise<DatasetStatsResponse> {
+    const response = await apiClient.get<DatasetStatsResponse>(ENDPOINTS.datasetStats(datasetId));
+    return response.data;
+  },
+
+  /**
+   * The joint groups of the dataset's state and action vectors, or null for a
+   * dataset without `meta/modality.json` (most datasets).
+   */
+  async getDatasetModality(datasetId: string): Promise<DatasetModality | null> {
+    const response = await apiClient.get<{ modality: DatasetModality | null }>(ENDPOINTS.datasetModality(datasetId));
+    return response.data.modality ?? null;
   },
 
   /**

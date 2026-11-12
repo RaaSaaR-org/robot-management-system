@@ -37,6 +37,7 @@
  */
 
 import { DatasetStoreError } from './DatasetTree.js';
+import { EPISODE_STATS_PATH, aggregateEpisodeStats } from './datasetMeta.js';
 import type { DatasetTree, TreeEntry } from './DatasetTree.js';
 import type { DatasetImportMode } from '../../types/vla.types.js';
 
@@ -864,13 +865,24 @@ export async function validateDatasetStructure(
   }
 
   // ---- stats.json, still optional -----------------------------------------
+  // v2.1 writes one stats row per episode (`meta/episodes_stats.jsonl`) and no
+  // `stats.json`; the dataset-wide numbers are an aggregation away (TASK-476).
   const statsEntry = await tree.stat('meta/stats.json');
+  const episodeStatsEntry = statsEntry ? null : await tree.stat(EPISODE_STATS_PATH);
   if (statsEntry) {
     report.files.push({ path: 'meta/stats.json', size: statsEntry.size, kind: 'meta' });
     try {
       report.stats = JSON.parse((await tree.read('meta/stats.json')).toString()) as Record<string, unknown>;
     } catch {
       warn('BAD_STATS', 'stats.json exists but could not be parsed');
+    }
+  } else if (episodeStatsEntry) {
+    report.files.push({ path: EPISODE_STATS_PATH, size: episodeStatsEntry.size, kind: 'meta' });
+    const aggregated = aggregateEpisodeStats((await tree.read(EPISODE_STATS_PATH)).toString());
+    if (Object.keys(aggregated.stats).length > 0) {
+      report.stats = aggregated.stats;
+    } else {
+      warn('BAD_STATS', `${EPISODE_STATS_PATH} exists but holds no usable per-episode statistics`);
     }
   } else {
     warn('MISSING_STATS', 'Missing stats.json — normalization statistics are not available');

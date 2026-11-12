@@ -519,8 +519,25 @@ export interface ComputeStatsJobPayload {
 export interface DatasetStatsResponse {
   datasetId: string;
   hasStats: boolean;
-  stats?: LeRobotStatsV3;
+  /**
+   * Keyed by feature (`observation.state`, `action`, …) as `meta/stats.json`
+   * stores it. Rows written by the older registration scripts are keyed
+   * `observation` / `action` instead.
+   */
+  stats?: Record<string, unknown>;
   computedAt?: string;
+}
+
+/**
+ * Joint groups of a dataset's state and action vectors (`meta/modality.json`).
+ * `modality` is null for a dataset that has no such file.
+ */
+export interface DatasetModalityResponse {
+  datasetId: string;
+  modality: {
+    state: { name: string; start: number; end: number }[];
+    action: { name: string; start: number; end: number }[];
+  } | null;
 }
 
 // ============================================================================

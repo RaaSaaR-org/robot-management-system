@@ -253,7 +253,8 @@ logout.
 | DELETE | `/:id` | Delete dataset |
 | POST | `/:id/upload/initiate` | Get presigned upload URL |
 | POST | `/:id/upload/complete` | Mark upload done, start validation |
-| GET | `/:id/stats` | Normalization stats |
+| GET | `/:id/stats` | Normalization stats per feature (`stats.json`, or aggregated from a v2.1 `episodes_stats.jsonl`) |
+| GET | `/:id/modality` | Joint groups of the state/action vectors from `meta/modality.json`; `modality: null` when absent |
 | POST | `/:id/compute-stats` | Trigger stats computation |
 | GET | `/:id/progress` | Validation progress |
 | GET | `/:id/quality` | Quality report |

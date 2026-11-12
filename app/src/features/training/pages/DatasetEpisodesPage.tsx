@@ -37,7 +37,8 @@ import { JointChartPanel, RewardCurvePanel } from '../components/datasets/Trajec
 import { AnnotationsPanel } from '../components/datasets/AnnotationsPanel';
 import { formatDuration } from '../components/datasets/datasetFormat';
 import { formatLerobotVersion, formatRepoAtRevision } from '../components/datasets/importFormat';
-import { cameraKeys, featureNames } from '../components/datasets/episodeFormat';
+import { DatasetStatsPanel } from '../components/datasets/DatasetStatsPanel';
+import { cameraKeys, channelLabels, featureNames } from '../components/datasets/episodeFormat';
 import { useDatasetViews } from '../hooks/useDatasetViews';
 import { useTrainingJobs } from '../hooks/useTrainingJobs';
 import { isDatasetView } from '../types';
@@ -46,9 +47,11 @@ import type {
   CurationResult,
   CurationSuggestion,
   Dataset,
+  DatasetModality,
   DatasetSelection,
   EpisodeAnnotation,
   EpisodeMeta,
+  FeatureStats,
   FrameData,
   SubmitSimRlJobInput,
   SubmitTrainingJobInput,
@@ -98,6 +101,11 @@ export function DatasetEpisodesPage() {
   const [isPushOpen, setIsPushOpen] = useState(false);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [modality, setModality] = useState<DatasetModality | null>(null);
+  // The answer and which dataset it is for: until the two agree the panel is
+  // loading, so it never flashes "no statistics" before the request has left.
+  const [statsAnswer, setStatsAnswer] =
+    useState<{ datasetId: string; stats: Record<string, FeatureStats> | null } | null>(null);
 
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const { submitJob } = useTrainingJobs();
@@ -110,12 +118,28 @@ export function DatasetEpisodesPage() {
     return cameraKeys(features);
   }, [dataset]);
 
-  const jointNames = useMemo(() => {
-    const action = (dataset?.infoJson?.features as Record<string, { names?: unknown }> | undefined)?.['action'];
+  // Channel names out of info.json, per vector.
+  const infoNames = useMemo(() => {
+    const features = dataset?.infoJson?.features as Record<string, { names?: unknown }> | undefined;
     // names is a flat array, a nested array (Unitree) or an object of arrays (pusht, xarm)
-    const flat = featureNames(action?.names);
-    return flat.length ? flat.map((n) => n.replace('.pos', '')) : DEFAULT_JOINTS;
+    const of = (key: string) => featureNames(features?.[key]?.names).map((n) => n.replace('.pos', ''));
+    return { state: of('observation.state'), action: of('action') };
   }, [dataset]);
+
+  // GR00T-style datasets put one placeholder name on a 43-wide vector and keep
+  // the real layout in meta/modality.json (TASK-476): label by group and index.
+  const jointGroups = useMemo(
+    () => (modality?.action.length ? modality.action : modality?.state) ?? [],
+    [modality],
+  );
+  const jointNames = useMemo(() => {
+    if (jointGroups.length > 0) {
+      const shape = (dataset?.infoJson?.features as Record<string, { shape?: unknown }> | undefined)?.['action']?.shape;
+      const declared = Array.isArray(shape) && typeof shape[0] === 'number' ? shape[0] : 0;
+      return channelLabels(jointGroups, Math.max(declared, ...jointGroups.map((g) => g.end)));
+    }
+    return infoNames.action.length ? infoNames.action : DEFAULT_JOINTS;
+  }, [dataset, jointGroups, infoNames]);
 
   const primaryCamera = cameraNames[0];
   const selectedMeta = useMemo(() => episodes.find((e) => e.index === selectedEpisode) ?? null, [episodes, selectedEpisode]);
@@ -131,6 +155,30 @@ export function DatasetEpisodesPage() {
       .then(setDataset)
       .catch((err) => { setDataset(null); setDatasetError(errorMessage(err, 'unknown error')); });
   }, [datasetId, reloadKey]);
+
+  // Joint groups and dataset-wide statistics (TASK-476). Both are optional
+  // extras of the page: a dataset without them, or a store that will not
+  // answer, leaves the chart on its info.json names and the panel empty.
+  const loadedId = dataset?.id;
+  const loadedIsView = !!dataset && isDatasetView(dataset);
+  useEffect(() => {
+    setModality(null);
+    setStatsAnswer(null);
+    if (!loadedId) return;
+    let cancelled = false;
+    trainingApi.getDatasetModality(loadedId)
+      .then((m) => { if (!cancelled) setModality(m); })
+      .catch(() => undefined);
+    // A view is a selection of its parent's episodes; the parent's statistics
+    // are not the view's, so none are shown for it.
+    if (!loadedIsView) {
+      trainingApi.getDatasetStats(loadedId)
+        .then((s) => (s.hasStats && s.stats ? s.stats : null))
+        .catch(() => null)
+        .then((stats) => { if (!cancelled) setStatsAnswer({ datasetId: loadedId, stats }); });
+    }
+    return () => { cancelled = true; };
+  }, [loadedId, loadedIsView]);
 
   const { views, isLoading: viewsLoading, error: viewsError, createView, deleteView, materializeView } =
     useDatasetViews(datasetId);
@@ -600,6 +648,7 @@ export function DatasetEpisodesPage() {
               <JointChartPanel
                 frames={frames}
                 jointNames={jointNames}
+                groups={jointGroups}
                 isLoading={framesLoading}
                 currentTime={currentTime}
                 error={framesError}
@@ -624,6 +673,15 @@ export function DatasetEpisodesPage() {
           )}
         </div>
       </div>
+
+      {dataset && !isView && (
+        <DatasetStatsPanel
+          stats={statsAnswer?.datasetId === dataset.id ? statsAnswer.stats : null}
+          isLoading={statsAnswer?.datasetId !== dataset.id}
+          modality={modality}
+          names={infoNames}
+        />
+      )}
 
       {dataset && (
         <Panel>

@@ -1,0 +1,175 @@
+{
+    "codebase_version": "v2.1",
+    "robot_type": "unitree_g1",
+    "total_episodes": 402,
+    "total_frames": 171625,
+    "total_tasks": 1,
+    "total_videos": 402,
+    "total_chunks": 1,
+    "chunks_size": 1000,
+    "fps": 30,
+    "splits": {
+        "train": "0:402"
+    },
+    "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+    "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
+    "features": {
+        "observation.state": {
+            "dtype": "float32",
+            "shape": [
+                43
+            ],
+            "names": [
+                "observation_to_policy"
+            ]
+        },
+        "action": {
+            "dtype": "float32",
+            "shape": [
+                43
+            ],
+            "names": [
+                "action_from_policy"
+            ]
+        },
+        "action.effort_left_leg": {
+            "dtype": "float32",
+            "shape": [
+                6
+            ],
+            "names": [
+                "action_from_policy"
+            ]
+        },
+        "action.effort_right_leg": {
+            "dtype": "float32",
+            "shape": [
+                6
+            ],
+            "names": [
+                "action_from_policy"
+            ]
+        },
+        "action.effort_waist": {
+            "dtype": "float32",
+            "shape": [
+                3
+            ],
+            "names": [
+                "action_from_policy"
+            ]
+        },
+        "action.effort_left_arm": {
+            "dtype": "float32",
+            "shape": [
+                7
+            ],
+            "names": [
+                "action_from_policy"
+            ]
+        },
+        "action.effort_right_arm": {
+            "dtype": "float32",
+            "shape": [
+                7
+            ],
+            "names": [
+                "action_from_policy"
+            ]
+        },
+        "action.effort_left_hand": {
+            "dtype": "float32",
+            "shape": [
+                7
+            ],
+            "names": [
+                "action_from_policy"
+            ]
+        },
+        "action.effort_right_hand": {
+            "dtype": "float32",
+            "shape": [
+                7
+            ],
+            "names": [
+                "action_from_policy"
+            ]
+        },
+        "action.navigate_command": {
+            "dtype": "float32",
+            "shape": [
+                3
+            ],
+            "names": [
+                "action_from_policy"
+            ]
+        },
+        "action.base_height_command": {
+            "dtype": "float32",
+            "shape": [
+                1
+            ],
+            "names": [
+                "action_from_policy"
+            ]
+        },
+        "observation.images.ego_view": {
+            "dtype": "video",
+            "shape": [
+                480,
+                640,
+                3
+            ],
+            "names": [
+                "height",
+                "width",
+                "channels"
+            ],
+            "info": {
+                "video.height": 480,
+                "video.width": 640,
+                "video.codec": "av1",
+                "video.pix_fmt": "yuv420p",
+                "video.is_depth_map": false,
+                "video.fps": 30,
+                "video.channels": 3,
+                "has_audio": false
+            }
+        },
+        "timestamp": {
+            "dtype": "float32",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "frame_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "episode_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "task_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        }
+    }
+}
