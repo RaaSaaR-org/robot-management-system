@@ -3,7 +3,7 @@ id: "TASK-478"
 aliases: []
 title: "An episode video plays when sign-in is on, and the player says when the browser cannot decode it"
 slug: "an-episode-video-plays-when-sign-in-is-on-and-the-player"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
