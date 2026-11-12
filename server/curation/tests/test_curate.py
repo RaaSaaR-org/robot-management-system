@@ -424,3 +424,147 @@ def test_delete_all_episodes_rejected(tmp_path: Path) -> None:
     )
     assert code == 1
     assert result["code"] == "EMPTY_RESULT"
+
+
+# ---------------------------------------------------------------------------
+# more than one chunk (TASK-479)
+# ---------------------------------------------------------------------------
+
+def rechunk(root: Path, chunks_size: int, *, move: bool = True) -> None:
+    """Declare `chunks_size` in info.json and (with `move`) put each episode's
+    parquet and videos in chunk `episode // chunks_size`, as LeRobot v2.1 and
+    the v3.0 converter do. `move=False` leaves everything in chunk-000 — the
+    tree an older converter wrote."""
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    total = info["total_episodes"]
+    info["chunks_size"] = chunks_size
+    info["total_chunks"] = (total - 1) // chunks_size + 1
+    info_path.write_text(json.dumps(info))
+    if not move:
+        return
+    for ep in range(total):
+        chunk = f"chunk-{ep // chunks_size:03d}"
+        if chunk == "chunk-000":
+            continue
+        for old in list(root.glob(f"**/chunk-000/**/episode_{ep:06d}.*")):
+            new = root / Path(*[chunk if part == "chunk-000" else part for part in old.relative_to(root).parts])
+            new.parent.mkdir(parents=True, exist_ok=True)
+            old.rename(new)
+
+
+def data_files(root: Path) -> list[str]:
+    return sorted(str(p.relative_to(root / "data")) for p in (root / "data").rglob("*.parquet"))
+
+
+def test_rechunk_fixture_leaves_the_first_chunk(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    make_dataset(src, episodes=5, frames=8)
+    rechunk(src, 2)
+    assert data_files(src) == [
+        "chunk-000/episode_000000.parquet", "chunk-000/episode_000001.parquet",
+        "chunk-001/episode_000002.parquet", "chunk-001/episode_000003.parquet",
+        "chunk-002/episode_000004.parquet",
+    ]
+
+
+def test_delete_reads_and_writes_every_chunk(tmp_path: Path) -> None:
+    # Episodes 2..4 are in chunk-001 and chunk-002; curate.py read every
+    # episode from chunk-000 and failed on the first one that is not there.
+    src = tmp_path / "src"
+    make_dataset(src, episodes=5, frames=8)  # lengths 8, 9, 10, 11, 12
+    rechunk(src, 2)
+    before = snapshot(src)
+
+    out = tmp_path / "out"
+    code, summary = run_curate(
+        "delete", "--dataset", str(src), "--output", str(out), "--episodes", "1",
+    )
+    assert code == 0 and summary["ok"] is True, summary
+    assert episode_lengths(out) == [8, 10, 11, 12]
+
+    # The output declares chunks_size 2, so it is written two episodes a chunk.
+    assert data_files(out) == [
+        "chunk-000/episode_000000.parquet", "chunk-000/episode_000001.parquet",
+        "chunk-001/episode_000002.parquet", "chunk-001/episode_000003.parquet",
+    ]
+    info = json.loads((out / "meta" / "info.json").read_text())
+    assert info["chunks_size"] == 2
+    assert info["total_chunks"] == 2
+    assert info["total_episodes"] == 4
+
+    # Each surviving episode is the source episode it came from, renumbered.
+    index = []
+    for new_ep, old_ep in enumerate([0, 2, 3, 4]):
+        got = pq.read_table(out / "data" / f"chunk-{new_ep // 2:03d}" / f"episode_{new_ep:06d}.parquet")
+        ref = pq.read_table(src / "data" / f"chunk-{old_ep // 2:03d}" / f"episode_{old_ep:06d}.parquet")
+        assert got.column("action").to_pylist() == ref.column("action").to_pylist()
+        assert set(got.column("episode_index").to_pylist()) == {new_ep}
+        index += got.column("index").to_pylist()
+    assert index == list(range(8 + 10 + 11 + 12))
+
+    # Stats cover every chunk of the output, not only chunk-000.
+    stats = json.loads((out / "meta" / "stats.json").read_text())
+    assert stats["episode_index"]["max"] == [3]
+    assert stats["index"]["max"] == [40]
+
+    assert snapshot(src) == before
+
+
+@requires_ffmpeg
+def test_trim_and_delete_move_videos_across_chunks(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    make_dataset(src, episodes=4, frames=8, cameras="top")  # lengths 8, 9, 10, 11
+    rechunk(src, 2)
+    key = "observation.images.top"
+    assert (src / "videos" / "chunk-001" / key / "episode_000003.mp4").exists()
+
+    trimmed = tmp_path / "trimmed"
+    code, summary = run_curate(
+        "trim", "--dataset", str(src), "--output", str(trimmed),
+        "--episode", "3", "--start", "2", "--end", "7",
+    )
+    assert code == 0 and summary["ok"] is True, summary
+    assert episode_lengths(trimmed) == [8, 9, 10, 5]
+    assert count_video_frames(trimmed / "videos" / "chunk-001" / key / "episode_000003.mp4") == 5
+    assert count_video_frames(trimmed / "videos" / "chunk-001" / key / "episode_000002.mp4") == 10
+
+    out = tmp_path / "out"
+    code, summary = run_curate(
+        "delete", "--dataset", str(src), "--output", str(out), "--episodes", "0,1",
+    )
+    assert code == 0 and summary["ok"] is True, summary
+    # Source episodes 2 and 3 (chunk-001) become 0 and 1 (chunk-000).
+    assert count_video_frames(out / "videos" / "chunk-000" / key / "episode_000000.mp4") == 10
+    assert count_video_frames(out / "videos" / "chunk-000" / key / "episode_000001.mp4") == 11
+    assert not (out / "videos" / "chunk-001").exists()
+    assert summary["total_videos"] == 2
+
+
+def test_suggest_reads_episodes_past_the_first_chunk(tmp_path: Path) -> None:
+    root = tmp_path / "ds"
+    write_manual_dataset(root, [ramp(30, 3), ramp(30, 3), np.zeros((25, 3)), ramp(30, 3), ramp(5, 3)])
+    rechunk(root, 2)
+
+    code, result = run_curate("suggest", "--dataset", str(root))
+    assert code == 0 and result["ok"] is True, result
+    assert {s["episode"]: s["kind"] for s in result["suggestions"]} == {2: "delete", 4: "delete"}
+
+    code, result = run_curate("suggest", "--dataset", str(root), "--episode", "4")
+    assert code == 0
+    assert [s["episode"] for s in result["suggestions"]] == [4]
+
+
+def test_a_tree_kept_in_chunk_000_is_still_read(tmp_path: Path) -> None:
+    # An older v3.0 -> v2.1 view: chunks_size declared, every episode in chunk-000.
+    src = tmp_path / "src"
+    make_dataset(src, episodes=3, frames=8)
+    rechunk(src, 2, move=False)
+
+    out = tmp_path / "out"
+    code, summary = run_curate(
+        "delete", "--dataset", str(src), "--output", str(out), "--episodes", "0",
+    )
+    assert code == 0 and summary["ok"] is True, summary
+    assert episode_lengths(out) == [9, 10]
+    assert data_files(out) == ["chunk-000/episode_000000.parquet", "chunk-000/episode_000001.parquet"]

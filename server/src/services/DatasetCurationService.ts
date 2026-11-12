@@ -46,6 +46,7 @@ import { getRustFSClient, isRustFSInitialized } from '../storage/rustfs-client.j
 import { BUCKETS } from '../storage/model-storage.js';
 import { datasetService } from './DatasetService.js';
 import { DatasetViewError, resolveLocalView } from './lerobot/LocalDatasetView.js';
+import { episodeVideoCandidates, type EpisodePathInfo } from './lerobot/episodePaths.js';
 import {
   episodeCurationService,
   type CurationBackend,
@@ -599,19 +600,18 @@ export class DatasetCurationService {
     info: Record<string, unknown>,
     episode: number,
   ): Promise<string[]> {
-    const template = info.video_path as string | undefined;
     const features = (info.features ?? {}) as Record<string, { dtype?: string }>;
     const videoKey = Object.keys(features)
       .sort()
       .find((k) => features[k]?.dtype === 'video');
-    if (!template || !videoKey) return [];
+    if (!info.video_path || !videoKey) return [];
 
-    const rel = template
-      .replace('{episode_chunk:03d}', '000')
-      .replace('{video_key}', videoKey)
-      .replace('{episode_index:06d}', String(episode).padStart(6, '0'));
-    const videoPath = path.join(datasetDir, rel);
-    if (!existsSync(videoPath)) return [];
+    // The episode's own chunk directory, not always chunk-000 (TASK-479).
+    const root = path.resolve(datasetDir);
+    const videoPath = episodeVideoCandidates(info as EpisodePathInfo, videoKey, episode)
+      .map((rel) => path.resolve(root, rel))
+      .find((file) => file.startsWith(root + path.sep) && existsSync(file));
+    if (!videoPath) return [];
 
     const ffmpeg = process.env.CURATION_FFMPEG ?? 'ffmpeg';
     const tmp = await mkdtemp(path.join(os.tmpdir(), 'neodem-vlm-frames-'));
