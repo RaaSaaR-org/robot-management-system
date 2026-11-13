@@ -57,12 +57,16 @@ export class ReadCache<T> {
     if (hit !== undefined) return hit;
     const pending = this.inflight.get(key);
     if (pending) return pending;
-    const promise = load()
+    const promise: Promise<T> = load()
       .then((value) => {
-        this.set(key, value, weigh(value));
+        // A load that was invalidated while it ran still answers its callers,
+        // but what it read may describe files that are gone — it is not kept.
+        if (this.inflight.get(key) === promise) this.set(key, value, weigh(value));
         return value;
       })
-      .finally(() => this.inflight.delete(key));
+      .finally(() => {
+        if (this.inflight.get(key) === promise) this.inflight.delete(key);
+      });
     this.inflight.set(key, promise);
     return promise;
   }
@@ -85,9 +89,32 @@ export class ReadCache<T> {
     this.weight -= entry.weight;
   }
 
+  /**
+   * Drop every entry whose key starts with `prefix`, and disown the loads in
+   * flight under it so their results are not stored. Returns the entries dropped.
+   */
+  deletePrefix(prefix: string): number {
+    let dropped = 0;
+    for (const key of [...this.entries.keys()]) {
+      if (!key.startsWith(prefix)) continue;
+      this.delete(key);
+      dropped++;
+    }
+    for (const key of [...this.inflight.keys()]) {
+      if (key.startsWith(prefix)) this.inflight.delete(key);
+    }
+    return dropped;
+  }
+
   clear(): void {
     this.entries.clear();
+    this.inflight.clear();
     this.weight = 0;
+  }
+
+  /** Summed weight of what is cached, for the budget tests and the memory readout. */
+  get totalWeight(): number {
+    return this.weight;
   }
 
   get size(): number {

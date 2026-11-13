@@ -17,6 +17,8 @@ const storage = vi.hoisted(() => ({
   initialized: true,
   objects: {} as Record<string, Buffer>,
   ranges: [] as Array<{ start: number; end: number } | undefined>,
+  // `exists` calls: how often a video was looked for in storage.
+  lookups: 0,
 }));
 
 vi.mock('../../services/DatasetService.js', () => ({
@@ -27,6 +29,7 @@ vi.mock('../../services/DatasetService.js', () => ({
 vi.mock('../../storage/rustfs-client.js', () => {
   const client = {
     async exists(bucket: string, key: string) {
+      storage.lookups++;
       return bucket === 'training-datasets' && key in storage.objects;
     },
     async getMetadata(_bucket: string, key: string) {
@@ -45,6 +48,7 @@ vi.mock('../../storage/rustfs-client.js', () => {
 });
 
 import { datasetRoutes, parseByteRange, cameraFeatureKey } from '../datasets.routes.js';
+import { clearDatasetReadCaches, invalidateDatasetReads } from '../../services/lerobot/DatasetReadCache.js';
 
 const VIDEO = Buffer.from('0123456789');
 const V3 = { id: 'ds-pusht', storagePath: 'ds-pusht/', lerobotVersion: 'v3.0', huggingFaceRepoId: 'lerobot/pusht', sourceRevision: null };
@@ -64,6 +68,8 @@ const binary = (r: request.Test) =>
   });
 
 beforeEach(() => {
+  clearDatasetReadCaches();
+  storage.lookups = 0;
   storage.initialized = true;
   storage.objects = {};
   storage.ranges = [];
@@ -89,6 +95,25 @@ describe('GET /datasets/:id/episodes/:index/video/:camera from RustFS', () => {
     expect(res.headers.location).toBeUndefined();
     expect((res.body as Buffer).toString()).toBe('2345');
     expect(storage.ranges).toEqual([{ start: 2, end: 5 }]);
+  });
+
+  it('looks a video up once for all the ranges a player asks of it, and again after the dataset changes', async () => {
+    datasets.get.mockResolvedValue(V3);
+    storage.objects['ds-pusht/videos/observation.images.top/chunk-000/file-000.mp4'] = VIDEO;
+    const url = '/api/datasets/ds-pusht/episodes/3/video/top';
+
+    for (const range of ['bytes=0-3', 'bytes=4-7', 'bytes=8-9']) {
+      const res = await binary(request(app()).get(url).set('Range', range));
+      expect(res.status).toBe(206);
+    }
+    expect(storage.lookups).toBe(1);
+    expect(storage.ranges).toEqual([{ start: 0, end: 3 }, { start: 4, end: 7 }, { start: 8, end: 9 }]);
+
+    // Deleted or re-imported: the next request must not trust the old answer.
+    invalidateDatasetReads('ds-pusht');
+    delete storage.objects['ds-pusht/videos/observation.images.top/chunk-000/file-000.mp4'];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
+    expect((await request(app()).get(url)).status).toBe(404);
   });
 
   it('answers a request without Range with the whole file', async () => {
