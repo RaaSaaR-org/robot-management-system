@@ -55,7 +55,10 @@ const COLOR_OPTIONS: { value: PointCloudColorMode; label: string }[] = [
 ];
 
 export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps) {
-  const { frame: streamFrame, isConnected, lastUpdate } = usePointCloudStream(robotId, { enabled: true });
+  const { frame: streamFrame, isConnected, lastUpdate } = usePointCloudStream(robotId, {
+    // Nothing to scan without a connected agent (TASK-485).
+    enabled: robot.status !== 'offline',
+  });
   // A frame without points (the demo mocks answer the snapshot route with a
   // stub) is treated as no frame, so the panel shows its calm empty state.
   const frame =

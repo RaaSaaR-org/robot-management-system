@@ -439,7 +439,7 @@ function UnknownStateNotice({ reason }: { reason: string | null }) {
       titleTestId="agent-state-unknown-title"
       detail={
         <>
-          Start the robot agent to see live state — STOPP still sends. This is not &ldquo;E-Stop
+          Start the robot agent to see live state — Emergency stop still sends. This is not &ldquo;E-Stop
           clear&rdquo;: use the hardware E-Stop if it has to stop. This console could not ask the
           robot for its state{reason ? `: ${reason}` : '.'} Whether Agent Mode is on, what it is
           doing and whether its E-Stop is latched are all unknown; everything else on this page is

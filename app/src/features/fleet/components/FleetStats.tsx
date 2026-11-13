@@ -36,6 +36,7 @@ function alertHint(counts: Record<string, number>, total: number): string {
 export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
   const {
     totalRobots,
+    expectedRobots = 0,
     robotsByStatus,
     avgBatteryLevel,
     alertCounts,
@@ -45,16 +46,25 @@ export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
   const online = (robotsByStatus.online || 0) + (robotsByStatus.busy || 0);
   const busy = robotsByStatus.busy || 0;
   const critical = alertCounts.critical || 0;
+  // "1 / 4" with three robots that were never connected reads as three robots
+  // down. Online is measured against the robots that have an agent; the ones
+  // still awaited are named beside it (TASK-485).
+  const connectable = Math.max(0, totalRobots - expectedRobots);
 
   return (
     <StatRow columns={4} className={className}>
       <StatTile
         label="Robots online"
         value={online}
-        unit={`/ ${totalRobots}`}
+        unit={`/ ${connectable}`}
         tone={online > 0 ? 'live' : 'neutral'}
         icon={<Bot {...ICON} />}
-        hint="Live from robot agents"
+        hint={
+          expectedRobots > 0
+            ? `${expectedRobots} more expected, not connected yet`
+            : 'Live from robot agents'
+        }
+        data-testid="fleet-stat-online"
         isLoading={isLoading}
       />
       <StatTile

@@ -30,6 +30,7 @@ import { useTelemetryStream } from '../hooks/useTelemetryStream';
 import { useRobotsStore } from '../store/robotsStore';
 import { useTasksByRobotId } from '@/features/processes/hooks/useTasks';
 import { isRobotAvailable, robotProvisioning } from '../types/robots.types';
+import { robotTraits } from '../utils/robotTraits';
 
 // ============================================================================
 // TYPES
@@ -59,7 +60,11 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
     isConnected: isTelemetryConnected,
     lastUpdate: telemetryLastUpdate,
     connect: reconnectTelemetry,
-  } = useTelemetryStream(robotId);
+  } = useTelemetryStream(robotId, {
+    // Until the robot is known to have a connected agent there is nothing to
+    // ask for; an expected or offline robot stays quiet (TASK-485).
+    enabled: !!robot && robot.status !== 'offline',
+  });
   const robotTasks = useTasksByRobotId(robotId);
   // Both checks sit above the early returns so the hook order never changes.
   // `robots:command` folds into `canExecuteCommands` below — the one value the
@@ -164,6 +169,36 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
 
   const canExecuteCommands = canCommand && isRobotAvailable(robot) && !isCommandLoading;
   const provisioning = robotProvisioning(robot);
+  // What this robot can be asked at all (TASK-485): an expected robot has no
+  // agent to stop, charge or send home, and a mains-powered arm has no dock.
+  const traits = robotTraits(robot, telemetry);
+  const moreActions = [
+    ...(traits.hasAgent && traits.canCharge
+      ? [{
+          label: 'Send to charge',
+          icon: <BatteryCharging className={ICON} strokeWidth={1.75} />,
+          disabled: !canExecuteCommands,
+          onSelect: () => void handleSendToCharge(),
+        }]
+      : []),
+    ...(traits.hasAgent
+      ? [{
+          label: 'Return home',
+          icon: <Home className={ICON} strokeWidth={1.75} />,
+          disabled: !canExecuteCommands,
+          onSelect: () => void handleReturnHome(),
+        }]
+      : []),
+    ...(canWrite
+      ? [{
+          label: 'Unregister',
+          icon: <Trash2 className={ICON} strokeWidth={1.75} />,
+          tone: 'danger' as const,
+          separatorBefore: traits.hasAgent,
+          onSelect: () => void handleUnregister(),
+        }]
+      : []),
+  ];
 
   return (
     <div className={cn('flex flex-col gap-6', className)}>
@@ -187,33 +222,9 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
             >
               Open control center
             </LinkButton>
-            <EmergencyStopButton robotId={robot.id} robotName={robot.name} />
-            <RowActions
-              label="More actions"
-              items={[
-                {
-                  label: 'Send to charge',
-                  icon: <BatteryCharging className={ICON} strokeWidth={1.75} />,
-                  disabled: !canExecuteCommands,
-                  onSelect: () => void handleSendToCharge(),
-                },
-                {
-                  label: 'Return home',
-                  icon: <Home className={ICON} strokeWidth={1.75} />,
-                  disabled: !canExecuteCommands,
-                  onSelect: () => void handleReturnHome(),
-                },
-                ...(canWrite
-                  ? [{
-                      label: 'Unregister',
-                      icon: <Trash2 className={ICON} strokeWidth={1.75} />,
-                      tone: 'danger' as const,
-                      separatorBefore: true,
-                      onSelect: () => void handleUnregister(),
-                    }]
-                  : []),
-              ]}
-            />
+            {/* No agent, nothing a stop could reach: the button would only fail. */}
+            {traits.hasAgent && <EmergencyStopButton robotId={robot.id} robotName={robot.name} />}
+            {moreActions.length > 0 && <RowActions label="More actions" items={moreActions} />}
           </>
         }
       />

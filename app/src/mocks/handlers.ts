@@ -121,6 +121,9 @@ export const handlers = [
     return HttpResponse.json({ commands: [], pagination: { page: 1, pageSize: 10, total: 0, totalPages: 0 } });
   }),
 
+  // TASK-485: the demo has no robot types to link a robot to.
+  http.get('/api/robots/:id/robot-type', () => HttpResponse.json({ robotType: null, linkedBy: null })),
+
   http.get('/api/robots/:id', ({ params }) => {
     const robot = DEMO_ROBOTS.find((r) => r.id === params.id);
     if (!robot) {

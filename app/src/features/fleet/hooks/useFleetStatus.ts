@@ -10,7 +10,7 @@ import { useMemo, useEffect } from 'react';
 import { useRobots } from '@/features/robots/hooks';
 import { useRobotsStore, selectHasFetched } from '@/features/robots/store';
 import { useAlerts } from '@/features/alerts/hooks';
-import type { RobotStatus } from '@/features/robots/types';
+import { robotProvisioning, type RobotStatus } from '@/features/robots/types';
 import type { AlertSeverity } from '@/features/alerts/types';
 import type { FleetStatus, RobotMapMarker } from '../types/fleet.types';
 
@@ -144,10 +144,17 @@ export function useFleetStatus(): UseFleetStatusReturn {
     ).length;
   }, [robots]);
 
+  // Robots listed before their agent ever connected: awaited, not offline.
+  const expectedRobots = useMemo(
+    () => robots.filter((robot) => robotProvisioning(robot) !== null).length,
+    [robots]
+  );
+
   // Build fleet status object
   const status: FleetStatus = useMemo(
     () => ({
       totalRobots: robots.length,
+      expectedRobots,
       robotsByStatus,
       avgBatteryLevel,
       alertCounts,
@@ -155,7 +162,7 @@ export function useFleetStatus(): UseFleetStatusReturn {
       activeTaskCount,
       robotsNeedingAttention,
     }),
-    [robots.length, robotsByStatus, avgBatteryLevel, alertCounts, unacknowledgedCount, activeTaskCount, robotsNeedingAttention]
+    [robots.length, expectedRobots, robotsByStatus, avgBatteryLevel, alertCounts, unacknowledgedCount, activeTaskCount, robotsNeedingAttention]
   );
 
   // Convert robots to map markers

@@ -21,6 +21,7 @@ const svc = vi.hoisted(() => {
     get: vi.fn(),
     reassociateRobotType: vi.fn(),
     createRobotConfiguration: vi.fn(),
+    deleteRobotConfiguration: vi.fn(),
     requestValidation: vi.fn(),
     auditDatasetAction: vi.fn(),
   };
@@ -32,6 +33,7 @@ vi.mock('../../services/DatasetService.js', () => ({
     get: svc.get,
     reassociateRobotType: svc.reassociateRobotType,
     createRobotConfiguration: svc.createRobotConfiguration,
+    deleteRobotConfiguration: svc.deleteRobotConfiguration,
     requestValidation: svc.requestValidation,
     auditDatasetAction: svc.auditDatasetAction,
     on: vi.fn(),
@@ -106,6 +108,51 @@ describe('POST /api/datasets/robot-types', () => {
       .send({ name: 'Unitree_G1', actionDim: 43, proprioceptionDim: 43 });
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('ROBOT_TYPE_EXISTS');
+  });
+});
+
+describe('DELETE /api/datasets/robot-types/:id (TASK-485)', () => {
+  it('answers the deleted type', async () => {
+    svc.deleteRobotConfiguration.mockResolvedValue({ id: 'rt-stale', name: 'Unitree_G1' });
+    const res = await request(createApp()).delete('/api/datasets/robot-types/rt-stale');
+    expect(res.status).toBe(200);
+    expect(res.body.robotType.name).toBe('Unitree_G1');
+    expect(svc.deleteRobotConfiguration).toHaveBeenCalledWith('rt-stale', null);
+  });
+
+  it('refuses a member: only an owner removes shared configuration', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      (req as unknown as { user: unknown }).user = { id: 'u1', role: 'member', authType: 'service' };
+      next();
+    });
+    app.use('/api/datasets', datasetRoutes);
+    const res = await request(app).delete('/api/datasets/robot-types/rt-stale');
+    expect(res.status).toBe(403);
+    expect(svc.deleteRobotConfiguration).not.toHaveBeenCalled();
+  });
+
+  it('passes a type in use through as 409 with what references it', async () => {
+    const error = Object.assign(
+      new svc.DatasetExpectationError('still in use by 1 dataset ("apples")', 409, 'ROBOT_TYPE_IN_USE'),
+      { references: { datasets: [{ id: 'd1', name: 'apples' }], embodiments: [], skills: [] } },
+    );
+    svc.deleteRobotConfiguration.mockRejectedValue(error);
+    const res = await request(createApp()).delete('/api/datasets/robot-types/rt-stale');
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      code: 'ROBOT_TYPE_IN_USE',
+      error: 'still in use by 1 dataset ("apples")',
+      references: { datasets: [{ id: 'd1', name: 'apples' }] },
+    });
+  });
+
+  it('passes a standard type and an unknown id through with their own status', async () => {
+    svc.deleteRobotConfiguration.mockRejectedValueOnce(new svc.DatasetExpectationError('standard', 409, 'ROBOT_TYPE_STANDARD'));
+    expect((await request(createApp()).delete('/api/datasets/robot-types/rt-std')).body.code).toBe('ROBOT_TYPE_STANDARD');
+    svc.deleteRobotConfiguration.mockRejectedValueOnce(new svc.DatasetExpectationError('gone', 404, 'ROBOT_TYPE_NOT_FOUND'));
+    expect((await request(createApp()).delete('/api/datasets/robot-types/nope')).status).toBe(404);
   });
 });
 

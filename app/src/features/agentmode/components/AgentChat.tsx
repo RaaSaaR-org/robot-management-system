@@ -295,7 +295,7 @@ export const AgentChat = memo(function AgentChat({
   };
 
   const placeholder = !robotId
-    ? 'Select a robot first…'
+    ? 'Choose a connected robot first…'
     : !enabled
       ? 'Agent Mode is off — turn it on to send commands'
       : estopActive
