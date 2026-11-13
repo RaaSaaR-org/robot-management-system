@@ -243,7 +243,7 @@ export function DropdownMenu({ trigger, items, align = 'end', label, className }
           >
             {items.map((item, index) => (
               <div key={item.key ?? (typeof item.label === 'string' ? item.label : index)} role="none">
-                {item.separatorBefore && index > 0 && <div role="separator" className="-mx-1 my-1 h-px bg-line-subtle" />}
+                {item.separatorBefore && index > 0 && <div role="separator" className="-mx-1 my-1.5 h-px bg-line" />}
                 <button
                   type="button"
                   role="menuitem"

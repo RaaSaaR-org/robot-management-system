@@ -480,7 +480,7 @@ A dev-only `/design-system` route renders every primitive in every state.
 - Focus-visible ring: 2px `--color-primary`, offset on the canvas. Icon-only
   buttons carry `aria-label`. Dialogs trap focus, close on Esc, return focus.
   Text contrast meets WCAG AA in both themes.
-- Safety controls (STOPP, Reset E-Stop, recovered-acknowledge) keep ≥44px
+- Safety controls (Emergency stop, Reset E-Stop, recovered-acknowledge) keep ≥44px
   coarse-pointer targets.
 
 ## 8. Testing a page in the browser

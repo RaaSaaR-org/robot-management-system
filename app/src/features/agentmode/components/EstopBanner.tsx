@@ -33,6 +33,7 @@ import type {
   AgentEstopStatus,
   AgentRecoveryState,
 } from '../types/agentmode.types';
+import { formatDateTime } from '@/shared/utils/format';
 
 export interface EstopBannerProps {
   /** Clear the latch. Wired to the store's `resetEstop` by the page. */
@@ -439,7 +440,7 @@ function UnknownStateNotice({ reason }: { reason: string | null }) {
       titleTestId="agent-state-unknown-title"
       detail={
         <>
-          Start the robot agent to see live state — STOPP still sends. This is not &ldquo;E-Stop
+          Start the robot agent to see live state — Emergency stop still sends. This is not &ldquo;E-Stop
           clear&rdquo;: use the hardware E-Stop if it has to stop. This console could not ask the
           robot for its state{reason ? `: ${reason}` : '.'} Whether Agent Mode is on, what it is
           doing and whether its E-Stop is latched are all unknown; everything else on this page is
@@ -454,7 +455,7 @@ function UnknownStateNotice({ reason }: { reason: string | null }) {
 /** Local date-time, or the raw ISO string when it cannot be parsed. */
 function formatBootTime(at: string): string {
   const date = new Date(at);
-  return Number.isNaN(date.getTime()) ? at : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? at : formatDateTime(date);
 }
 
 /**

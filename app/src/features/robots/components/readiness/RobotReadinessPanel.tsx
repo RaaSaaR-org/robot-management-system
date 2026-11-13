@@ -45,6 +45,8 @@ import { QuestControls, type QuestControlsApi } from './QuestControls';
 import { ReadinessRow } from './ReadinessRow';
 import { BringupLogsDrawer } from './BringupLogsDrawer';
 import { isFailing, readinessRows, reasonRow, robotSideActions, type RowId } from './readinessRows';
+import { useRobotsStore } from '../../store/robotsStore';
+import { robotTraits } from '../../utils/robotTraits';
 
 const SEVERITY_TONE: Record<ReadinessSeverity, BaseTone> = {
   block: 'danger',
@@ -634,7 +636,16 @@ function ReadinessBody({
   const { busy, lanDown, actions, pending } = ra;
 
   const questPort = questPagePort();
-  const rows = useMemo(() => (readiness ? readinessRows(readiness, questPort) : []), [readiness, questPort]);
+  // The robot as the fleet knows it, for what its embodiment carries (TASK-485).
+  // Unknown to the store (a page that never listed robots): keep every row.
+  const hands = useRobotsStore((s) => {
+    const robot = s.robots.find((r) => r.id === robotId) ?? (s.robotDetail?.id === robotId ? s.robotDetail : null);
+    return robot ? robotTraits(robot, s.telemetryCache[robotId]).hasHands : true;
+  });
+  const rows = useMemo(
+    () => (readiness ? readinessRows(readiness, questPort, { hands }) : []),
+    [readiness, questPort, hands],
+  );
   const highlight = readiness ? reasonRow(readiness) : null;
   const bringup = readiness?.bringup ?? null;
   const compact = variant === 'compact';

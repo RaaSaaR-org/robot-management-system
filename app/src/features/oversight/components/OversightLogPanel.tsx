@@ -8,6 +8,7 @@ import { ScrollText } from 'lucide-react';
 import { DataTable, EmptyState, Panel, StatusTag, type DataTableColumn, type Tone } from '@/shared/components/ui';
 import type { OversightActionType, OversightLog } from '../types';
 import { humanize } from './oversightFormat';
+import { formatDateTime } from '@/shared/utils/format';
 
 export interface OversightLogPanelProps {
   logs: OversightLog[];
@@ -29,7 +30,7 @@ export function OversightLogPanel({ logs, isLoading, className }: OversightLogPa
       header: 'Time',
       sortable: true,
       sortValue: (l) => new Date(l.timestamp),
-      cell: (l) => <span className="whitespace-nowrap text-[13px] text-ink-tertiary">{new Date(l.timestamp).toLocaleString()}</span>,
+      cell: (l) => <span className="whitespace-nowrap text-[13px] text-ink-tertiary">{formatDateTime(l.timestamp)}</span>,
     },
     {
       key: 'action',

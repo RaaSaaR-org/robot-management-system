@@ -96,15 +96,16 @@ const RAIL_NOT_A_CLIPPER = 'overflow-visible';
  * Flex line-breaking uses each item's hypothetical main size CLAMPED BY ITS
  * MAX-WIDTH, so capping this group is what keeps STOPP on the first flex line
  * however long the robot's name, its badges and its place name get: the cap
- * leaves at least this much room for the button beside it. 6.5rem = 104px is
- * the widest STOPP gets (`pointer-coarse:px-5`, ~90px) plus the rail's `gap-2`.
+ * leaves at least this much room for the button beside it. 10rem = 160px is
+ * the widest "Emergency stop" gets (`pointer-coarse:px-5`, ~150px) plus the
+ * rail's `gap-2`.
  *
  * Over the cap the group wraps INTERNALLY (it is a wrapping flex container of
  * its own) and the rail grows a second text row — `min-h-11`, never a fixed
  * height. Wrapping is the specified degradation; clipping and sideways
  * scrolling are the two that lose the badges the operator has to act on.
  */
-const LEADING_MAX_WIDTH = 'max-w-[calc(100%-6.5rem)]';
+const LEADING_MAX_WIDTH = 'max-w-[calc(100%-10rem)]';
 
 function BlockChip({
   block,
@@ -268,15 +269,15 @@ export const BlockTimeline = memo(function BlockTimeline({
         data-testid="agent-stop-button"
         onClick={onStop}
         disabled={disabled}
-        // A SUPERSET of the visible text, never a replacement for it (WCAG
-        // 2.5.3, Label in Name): a voice-control user says the word they can
-        // see — "click STOPP" — and an accessible name of "Emergency stop"
-        // simply does not match. On this button of all buttons.
-        aria-label="STOPP — emergency stop"
+        // The product's one name for this act (TASK-485): the robot page says
+        // "Emergency stop", so does this rail. The button used to read "STOPP",
+        // a word no other screen uses. No `aria-label`: the visible text IS the
+        // accessible name (WCAG 2.5.3, Label in Name), so a voice-control user
+        // says what they see.
         className={cn(
           // Safety control: >=44px touch target on coarse pointers (Apple HIG /
           // WCAG 2.5.5); fine-pointer desktops keep the compact bar.
-          'shrink-0 px-4 py-1.5 pointer-coarse:min-h-11 pointer-coarse:px-5',
+          'shrink-0 whitespace-nowrap px-4 py-1.5 pointer-coarse:min-h-11 pointer-coarse:px-5',
           // Pinned to the FIRST row at every width. `ml-auto` right-aligns it
           // while the block group is on a row of its own; from `sm` the elastic
           // middle does that job and the margin is dropped again.
@@ -288,7 +289,7 @@ export const BlockTimeline = memo(function BlockTimeline({
           estopActive && 'outline-2 outline-offset-2 outline-stop/50'
         )}
       >
-        STOPP
+        Emergency stop
       </button>
     </div>
   );

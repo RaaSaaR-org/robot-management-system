@@ -14,6 +14,7 @@ import { useComplianceStore } from '../store';
 import type { LegalHold } from '../types';
 import { LegalHoldFormModal } from './LegalHoldFormModal';
 import { formatDate } from './complianceFormat';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface LegalHoldManagerProps {
   className?: string;
@@ -34,7 +35,7 @@ export function LegalHoldManager({ className }: LegalHoldManagerProps) {
   const askRelease = async (h: LegalHold) => {
     const ok = await confirm({
       title: `Release ${h.name}?`,
-      description: `${h.logIds.length.toLocaleString()} preserved entries become subject to their retention period again, and cleanup may delete them.`,
+      description: `${h.logIds.length.toLocaleString(UI_DATE_LOCALE)} preserved entries become subject to their retention period again, and cleanup may delete them.`,
       confirmLabel: 'Release hold',
       tone: 'danger',
     });
@@ -56,7 +57,7 @@ export function LegalHoldManager({ className }: LegalHoldManagerProps) {
       </div>
     ) },
     { key: 'isActive', header: 'Status', sortable: true, cell: (h) => <StatusTag tone={h.isActive ? 'gated' : 'neutral'}>{h.isActive ? 'Active' : 'Released'}</StatusTag> },
-    { key: 'logIds', header: 'Entries', align: 'right', sortable: true, hideBelow: 'sm', sortValue: (h) => h.logIds.length, cell: (h) => h.logIds.length.toLocaleString() },
+    { key: 'logIds', header: 'Entries', align: 'right', sortable: true, hideBelow: 'sm', sortValue: (h) => h.logIds.length, cell: (h) => h.logIds.length.toLocaleString(UI_DATE_LOCALE) },
     { key: 'createdBy', header: 'Placed by', sortable: true, hideBelow: 'md' },
     { key: 'startDate', header: 'Since', align: 'right', sortable: true, hideBelow: 'md', sortValue: (h) => new Date(h.startDate),
       cell: (h) => <span className="whitespace-nowrap text-[13px] text-ink-tertiary">{formatDate(h.startDate)}{h.endDate ? ` – ${formatDate(h.endDate)}` : ''}</span> },

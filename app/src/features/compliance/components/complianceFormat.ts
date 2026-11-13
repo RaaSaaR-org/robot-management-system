@@ -10,6 +10,7 @@
 
 import { statusTone, type StatusToneName } from '@/shared/components/ui';
 import type { ComplianceEventType, ComplianceSeverity } from '../types';
+import { formatDate as formatUiDate, formatDateTime as formatUiDateTime } from '@/shared/utils/format';
 
 /**
  * Compliance-only vocabulary the kit does not know, plus `active`, which here
@@ -71,14 +72,14 @@ export function eventTypeLabel(type: string): string {
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
+  return Number.isNaN(d.getTime()) ? '—' : formatUiDateTime(d);
 }
 
 /** Local date only, or "—". */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
+  return Number.isNaN(d.getTime()) ? '—' : formatUiDate(d);
 }
 
 /** "in 12 days", "3 days ago", "today" from a day count relative to now. */

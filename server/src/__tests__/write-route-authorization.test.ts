@@ -73,7 +73,8 @@ const app = createApp();
 // TASK-480 adds four on the guarded /api/datasets mount, the direct upload:
 // POST /uploads, PUT /:id/upload/files/:fileId/parts/:partNumber, and POST
 // /:id/upload/finish and /cancel.
-const EXPECTED_WRITE_ROUTES = 391;
+// TASK-485 adds one on the same mount: DELETE /robot-types/:id (ownerOnly).
+const EXPECTED_WRITE_ROUTES = 392;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;

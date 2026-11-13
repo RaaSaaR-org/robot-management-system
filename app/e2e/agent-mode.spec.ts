@@ -32,7 +32,7 @@ test.describe('Agent Mode page', () => {
     await expect(page.getByTestId('agent-block-timeline')).toBeVisible();
     await expect(page.getByTestId('agent-chat')).toBeVisible();
     await expect(page.getByTestId('agent-scene-panel')).toBeVisible();
-    await expect(page.getByTestId('agent-stop-button')).toHaveText('STOPP');
+    await expect(page.getByTestId('agent-stop-button')).toHaveText('Emergency stop');
 
     // No plan yet
     await expect(page.getByTestId('agent-block-timeline')).toHaveAttribute(

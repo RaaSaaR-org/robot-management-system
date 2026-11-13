@@ -26,7 +26,7 @@ import { useDatasetVideoTicket } from '../hooks/useDatasetVideoTicket';
 import { datasetShape, describeSelectionOrigin, isDatasetView } from '../types';
 import type { Dataset, DatasetParentSummary } from '../types';
 import { formatDuration } from './datasets/datasetFormat';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { UI_DATE_LOCALE, formatDate } from '@/shared/utils/format';
 
 export interface DatasetCardProps {
   dataset: Dataset;
@@ -372,7 +372,7 @@ export function DatasetCard({
 
         <div className="mt-4 flex items-center justify-between border-t border-line pt-3">
           <span className="text-xs text-ink-tertiary">
-            LeRobot {dataset.lerobotVersion} &bull; {new Date(dataset.createdAt).toLocaleDateString(UI_DATE_LOCALE)}
+            LeRobot {dataset.lerobotVersion} &bull; {formatDate(dataset.createdAt)}
           </span>
           <div className="flex items-center gap-1">
             {dataset.status === 'ready' && onViewEpisodes && (

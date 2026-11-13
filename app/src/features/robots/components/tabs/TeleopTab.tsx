@@ -20,6 +20,8 @@ import { openTeleopSocket } from './vr/vrUrls';
 import { RobotReadinessPanel, type ReadinessLease } from '../readiness/RobotReadinessPanel';
 import { SessionEStopButton } from '../../../datacollection/components/session/SessionEStopButton';
 import { isSimRobot } from '../../utils/simRobot';
+import { robotProvisioning } from '../../types/robots.types';
+import { AwaitingAgentState } from '../common';
 
 // ============================================================================
 // TYPES & HELPERS
@@ -549,6 +551,21 @@ export function KeyboardTeleopSection({
 
 export function TeleopTab({ robot }: TeleopTabProps) {
   const [lease, setLease] = useState<ReadinessLease | null>(null);
+  // An expected robot has no agent to open a teleop socket to, no readiness to
+  // read and nothing a headset could drive (TASK-485): say so, offer nothing.
+  const provisioning = robotProvisioning(robot);
+  if (provisioning) {
+    return (
+      <AwaitingAgentState
+        robotName={robot.name}
+        provisioning={provisioning}
+        title="Teleop"
+        lead="Keyboard and VR teleop open"
+        icon={<Keyboard />}
+        data-testid="teleop-awaiting-agent"
+      />
+    );
+  }
   return (
     <div className="flex flex-col gap-6">
       <KeyboardTeleopSection robot={robot} onLeaseChange={setLease} />

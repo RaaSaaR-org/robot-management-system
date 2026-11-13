@@ -18,6 +18,7 @@ import type {
   VoicePipelineState,
   VoiceStatus,
 } from '../../types/voice.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 function HealthTag({ label, ok }: { label: string; ok: boolean | null | undefined }) {
   return (
@@ -35,7 +36,7 @@ function formatLatency(seconds: number | undefined): string | null {
 }
 
 function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(ts).toLocaleTimeString(UI_DATE_LOCALE, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 export interface VoicePipelinePanelProps {

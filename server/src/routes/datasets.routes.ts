@@ -23,7 +23,7 @@ import {
   HuggingFaceImportError,
   huggingFaceImportService,
 } from '../services/HuggingFaceImportService.js';
-import { importActivityLog } from '../services/ImportActivityLog.js';
+import { importActivityLog, settledImportProgress } from '../services/ImportActivityLog.js';
 import { datasetUploadService } from '../services/datasetUpload/DatasetUploadService.js';
 import { DatasetUploadError } from '../services/datasetUpload/uploadManifest.js';
 import { datasetEpisodeFlagRepository } from '../repositories/DatasetEpisodeFlagRepository.js';
@@ -517,6 +517,27 @@ datasetRoutes.post('/robot-types', ownerOnly, async (req: Request, res: Response
 });
 
 // ============================================================================
+// DELETE /api/datasets/robot-types/:id - Remove an unused robot type (TASK-485)
+// ============================================================================
+//
+// Owner-only, like defining one. 409 `ROBOT_TYPE_IN_USE` names the datasets,
+// embodiments and skills that still point at the type and lists them in
+// `references`; 409 `ROBOT_TYPE_STANDARD` for a type the server seeds at start.
+datasetRoutes.delete('/robot-types/:id', ownerOnly, async (req: Request, res: Response) => {
+  try {
+    const robotType = await datasetService.deleteRobotConfiguration(req.params.id, actorOf(req));
+    res.json({ robotType, message: `Robot type "${robotType.name}" deleted` });
+  } catch (error) {
+    if (error instanceof DatasetExpectationError && error.code === 'ROBOT_TYPE_IN_USE') {
+      const references = (error as { references?: unknown }).references;
+      res.status(409).json({ error: error.message, code: error.code, ...(references ? { references } : {}) });
+      return;
+    }
+    sendExpectationError(res, error, 'Failed to delete robot type');
+  }
+});
+
+// ============================================================================
 // GET /api/datasets - List datasets with filters
 // ============================================================================
 
@@ -673,7 +694,8 @@ datasetRoutes.get('/:id/import/log', async (req: Request, res: Response) => {
       datasetId: dataset.id,
       status: dataset.status,
       importError: dataset.importError ?? null,
-      progress: activity?.progress ?? null,
+      // The row decides: a ready dataset never reports "validating, 95 %" (TASK-486).
+      progress: settledImportProgress(dataset.status, activity?.progress ?? null),
       lines: activity?.lines ?? [],
       dropped: activity?.dropped ?? 0,
       retained: activity !== null,

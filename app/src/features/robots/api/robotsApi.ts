@@ -20,6 +20,7 @@ import type {
   FrameRegistration,
   FrameRegistrationRequest,
   SitePlace,
+  RobotTypeLink,
 } from '../types/robots.types';
 
 // ============================================================================
@@ -36,6 +37,7 @@ const ENDPOINTS = {
   telemetryHistory: (id: string) => `/robots/${id}/telemetry/history`,
   frameRegistration: (id: string) => `/robots/${id}/frame-registration`,
   places: (id: string) => `/robots/${id}/places`,
+  robotType: (id: string) => `/robots/${id}/robot-type`,
 } as const;
 
 
@@ -44,6 +46,15 @@ const ENDPOINTS = {
 // ============================================================================
 
 export const robotsApi = {
+  /**
+   * The robot type (dataset configuration) this robot is one of (TASK-485).
+   * `robotType: null` when the server cannot tell.
+   */
+  async getRobotType(id: string): Promise<RobotTypeLink> {
+    const response = await apiClient.get<RobotTypeLink>(ENDPOINTS.robotType(id));
+    return response.data;
+  },
+
   /**
    * Register a robot from its base URL.
    * @param robotUrl - Robot's base URL (e.g., http://localhost:41243)

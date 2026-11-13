@@ -12,6 +12,7 @@ import {
 import { useComplianceStore } from '../store';
 import type { ComplianceEventType } from '../types';
 import { EVENT_TYPE_OPTIONS } from './complianceFormat';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface ExportDialogProps {
   isOpen: boolean;
@@ -63,7 +64,7 @@ export function ExportDialog({ isOpen, onClose }: ExportDialogProps) {
         includeDecrypted: decrypted,
       });
       download(result.filename, result.data);
-      toast.success('Export ready', { description: `${result.recordCount.toLocaleString()} entries · ${result.filename}` });
+      toast.success('Export ready', { description: `${result.recordCount.toLocaleString(UI_DATE_LOCALE)} entries · ${result.filename}` });
       onClose();
     } catch (err) {
       setFormError(errorMessage(err));

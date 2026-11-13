@@ -92,6 +92,8 @@ function RobotCockpitPageInner() {
 
   const { telemetry, lastUpdate } = useTelemetryStream(robotId, {
     autoConnect: !!robotId,
+    // A robot without a connected agent has no telemetry to ask for (TASK-485).
+    enabled: !!robot && robot.status !== 'offline',
   });
 
   // The dev poller reports "connected" as soon as it starts, even against an

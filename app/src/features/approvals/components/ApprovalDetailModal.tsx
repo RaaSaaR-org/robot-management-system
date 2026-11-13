@@ -11,6 +11,7 @@ import { useApprovalsStore } from '../store';
 import type { ApprovalRequest } from '../types';
 import { RejectApprovalModal } from './RejectApprovalModal';
 import { humanize, isOpen, priorityTone, slaInfo, statusTone, stepTone } from './approvalFormat';
+import { formatDateTime } from '@/shared/utils/format';
 
 export interface ApprovalDetailModalProps {
   /** The row that was clicked; the modal loads the full record by its id. */
@@ -115,8 +116,8 @@ export function ApprovalDetailModal({ request, onClose }: ApprovalDetailModalPro
             items={[
               { label: 'Entity', value: approval.entityId, mono: true },
               { label: 'Requested by', value: approval.requestedByUser?.name ?? approval.requestedBy },
-              { label: 'Requested', value: new Date(approval.createdAt).toLocaleString() },
-              { label: 'SLA deadline', value: new Date(approval.slaDeadline).toLocaleString() },
+              { label: 'Requested', value: formatDateTime(approval.createdAt) },
+              { label: 'SLA deadline', value: formatDateTime(approval.slaDeadline) },
               { label: 'Affected robot', value: approval.affectedRobotId ?? undefined, mono: true },
               { label: 'Affected worker', value: approval.affectedUser?.name ?? approval.affectedUserId ?? undefined },
               { label: 'Blocks execution', value: approval.blocksExecution ? 'Yes, the task waits for this decision' : 'No' },
@@ -139,7 +140,7 @@ export function ApprovalDetailModal({ request, onClose }: ApprovalDetailModalPro
                       {step.decidedBy && (
                         <div className="text-[13px] text-ink-tertiary">
                           {step.decidedByUser?.name ?? step.decidedBy}
-                          {step.decidedAt ? ` · ${new Date(step.decidedAt).toLocaleString()}` : ''}
+                          {step.decidedAt ? ` · ${formatDateTime(step.decidedAt)}` : ''}
                         </div>
                       )}
                       {step.decisionNotes && <p className="mt-1 text-[13px] text-ink-secondary">“{step.decisionNotes}”</p>}
@@ -159,7 +160,7 @@ export function ApprovalDetailModal({ request, onClose }: ApprovalDetailModalPro
               <div className="rounded-control bg-inset p-4 text-sm text-ink-secondary">
                 {approval.workerViewpoint.statement}
                 <div className="mt-2 text-[13px] text-ink-tertiary">
-                  Submitted {new Date(approval.workerViewpoint.submittedAt).toLocaleString()}
+                  Submitted {formatDateTime(approval.workerViewpoint.submittedAt)}
                 </div>
               </div>
             </section>
@@ -171,7 +172,7 @@ export function ApprovalDetailModal({ request, onClose }: ApprovalDetailModalPro
               <ul className="flex flex-col gap-2">
                 {approval.statusHistory.map((h) => (
                   <li key={h.id} className="flex flex-wrap items-baseline gap-x-2 text-[13px]">
-                    <span className="text-ink-tertiary">{new Date(h.timestamp).toLocaleString()}</span>
+                    <span className="text-ink-tertiary">{formatDateTime(h.timestamp)}</span>
                     <span className="text-ink-secondary">
                       {h.fromStatus ? `${humanize(h.fromStatus)} → ` : ''}
                       {humanize(h.toStatus)}

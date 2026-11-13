@@ -6,6 +6,7 @@
 
 import type { BaseModel, TrainingJob } from '../../types';
 import { simRlTrainerLabel } from '../../types';
+import { formatDate } from '@/shared/utils/format';
 
 export const BASE_MODEL_LABELS: Record<BaseModel, string> = {
   smolvla: 'SmolVLA',
@@ -77,7 +78,7 @@ export function formatRelative(iso: string): string {
   if (hr < 24) return `${hr} h ago`;
   const day = Math.floor(hr / 24);
   if (day < 30) return `${day} d ago`;
-  return new Date(iso).toLocaleDateString();
+  return formatDate(iso);
 }
 
 /** "Epoch 3 of 20", "Waiting for a worker", or null when there is nothing to say. */

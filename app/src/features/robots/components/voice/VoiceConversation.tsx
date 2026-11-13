@@ -13,11 +13,12 @@ import { Bot, Mic, Volume2 } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { EmptyState } from '@/shared/components/ui';
 import type { VoiceHistoryEntry } from '../../types/voice.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 const META_ICON = 'h-3.5 w-3.5';
 
 function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(ts).toLocaleTimeString(UI_DATE_LOCALE, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 export interface VoiceConversationProps {

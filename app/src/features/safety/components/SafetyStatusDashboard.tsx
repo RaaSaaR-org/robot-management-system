@@ -18,7 +18,7 @@ import {
   StatusTag,
   type Tone,
 } from '@/shared/components/ui';
-import { formatDateTime, formatTimeAgo } from '@/shared/utils/format';
+import { formatDateTime, formatTimeAgo, formatTime } from '@/shared/utils/format';
 import { useSafetyOverview } from '../hooks/useSafety';
 import { FleetEmergencyStopButton } from './FleetEmergencyStopButton';
 import {
@@ -144,7 +144,7 @@ export function SafetyStatusDashboard({ className, compact = false }: SafetyStat
         <StatTile label="System" value={systemHealthy ? 'Normal' : 'Alert'} tone={systemHealthy ? 'live' : 'stopped'} />
         <StatTile label="E-stops active" value={triggeredCount} tone={triggeredCount > 0 ? 'stopped' : 'live'} />
         <StatTile label="Robots connected" value={onlineRobots} unit={`/ ${totalRobots}`} tone={onlineRobots === totalRobots ? 'live' : 'gated'} />
-        <StatTile label="Last update" value={new Date(fleetStatus.timestamp).toLocaleTimeString()} hint="Refreshes every 5 s" />
+        <StatTile label="Last update" value={formatTime(fleetStatus.timestamp)} hint="Refreshes every 5 s" />
       </StatRow>
 
       <Panel>

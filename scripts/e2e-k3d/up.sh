@@ -35,6 +35,8 @@ for c in $COMPONENTS; do
   args=()
   if [ "$c" = app ]; then
     args+=(--build-arg VITE_API_BASE_URL=/api --build-arg VITE_WS_URL=/api/a2a/ws --build-arg VITE_A2A_SERVER_URL=)
+    # The /docs viewer bundles the repo's docs/ folder (see app/Dockerfile).
+    args+=(--build-context "docs=$REPO_ROOT/docs")
   fi
   log "building neodem-$c:$TAG"
   start=$(now)

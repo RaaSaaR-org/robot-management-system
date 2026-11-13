@@ -68,7 +68,9 @@ export function CompatibilityModal({ isOpen, onClose, datasets, initialIds, onCo
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      size={step === 'report' ? 'xl' : 'md'}
+      // The report is a table with a column per dataset: it gets the width.
+      size={step === 'report' ? '4xl' : 'md'}
+      testId="compatibility-modal"
       title={step === 'pick' ? 'Check compatibility' : 'Can these be trained together?'}
       description={
         step === 'pick'

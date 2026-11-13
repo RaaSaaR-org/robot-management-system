@@ -11,6 +11,7 @@ import {
 } from '@/shared/components/ui';
 import type { HashChainVerificationResult } from '../types';
 import { formatDateTime } from './complianceFormat';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface IntegrityStatusProps {
   result: HashChainVerificationResult | null;
@@ -73,14 +74,14 @@ export function IntegrityStatus({ result, isVerifying, onVerify, className }: In
                 value={result.verifiedLogs}
                 max={Math.max(result.totalLogs, 1)}
                 variant={result.isValid ? 'success' : 'warning'}
-                label={`${result.verifiedLogs.toLocaleString()} of ${result.totalLogs.toLocaleString()} entries verified`}
+                label={`${result.verifiedLogs.toLocaleString(UI_DATE_LOCALE)} of ${result.totalLogs.toLocaleString(UI_DATE_LOCALE)} entries verified`}
               />
               <KeyValueList
                 columns={3}
                 items={[
                   { label: 'First entry', value: formatDateTime(result.firstLogTimestamp) },
                   { label: 'Last entry', value: formatDateTime(result.lastLogTimestamp) },
-                  { label: 'Broken links', value: result.brokenLinks.length.toLocaleString() },
+                  { label: 'Broken links', value: result.brokenLinks.length.toLocaleString(UI_DATE_LOCALE) },
                 ]}
               />
             </div>

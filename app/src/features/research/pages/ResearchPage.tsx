@@ -10,6 +10,7 @@ import { useResearch } from '../hooks/useResearch';
 import { ResearchDetail } from '../components/ResearchDetail';
 import { campaignLink, kindLabel, kinds, narrative, recordLink, recordStatus } from '../utils/presentation';
 import type { ResearchRecord } from '../types/research.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 function PublicationStatus({ record }: { record: ResearchRecord }) {
   const status = recordStatus(record);
@@ -49,7 +50,7 @@ export const ResearchPage = memo(function ResearchPage() {
     </div> },
     { key: 'status', header: 'Recorded state', cell: (row) => <PublicationStatus record={row} />, hideBelow: 'sm' },
     { key: 'campaignId', header: 'Campaign', cell: (row) => <Link className={`break-all text-primary hover:underline ${focusRing}`} to={campaignLink(row.campaignId)}>{row.campaignId}</Link>, hideBelow: 'lg', className: 'max-w-56' },
-    { key: 'author', header: 'Published by', cell: (row) => <div className="space-y-1"><p>{row.author.name}</p><time dateTime={row.createdAt} className="text-xs text-ink-muted">{new Date(row.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</time></div>, hideBelow: 'md' },
+    { key: 'author', header: 'Published by', cell: (row) => <div className="space-y-1"><p>{row.author.name}</p><time dateTime={row.createdAt} className="text-xs text-ink-muted">{new Date(row.createdAt).toLocaleDateString(UI_DATE_LOCALE, { month: 'short', day: 'numeric', year: 'numeric' })}</time></div>, hideBelow: 'md' },
   ];
   return <div className="min-w-0 space-y-6">
     <PageHeader eyebrow="Build" title={record?.title ?? (id ? 'Research publication' : 'Research')}

@@ -12,7 +12,8 @@ import { Button, Panel, StatusTag } from '@/shared/components/ui';
 import { usePermission } from '@/features/auth/hooks/useAuth';
 import { Robot3DViewerFallback } from '../visualization';
 import { VlaControlSection } from '../VlaControlSection';
-import { ProvenanceTag, Readout, ViewerUnavailable, provenanceOf } from '../common';
+import { AwaitingAgentState, ProvenanceTag, Readout, ViewerUnavailable, provenanceOf } from '../common';
+import { robotTraits } from '../../utils/robotTraits';
 import {
   ROBOT_STATUS_LABELS,
   isRobotAvailable,
@@ -56,7 +57,10 @@ export function OverviewTab({
   const robotType = normalizeRobotType(reportedType);
   // An expected robot of a kind the viewer has no model for (TASK-477): the
   // placeholder box under "Live model" would pass for the robot itself.
-  const noModelYet = robotType === 'generic' && robotProvisioning(robot) !== null;
+  const provisioning = robotProvisioning(robot);
+  const noModelYet = robotType === 'generic' && provisioning !== null;
+  // A mains-powered arm has no dock to be sent to (TASK-485).
+  const { canCharge } = robotTraits(robot, telemetry);
   const odometry = telemetry?.odometry ?? null;
   const speed = odometry ? odometrySpeed(odometry) : null;
   const statusLabel =
@@ -109,23 +113,36 @@ export function OverviewTab({
       </Panel>
 
       <div className="flex flex-col gap-6">
+        {provisioning ? (
+          // Nothing to start a skill on and nothing to command (TASK-485).
+          <AwaitingAgentState
+            robotName={robot.name}
+            provisioning={provisioning}
+            title="Controls"
+            lead="Skills and quick actions become available"
+            data-testid="overview-awaiting-agent"
+          />
+        ) : (
+        <>
         <VlaControlSection robotId={robotId} online={robot.status !== 'offline'} />
 
         <Panel>
           <Panel.Header title="Quick actions" />
           <Panel.Body className="flex flex-col gap-3">
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                fullWidth
-                disabled={!canExecuteCommands}
-                isLoading={isCommandLoading}
-                onClick={() => void onSendToCharge()}
-                leftIcon={<BatteryCharging className={ICON} strokeWidth={1.75} />}
-              >
-                Charge
-              </Button>
+            <div className={canCharge ? 'grid grid-cols-2 gap-2' : 'grid grid-cols-1 gap-2'}>
+              {canCharge && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  fullWidth
+                  disabled={!canExecuteCommands}
+                  isLoading={isCommandLoading}
+                  onClick={() => void onSendToCharge()}
+                  leftIcon={<BatteryCharging className={ICON} strokeWidth={1.75} />}
+                >
+                  Charge
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 size="sm"
@@ -153,6 +170,8 @@ export function OverviewTab({
             )}
           </Panel.Body>
         </Panel>
+        </>
+        )}
 
         {/* Odometry (TASK-184) — only when the frame carries it */}
         {odometry && (

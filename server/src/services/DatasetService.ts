@@ -66,6 +66,32 @@ export class DatasetExpectationError extends Error {
   }
 }
 
+/** What still points at a robot type that was asked to be deleted (TASK-485). */
+export interface RobotTypeReferences {
+  datasets: Array<{ id: string; name: string }>;
+  embodiments: Array<{ id: string; tag: string }>;
+  skills: Array<{ id: string; name: string }>;
+}
+
+/** 409 `ROBOT_TYPE_IN_USE`, carrying the rows that hold the type. */
+export class RobotTypeInUseError extends DatasetExpectationError {
+  constructor(message: string, public readonly references: RobotTypeReferences) {
+    super(message, 409, 'ROBOT_TYPE_IN_USE');
+    this.name = 'RobotTypeInUseError';
+  }
+}
+
+/** How many names of one kind a refusal spells out before it says "and N more". */
+const NAMED_REFERENCES = 5;
+
+/** `2 datasets ("a", "b")`, or null when there are none. */
+function describeReferences(noun: string, names: string[]): string | null {
+  if (names.length === 0) return null;
+  const shown = names.slice(0, NAMED_REFERENCES).map((n) => `"${n}"`).join(', ');
+  const rest = names.length - NAMED_REFERENCES;
+  return `${names.length} ${noun}${names.length === 1 ? '' : 's'} (${shown}${rest > 0 ? ` and ${rest} more` : ''})`;
+}
+
 /** What {@link DatasetService.reassociateRobotType} did. */
 export interface ReassociationResult {
   dataset: DatasetResponse;
@@ -107,6 +133,7 @@ import type {
   ValidationContext,
 } from './lerobot/validateDataset.js';
 import { prisma } from '../database/index.js';
+import { STANDARD_ROBOT_TYPES } from '../database/seedStandardRobotTypes.js';
 import { ConflictError, NotFoundError, ServiceUnavailableError } from '../utils/errors.js';
 import {
   datasetViewService,
@@ -1717,6 +1744,65 @@ export class DatasetService extends EventEmitter {
       proprioceptionDim: created.proprioceptionDim,
     }, 'robot-type');
     return created;
+  }
+
+  /**
+   * Remove a robot type nothing uses (TASK-485) — the way to take a stale,
+   * import-created type out of every robot-type picker.
+   *
+   * Refused with 409 when it is one of the standard types the server seeds at
+   * start (it would only come back, and `docs/demo-fleet.md` relies on them),
+   * and when a dataset, an embodiment or a skill still points at it: the
+   * message names them, so the caller knows what to move first. Nothing is
+   * reassigned or cascaded here.
+   */
+  async deleteRobotConfiguration(id: string, actorId?: string | null): Promise<RobotType> {
+    const robotType = await robotTypeRepository.findById(id);
+    if (!robotType) {
+      throw new DatasetExpectationError(`Robot type not found: ${id}`, 404, 'ROBOT_TYPE_NOT_FOUND');
+    }
+    if (STANDARD_ROBOT_TYPES.some((t) => t.name === robotType.name)) {
+      throw new DatasetExpectationError(
+        `"${robotType.name}" is a standard robot type and cannot be deleted`,
+        409,
+        'ROBOT_TYPE_STANDARD',
+      );
+    }
+    const [datasets, embodiments, skills] = await Promise.all([
+      prisma.dataset.findMany({ where: { robotTypeId: id }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+      prisma.embodiment.findMany({ where: { robotTypeId: id }, select: { id: true, tag: true }, orderBy: { tag: 'asc' } }),
+      prisma.skillDefinition.findMany({
+        where: { compatibleRobotTypes: { some: { id } } },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+    ]);
+    if (datasets.length + embodiments.length + skills.length > 0) {
+      const parts = [
+        describeReferences('dataset', datasets.map((d) => d.name)),
+        describeReferences('embodiment', embodiments.map((e) => e.tag)),
+        describeReferences('skill', skills.map((s) => s.name)),
+      ].filter((part): part is string => part !== null);
+      throw new RobotTypeInUseError(
+        `Robot type "${robotType.name}" is still in use by ${parts.join(', ')}. `
+          + 'Move them to another robot type or delete them first.',
+        { datasets, embodiments, skills },
+      );
+    }
+    if (!(await robotTypeRepository.delete(id))) {
+      // A reference appeared between the check and the delete (the foreign key refused it).
+      throw new DatasetExpectationError(
+        `Robot type "${robotType.name}" could not be deleted because something started using it`,
+        409,
+        'ROBOT_TYPE_IN_USE',
+      );
+    }
+    await this.auditDatasetAction(id, 'robot-type.delete', actorId, {
+      name: robotType.name,
+      actionDim: robotType.actionDim,
+      proprioceptionDim: robotType.proprioceptionDim,
+    }, 'robot-type');
+    return robotType;
   }
 
   /**

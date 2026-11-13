@@ -35,7 +35,7 @@ export function TrainingPage() {
           'Monitor training progress with live metrics',
           'Manage training jobs across GPU clusters',
         ]}
-        docsSlug="VLA-integration-guide"
+        docsSlug="vla-integration-guide"
       />
     );
   }

@@ -16,6 +16,7 @@ import {
   successInterpretation,
   successTone,
 } from './simFormat';
+import { formatDateTime } from '@/shared/utils/format';
 
 export interface RunResultsProps {
   job: SimJob | null;
@@ -101,7 +102,7 @@ export function RunResults({ job, scenes, onClose }: RunResultsProps) {
               { label: 'Rollouts', value: job.rolloutCount },
               { label: 'Success rate', value: m ? formatPct(m.successRate, 1) : undefined },
               { label: 'Robot', value: job.embodiment },
-              { label: 'Started', value: new Date(job.createdAt).toLocaleString() },
+              { label: 'Started', value: formatDateTime(job.createdAt) },
               { label: 'Run ID', value: job.jobId, mono: true },
             ]}
           />

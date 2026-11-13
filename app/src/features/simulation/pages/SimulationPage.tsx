@@ -50,7 +50,7 @@ export function SimulationPage(props: SimulationPageProps) {
           'Run VLA model inference against simulated sensors',
           'A/B test model variants without hardware risk',
         ]}
-        docsSlug="VLA-integration-guide"
+        docsSlug="vla-integration-guide"
       />
     );
   }

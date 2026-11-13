@@ -4,10 +4,10 @@
  * @feature robots
  */
 
-import { memo, useEffect, useCallback, useRef } from 'react';
+import { memo, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MessageSquare } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
-import { Button, EmptyState, Spinner, StatusTag } from '@/shared/components/ui';
+import { Button, EmptyState, StatusTag } from '@/shared/components/ui';
 import { ConversationPanel } from '@/features/a2a/components/ConversationPanel';
 import { useA2A } from '@/features/a2a/hooks/useA2A';
 import { useA2AStream } from '@/features/a2a/hooks/useA2AStream';
@@ -51,7 +51,6 @@ export const RobotChatPanel = memo(function RobotChatPanel({
     conversations,
     currentConversation,
     activeTasks,
-    isLoading,
     error,
     createConversation,
     selectConversation,
@@ -66,56 +65,36 @@ export const RobotChatPanel = memo(function RobotChatPanel({
     setChatMode('direct');
   }, [setChatMode]);
 
-  // Refs for frequently-changing values to prevent effect re-fires
-  const conversationsRef = useRef(conversations);
-  conversationsRef.current = conversations;
-  const currentConversationRef = useRef(currentConversation);
-  currentConversationRef.current = currentConversation;
-  const isLoadingRef = useRef(isLoading);
-  isLoadingRef.current = isLoading;
-  const hasInitConversation = useRef(false);
+  // This robot's conversation, if one exists. Nothing is created by looking
+  // at the tab (TASK-485): the conversation is opened by the first message.
+  const robotConversation = useMemo(
+    () =>
+      conversations.find((c) => c.robotId === robotId || c.name === `Chat with ${robotName}`) ?? null,
+    [conversations, robotId, robotName]
+  );
+  const robotConversationId = robotConversation?.conversationId ?? null;
 
+  // Keep the store's selection on it, so task and stream updates that follow
+  // "the current conversation" follow this one.
   useEffect(() => {
-    hasInitConversation.current = false;
-  }, [robotId]);
-
-  // Get or create the conversation for this robot
-  useEffect(() => {
-    if (hasInitConversation.current || !agentUrl) return;
-
-    const initConversation = async () => {
-      const convos = conversationsRef.current;
-      const currentConvo = currentConversationRef.current;
-      const robotConvo = convos.find(
-        (c) => c.robotId === robotId || c.name === `Chat with ${robotName}`
-      );
-
-      if (robotConvo) {
-        hasInitConversation.current = true;
-        if (currentConvo?.conversationId !== robotConvo.conversationId) {
-          selectConversation(robotConvo.conversationId);
-        }
-      } else if (!isLoadingRef.current) {
-        hasInitConversation.current = true;
-        try {
-          await createConversation(robotId, `Chat with ${robotName}`);
-        } catch {
-          // Error handled by store — allow retry
-          hasInitConversation.current = false;
-        }
-      }
-    };
-
-    void initConversation();
-  }, [robotId, robotName, agentUrl, conversations, selectConversation, createConversation]);
-
-  const handleNewConversation = useCallback(async () => {
-    try {
-      await createConversation(robotId, `Chat with ${robotName}`);
-    } catch {
-      // Error handled by store
+    if (!agentUrl || !robotConversationId) return;
+    if (currentConversation?.conversationId !== robotConversationId) {
+      selectConversation(robotConversationId);
     }
-  }, [createConversation, robotId, robotName]);
+  }, [agentUrl, robotConversationId, currentConversation?.conversationId, selectConversation]);
+
+  const creatingRef = useRef<Promise<string | null> | null>(null);
+  const ensureConversation = useCallback((): Promise<string | null> => {
+    if (robotConversationId) return Promise.resolve(robotConversationId);
+    // One create per panel, however fast the person presses Enter twice.
+    creatingRef.current ??= createConversation(robotId, `Chat with ${robotName}`)
+      .then((created) => created?.conversationId ?? null)
+      .catch(() => null) // the store keeps the error; the banner above shows it
+      .finally(() => {
+        creatingRef.current = null;
+      });
+    return creatingRef.current;
+  }, [createConversation, robotConversationId, robotId, robotName]);
 
   if (!agentUrl) {
     return (
@@ -157,19 +136,13 @@ export const RobotChatPanel = memo(function RobotChatPanel({
       )}
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {isLoading && !currentConversation ? (
-          <div className="flex h-full items-center justify-center">
-            <Spinner size="lg" color="primary" label="Loading…" />
-          </div>
-        ) : (
-          <ConversationPanel
-            conversationId={currentConversation?.conversationId || null}
-            targetAgent={{ name: robotName, url: agentUrl } as never}
-            chatMode="direct"
-            onNewConversation={handleNewConversation}
-            activeTasks={activeTasks}
-          />
-        )}
+        <ConversationPanel
+          conversationId={robotConversationId}
+          targetAgent={{ name: robotName, url: agentUrl } as never}
+          chatMode="direct"
+          ensureConversation={ensureConversation}
+          activeTasks={activeTasks}
+        />
       </div>
     </div>
   );

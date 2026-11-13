@@ -18,5 +18,15 @@ export {
   BATTERY_THRESHOLDS,
   getResourceVariant,
 } from './thresholds';
-export { UI_DATE_LOCALE, formatDateTime, formatTimeAgo, formatPercent, formatWithUnit } from './format';
+export {
+  UI_DATE_LOCALE,
+  formatDate,
+  formatDateTime,
+  formatNumber,
+  formatTime,
+  formatTimeAgo,
+  formatPercent,
+  formatWithUnit,
+} from './format';
+export type { DateInput } from './format';
 export { createSingleFlight, type SingleFlight } from './inFlight';
