@@ -13,6 +13,7 @@ import { Logo } from '@/components/common/Logo';
 import { paletteShortcutLabel } from '@/components/palette';
 import { useThemeStore } from '@/features/settings';
 import { ImportActivity } from '@/features/training/components/ImportActivity';
+import { UploadActivity } from '@/features/training/components/UploadActivity';
 import { useUIStore } from '@/features/settings/store/uiStore';
 import { LinkButton } from '@/shared/components/ui';
 import { Button } from '@/shared/components/ui/Button';
@@ -91,6 +92,8 @@ export function TopBar({ onOpenPalette }: TopBarProps) {
           <OrganizationSwitcher />
           {/* Only rendered while a dataset import is tracked (TASK-352) */}
           <ImportActivity />
+          {/* Only rendered while this tab uploads a dataset (TASK-481) */}
+          <UploadActivity />
           <Button
             variant="ghost"
             onClick={onOpenPalette}

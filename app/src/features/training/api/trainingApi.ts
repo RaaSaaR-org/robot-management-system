@@ -20,7 +20,6 @@ import type {
   QueueStats,
   WorkerStatusListResponse,
   TrainingDurationEstimate,
-  UploadInitiateResponse,
   HFDataset,
   EpisodeMeta,
   EpisodeVideoWindow,
@@ -48,8 +47,6 @@ const ENDPOINTS = {
   // Datasets
   datasets: '/datasets',
   dataset: (id: string) => `/datasets/${id}`,
-  datasetUploadInitiate: (id: string) => `/datasets/${id}/upload/initiate`,
-  datasetUploadComplete: (id: string) => `/datasets/${id}/upload/complete`,
 
   // Training Jobs
   trainingJobs: '/training/jobs',
@@ -191,32 +188,6 @@ export const trainingApi = {
    */
   async deleteDataset(id: string): Promise<void> {
     await apiClient.delete(ENDPOINTS.dataset(id));
-  },
-
-  /**
-   * Initiate dataset file upload (get presigned URL)
-   */
-  async initiateUpload(
-    datasetId: string,
-    contentType: string,
-    size: number
-  ): Promise<UploadInitiateResponse> {
-    const response = await apiClient.post<UploadInitiateResponse>(
-      ENDPOINTS.datasetUploadInitiate(datasetId),
-      { contentType, size }
-    );
-    return response.data;
-  },
-
-  /**
-   * Mark dataset upload as complete, trigger validation
-   */
-  async completeUpload(datasetId: string): Promise<void> {
-    // No client timeout. This one request downloads the archive out of the
-    // object store, unpacks it and — when NATS is absent, the documented dev
-    // default — validates every file inside the request. The shared client
-    // aborts at 30 s, which is shorter than any real dataset takes.
-    await apiClient.post(ENDPOINTS.datasetUploadComplete(datasetId), undefined, { timeout: 0 });
   },
 
   // ============================================================================

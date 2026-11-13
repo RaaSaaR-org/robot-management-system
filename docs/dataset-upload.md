@@ -19,6 +19,7 @@ without reading the server.
 - [Errors](#errors)
 - [Limits and configuration](#limits-and-configuration)
 - [What the server guarantees](#what-the-server-guarantees)
+- [The app's upload dialog](#the-apps-upload-dialog)
 - [The older archive upload](#the-older-archive-upload)
 
 ## At a glance
@@ -413,12 +414,47 @@ uses RustFS.
   read from the store. An upload continues after a server restart; one that
   was between `finish` and validation is taken up again at startup.
 
+## The app's upload dialog
+
+**Datasets → New dataset → Upload a folder** is a client of this contract
+(TASK-481). What it does with it:
+
+- **Input.** A dataset *folder*, from the folder picker or dropped on the
+  dialog (Chrome, Edge, Firefox, Safari). The dataset root is wherever
+  `meta/info.json` sits, so the folder itself and its parent both work. Only
+  the paths under [What may be uploaded](#what-may-be-uploaded) are declared;
+  everything else stays on the user's machine.
+- **Before anything is sent** it reads `meta/info.json` in the browser and
+  shows version, episodes, frames, frame rate, cameras and size, and applies
+  the start rules itself — a folder that is not a LeRobot dataset says why
+  and cannot be uploaded.
+- **Parts.** It asks for `chunkSize: 8388608` (8 MiB), sends at most three
+  parts at once, each with `X-Chunk-Sha256` (when the page is a secure
+  context), and holds one part per request in memory.
+- **Retries.** `503 UPLOAD_BUSY` waits `Retry-After` and is not counted;
+  `429`, `502 STORE_ERROR`, `503 STORAGE_UNAVAILABLE`, `400 PART_INTERRUPTED`,
+  `422 CHECKSUM_MISMATCH`, `500 UPLOAD_ERROR`, a proxy's 5xx and a network
+  error on a part are re-sent with a pause of 1 s doubling to 30 s, six
+  attempts per part. Any other refusal stops the upload at once and is shown
+  with its sentence, `code` and context fields. "Try again" asks
+  `GET /:id/upload` and sends only what is missing.
+- **Closing the dialog does not stop the upload.** It keeps running in the
+  tab; a chip in the top bar and the dataset's row show its progress, and the
+  browser asks before the tab is left. "Cancel upload" calls
+  [cancel](#5-cancel). A tab that is closed anyway leaves the upload on the
+  server until its row is deleted or the idle timeout removes it — the file
+  handles do not survive a reload, so the browser cannot resume it. Deleting
+  the dataset from its row while this tab uploads it ends the upload too — the
+  parts are answered `404 NOT_FOUND`, which the dialog reads as "gone", not as
+  a failure to retry.
+- **After finish** the dialog closes and the dataset's row shows the server
+  verifying and validating, then `ready`.
+
 ## The older archive upload
 
 `POST /api/datasets` (without `storagePath`) followed by
 `POST /api/datasets/:id/upload/initiate` and `…/upload/complete` still exists
 and is unchanged: it hands out a presigned PUT URL for one archive, which the
 server then unpacks onto its own disk. It only works where the client can
-reach the object store's own address and is what the app's upload dialog
-uses today. A dataset that a direct upload is filling refuses those two calls
-with `409`.
+reach the object store's own address. The app no longer uses it (TASK-481).
+A dataset that a direct upload is filling refuses those two calls with `409`.

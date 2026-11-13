@@ -23,11 +23,12 @@ import {
 } from '@/shared/components/ui';
 import { datasetShape } from '../types';
 import type { Dataset, DatasetStatus, RobotType } from '../types';
+import { uploadPercent, useDatasetUploadStore } from '../store/datasetUploadStore';
 import { useImportJobsStore } from '../store/importJobsStore';
 import { DatasetNameCell } from './datasets/DatasetNameCell';
 import { ImportProgress } from './ImportProgress';
 import { describeImportFailure } from './datasets/importFormat';
-import { formatCount, formatDuration, formatRelative } from './datasets/datasetFormat';
+import { formatBytes, formatCount, formatDuration, formatRelative } from './datasets/datasetFormat';
 
 export interface DatasetListProps {
   datasets: Dataset[];
@@ -216,7 +217,7 @@ export function DatasetList({
               <EmptyState
                 icon={<Database />}
                 title="No datasets yet"
-                description="Upload LeRobot files, import one from Hugging Face, or package a recording session."
+                description="Upload a LeRobot dataset folder, import one from Hugging Face, or package a recording session."
                 action={emptyAction}
               />
             )
@@ -232,6 +233,7 @@ function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
   // A Hub import in flight is followed by the import tracker (the datasets
   // page starts following any it finds), which knows its phase and bytes.
   const job = useImportJobsStore((state) => state.jobs[dataset.id]);
+  const upload = useDatasetUploadStore((state) => (state.job?.datasetId === dataset.id ? state.job : null));
   const hubImport = Boolean(dataset.huggingFaceRepoId)
     && (dataset.status === 'importing' || dataset.status === 'validating');
   if (hubImport) {
@@ -242,6 +244,32 @@ function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
         {job?.state === 'running'
           ? <ImportProgress job={job} compact />
           : <ProgressBar size="sm" showValue={false} indeterminate />}
+      </div>
+    );
+  }
+  // The upload this tab is running (TASK-481): its bytes while it is sending,
+  // then a moving bar until the server has verified and validated it.
+  if (upload && (dataset.status === 'uploading' || dataset.status === 'validating')) {
+    const sending = upload.phase === 'uploading' || upload.phase === 'finishing';
+    const percent = Math.floor(uploadPercent(upload) ?? 0);
+    const line = upload.phase === 'failed'
+      ? 'Stopped — open the upload to try again'
+      : upload.phase === 'cancelling'
+        ? 'Cancelling'
+        : sending
+          ? `${percent}% · ${formatBytes(upload.sentBytes)} / ${formatBytes(upload.totalBytes)}`
+          : upload.phase === 'validating' ? 'Validating' : 'Verifying the files';
+    return (
+      <div className="flex w-28 max-w-full flex-col gap-1.5 sm:w-44" data-testid={`upload-progress-${dataset.id}`}>
+        <StatusTag status={dataset.status} dot pulse={upload.phase !== 'failed'} />
+        <ProgressBar
+          size="sm"
+          showValue={false}
+          value={percent}
+          variant={upload.phase === 'failed' ? 'error' : 'default'}
+          indeterminate={!sending && upload.phase !== 'failed'}
+        />
+        <span className="truncate text-[11px] tabular-nums text-ink-tertiary" title={line}>{line}</span>
       </div>
     );
   }

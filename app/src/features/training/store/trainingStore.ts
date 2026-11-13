@@ -21,7 +21,6 @@ import type {
   TrainingJobQueryParams,
   JobProgress,
   TrainingJobEvent,
-  UploadInitiateResponse,
 } from '../types';
 
 type TrainingStore = TrainingState & TrainingActions;
@@ -51,10 +50,6 @@ const initialState: TrainingState = {
   // Workers
   workers: null,
   workersLoading: false,
-
-  // Upload
-  uploadProgress: 0,
-  uploadError: null,
 
   // Filters
   datasetFilters: {},
@@ -109,31 +104,6 @@ export const useTrainingStore = create<TrainingStore>()(
 
         set((state) => {
           state.datasets = state.datasets.filter((d) => d.id !== id);
-        });
-      },
-
-      initiateUpload: async (
-        datasetId: string,
-        contentType: string,
-        size: number
-      ): Promise<UploadInitiateResponse> => {
-        set((state) => {
-          state.uploadProgress = 0;
-          state.uploadError = null;
-        });
-
-        return await trainingApi.initiateUpload(datasetId, contentType, size);
-      },
-
-      completeUpload: async (datasetId: string) => {
-        await trainingApi.completeUpload(datasetId);
-
-        // Update the dataset status in the list
-        set((state) => {
-          const index = state.datasets.findIndex((d) => d.id === datasetId);
-          if (index !== -1) {
-            state.datasets[index].status = 'validating';
-          }
         });
       },
 
@@ -444,7 +414,3 @@ export const selectQueueLoading = (state: TrainingStore) => state.queueLoading;
 // Workers
 export const selectWorkers = (state: TrainingStore) => state.workers;
 export const selectWorkersLoading = (state: TrainingStore) => state.workersLoading;
-
-// Upload
-export const selectUploadProgress = (state: TrainingStore) => state.uploadProgress;
-export const selectUploadError = (state: TrainingStore) => state.uploadError;
