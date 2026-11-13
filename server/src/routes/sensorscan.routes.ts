@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { sensorScanService } from '../services/SensorScanService.js';
+import { sendStream } from '../utils/streamResponse.js';
 
 export const sensorScanRoutes = Router();
 
@@ -33,14 +34,16 @@ sensorScanRoutes.get('/:id/download', async (req: Request, res: Response) => {
     if (!record) {
       return res.status(404).json({ error: 'Scan not found' });
     }
-    const stream = await sensorScanService.openScanStream(record);
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${record.id}.pcd"`);
-    stream.on('error', () => {
-      if (!res.headersSent) res.status(502).json({ error: 'Failed to read scan bytes' });
-      else res.end();
+    // Through sendStream, so a client that drops the download gives the store
+    // stream — and its socket — back (TASK-491).
+    await sendStream(res, () => sensorScanService.openScanStream(record), {
+      head: () => {
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', `attachment; filename="${record.id}.pcd"`);
+      },
+      headerNames: ['Content-Type', 'Content-Disposition'],
+      failure: { status: 502, body: { error: 'Failed to read scan bytes' } },
     });
-    stream.pipe(res);
   } catch (error) {
     console.error('[SensorScan] download error:', error);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to download scan' });

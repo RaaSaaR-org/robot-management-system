@@ -10,6 +10,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import { Readable } from 'stream';
 
 const datasets = vi.hoisted(() => ({ get: vi.fn() }));
@@ -19,6 +21,10 @@ const storage = vi.hoisted(() => ({
   ranges: [] as Array<{ start: number; end: number } | undefined>,
   // `exists` calls: how often a video was looked for in storage.
   lookups: 0,
+  // `getStream` calls and the signal each was handed (TASK-491).
+  opens: [] as Array<{ signal?: AbortSignal }>,
+  // Set to answer `getStream` by hand: a store that is slow, or fails.
+  open: null as null | ((signal?: AbortSignal) => Promise<Readable>),
 }));
 
 vi.mock('../../services/DatasetService.js', () => ({
@@ -35,8 +41,15 @@ vi.mock('../../storage/rustfs-client.js', () => {
     async getMetadata(_bucket: string, key: string) {
       return { contentLength: storage.objects[key].length };
     },
-    async getStream(_bucket: string, key: string, range?: { start: number; end: number }) {
+    async getStream(
+      _bucket: string,
+      key: string,
+      range?: { start: number; end: number },
+      options?: { signal?: AbortSignal },
+    ) {
       storage.ranges.push(range);
+      storage.opens.push({ signal: options?.signal });
+      if (storage.open) return storage.open(options?.signal);
       const body = storage.objects[key];
       return Readable.from([range ? body.subarray(range.start, range.end + 1) : body]);
     },
@@ -73,6 +86,8 @@ beforeEach(() => {
   storage.initialized = true;
   storage.objects = {};
   storage.ranges = [];
+  storage.opens = [];
+  storage.open = null;
   datasets.get.mockReset();
 });
 
@@ -172,6 +187,132 @@ describe('GET /datasets/:id/episodes/:index/video/:camera from RustFS', () => {
     datasets.get.mockResolvedValue(V3);
     const res = await request(app()).get('/api/datasets/ds-pusht/episodes/0/video/x%2f..%2f..');
     expect(res.status).toBe(400);
+  });
+});
+
+/**
+ * TASK-491. On the demo instance a viewer clicking through episodes took every
+ * storage-backed route down until the pod was restarted: a `<video>` whose
+ * `src` changes drops its request, and a store stream that opened for a
+ * request already dropped was never destroyed or read, so its socket never
+ * went back to the S3 client's pool. These run against a real HTTP server —
+ * the defect is an ordering of socket events.
+ */
+describe('a video request the player drops', () => {
+  const KEY = 'ds-pusht/videos/observation.images.top/chunk-000/file-000.mp4';
+  const PATH = '/api/datasets/ds-pusht/episodes/0/video/observation.images.top';
+  let server: http.Server;
+  let port: number;
+
+  beforeEach(async () => {
+    datasets.get.mockResolvedValue(V3);
+    storage.objects[KEY] = VIDEO;
+    server = http.createServer(app());
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as AddressInfo).port;
+  });
+
+  afterEach(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  const until = async (condition: () => boolean): Promise<void> => {
+    const start = Date.now();
+    while (!condition()) {
+      if (Date.now() - start > 2000) throw new Error('condition not met in time');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+
+  /** A body nobody reads to the end, like a 208 MB chunk file. */
+  const endless = () =>
+    new Readable({
+      read() {
+        this.push(Buffer.alloc(16 * 1024, 1));
+      },
+    });
+
+  const ranged = (method = 'GET') =>
+    http.request({ host: '127.0.0.1', port, path: PATH, method, headers: { Range: 'bytes=0-' }, agent: false });
+
+  it('gives the store stream back when the player leaves while it is being opened', async () => {
+    let answer!: (stream: Readable) => void;
+    storage.open = () => new Promise<Readable>((resolve) => { answer = resolve; });
+
+    const req = ranged();
+    req.on('error', () => undefined);
+    req.end();
+    await until(() => storage.opens.length === 1);
+    const { signal } = storage.opens[0];
+    expect(signal?.aborted).toBe(false);
+
+    // The next episode was clicked: the browser drops this request.
+    req.destroy();
+    // The store is told to stop…
+    await until(() => signal?.aborted === true);
+    // …and when its answer arrives all the same, the body is not left open.
+    const stream = endless();
+    answer(stream);
+    await until(() => stream.destroyed);
+  });
+
+  it('gives the store stream back when the player leaves mid-stream', async () => {
+    const stream = endless();
+    storage.open = async () => stream;
+    await new Promise<void>((resolve) => {
+      const req = ranged();
+      req.on('response', (res) => {
+        expect(res.statusCode).toBe(206);
+        res.once('data', () => {
+          req.destroy();
+          resolve();
+        });
+      });
+      req.on('error', () => undefined);
+      req.end();
+    });
+    await until(() => stream.destroyed);
+    expect(storage.opens[0].signal?.aborted).toBe(true);
+  });
+
+  it('answers a HEAD from the known size without opening the object', async () => {
+    const res = await request(app()).head(PATH).set('Range', 'bytes=2-5');
+    expect(res.status).toBe(206);
+    expect(res.headers['content-range']).toBe('bytes 2-5/10');
+    expect(res.headers['content-length']).toBe('4');
+    expect(storage.opens).toHaveLength(0);
+  });
+
+  it('reads one byte for the one-byte probe and ends the store stream', async () => {
+    const res = await binary(request(app()).get(PATH).set('Range', 'bytes=0-0'));
+    expect(res.status).toBe(206);
+    expect((res.body as Buffer).toString()).toBe('0');
+    expect(storage.ranges).toEqual([{ start: 0, end: 0 }]);
+  });
+
+  it('answers a store stream that fails before its first byte with 500 and a body, not under Content-Range', async () => {
+    storage.open = async () =>
+      new Readable({
+        read() {
+          this.destroy(new Error('socket hang up'));
+        },
+      });
+    const res = await request(app()).get(PATH).set('Range', 'bytes=0-');
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Failed to stream video' });
+    expect(res.headers['content-range']).toBeUndefined();
+  });
+
+  it('answers 503 with Retry-After when the store does not answer in time', async () => {
+    storage.open = async () => {
+      throw Object.assign(new Error('RustFS did not answer GetObject within 15000 ms'), { name: 'TimeoutError' });
+    };
+    const res = await request(app()).get(PATH).set('Range', 'bytes=0-');
+    expect(res.status).toBe(503);
+    expect(res.headers['retry-after']).toBe('2');
+    expect(res.body).toMatchObject({ code: 'STORAGE_TIMEOUT' });
+    expect(res.headers['content-range']).toBeUndefined();
   });
 });
 

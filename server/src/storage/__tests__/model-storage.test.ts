@@ -608,6 +608,17 @@ describe('getAllStats', () => {
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it('stops at the first bucket the store does not answer for, instead of waiting out every one (TASK-491)', async () => {
+    const timeout = Object.assign(new Error('RustFS did not answer ListObjectsV2 within 15000 ms'), {
+      name: 'TimeoutError',
+    });
+    client.listAll.mockImplementation(() => {
+      throw timeout;
+    });
+    await expect(new ModelStorageClient().getAllStats()).rejects.toBe(timeout);
+    expect(client.listAll).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

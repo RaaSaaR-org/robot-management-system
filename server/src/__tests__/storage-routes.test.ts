@@ -511,6 +511,18 @@ describe('Storage Routes', () => {
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to get storage statistics');
     });
+
+    it('returns 503 with Retry-After when the store does not answer in time (TASK-491)', async () => {
+      mockModelStorage.getAllStats.mockRejectedValue(
+        Object.assign(new Error('RustFS did not answer ListObjectsV2 within 15000 ms'), { name: 'TimeoutError' }),
+      );
+
+      const response = await request(app).get('/api/storage/stats');
+
+      expect(response.status).toBe(503);
+      expect(response.headers['retry-after']).toBe('5');
+      expect(response.body.code).toBe('STORAGE_TIMEOUT');
+    });
   });
 
   // --------------------------------------------------------------------------

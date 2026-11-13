@@ -3,7 +3,7 @@ id: "TASK-491"
 aliases: []
 title: "Switching episodes quickly never takes dataset browsing down, and a stuck storage call clears on its own"
 slug: "switching-episodes-quickly-never-takes-dataset-browsing-down"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "review"              # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
@@ -102,13 +102,24 @@ samples the S3 client's socket pool.
   - uploads keep their own per-request connections (the SDK's
     `Expect: 100-continue` path) and have no deadline, only the idle timeout —
     a part that is moving is never cut off.
-- `server/.env.example`, `helm/neodem`, `docs/deployment.md`: the five settings.
+  - `/health`'s HeadBucket probe goes through the same deadline helper, so a
+    store that does not answer reads `connectivity`, not `unknown`.
+- `server/src/storage/model-storage.ts`, `server/src/routes/storage.routes.ts`:
+  `/api/storage/stats` stops at the first bucket the store does not answer for
+  and says 503 `STORAGE_TIMEOUT`, instead of waiting out one deadline per bucket.
+- `server/.env.example`, `docs/deployment.md`: the five settings. The defaults
+  are what the demo instance should run with, so the Helm chart is untouched.
 
 ### Frontend
 
-- `app/src/features/training/components/datasets/EpisodeViewer.tsx` /
-  `api/datasetVideoApi.ts`: only what the measurements show to be worth it —
-  see Notes.
+No change — measured, not assumed. Per switch the player makes four to five
+video requests (per camera: `bytes=0-` for the index, then the seek to the
+episode's window) and the browser itself cancels every one of them on the next
+click: 1,019 video requests for 250 switches, 1,009 of them cancelled. The
+one-byte probe of #482 only goes out after a `<video>` error. The obvious
+saving — one URL per chunk file instead of one per episode, so the index is not
+fetched again — saves nothing: Chromium asks for `bytes=0-` again when only the
+`#t=` fragment changes (`url-experiment.json` in the evidence folder).
 
 ### Key files
 
@@ -116,22 +127,23 @@ samples the S3 client's socket pool.
 - `server/src/routes/datasets.routes.ts`, `server/src/routes/__tests__/datasets-video-routes.test.ts`
 - `server/src/routes/twin.routes.ts`, `server/src/routes/sensorscan.routes.ts`, `server/src/routes/incident.routes.ts`
 - `server/src/storage/rustfs-client.ts`, `server/src/storage/__tests__/rustfs-client-transport.test.ts`
-- `server/.env.example`, `helm/neodem/templates/server-deployment.yaml`, `helm/neodem/values.yaml`, `docs/deployment.md`
+- `server/src/storage/model-storage.ts`, `server/src/routes/storage.routes.ts`
+- `server/.env.example`, `docs/deployment.md`
 
 ## Acceptance Criteria
 
-- [ ] A video request dropped before, while and after the store stream opens
+- [x] A video request dropped before, while and after the store stream opens
       leaves no store socket checked out; so does a stream error mid-way and a
       HEAD or one-byte probe.
-- [ ] 200+ rapid switches / dropped requests against the local reproduction:
+- [x] 200+ rapid switches / dropped requests against the local reproduction:
       zero 5xx, storage reads as fast afterwards as before, socket count back to
       baseline, `/health` storage `ready`.
-- [ ] A store that stops answering makes storage calls fail within the
+- [x] A store that stops answering makes storage calls fail within the
       configured deadline instead of hanging, and they work again by themselves
       once it answers — no restart.
-- [ ] `rmsctl datasets upload` of the bottle dataset and full-length playback of
+- [x] `rmsctl datasets upload` of the bottle dataset and full-length playback of
       one video work with the new timeouts.
-- [ ] Tests fail without the fix, including one that drops the client while the
+- [x] Tests fail without the fix, including one that drops the client while the
       store stream is opening.
 
 ## Test Strategy
@@ -140,3 +152,37 @@ samples the S3 client's socket pool.
 their before/after output are named in the PR.
 
 ## Notes
+
+Measured on 2026-11-13, same machine, same dataset, same scripts before and
+after (`NODE_ENV=production`, 768 MB heap, RustFS 1.0.0 in docker).
+
+| | `main` (1812e1a) | this branch |
+| --- | --- | --- |
+| 200 ranged requests dropped after 0–60 ms | pool 50/50 busy, 123 calls queued, every storage read times out | 0 busy, 0 queued |
+| 1,000 dropped after 0–120 ms | — (dead after the first 200) | zero 5xx; peak 7 sockets busy, 0 queued |
+| real player, 100 ms store latency, 350 ms switches | dead within the first 50; 504s; still down 21 min later | 250 switches, 1,019 video requests, zero 5xx, both videos play |
+| storage reads afterwards (list / frames of an episode not read before / 1 MB video) | no answer | 14 / 60 / 27 ms (fresh server: 196 / 117 / 75 ms cold, 13 / 9 / 28 ms warm) |
+| `/health` storage afterwards | `unavailable` / `unknown` | `ready` |
+| store frozen (accepts, never answers) | every call hangs for good | every call answered at 15.0 s (503 / 502); all work again within one probe period of it coming back, no restart |
+
+Uploads and long streams under the new timeouts: `rmsctl datasets upload` of the
+bottle dataset 10.9 s (8.2 s before, one run each) and, throttled to 1 MB/s per
+connection so that a 32 MB part takes 32 s and the whole upload 161 s, `ready`
+both times; one 216 MB video streamed whole at 1.4 MB/s over 150 s,
+byte-identical to the source; the 1,856 s head video played first second to
+last in Chromium at 16×; and with the idle timeout turned down to 4 s, a player
+left paused for 12 s played to the end all the same (the browser asks again
+when the server has let the idle stream go).
+
+Not reproduced locally: the early `500 {"error":"Failed to stream video"}`
+answers the live instance gave before it started hanging. Locally the same
+phase shows up as requests waiting for a socket and timing out at the gateway.
+The code path that produced the header-less 500 that still carried a
+`Content-Range` is the one fixed here (a stream error after the 206 headers
+were set and before they were sent); what RustFS itself answered on the
+instance at that moment is not known.
+
+Left alone on purpose: `coldReadGate` (its 30 s hold limit already releases a
+slot, and with the deadline no load behind it can stay unsettled); the routes
+that proxy a robot or a supervisor (`robot.routes.ts`, `voice.routes.ts`,
+`robot-bringup.routes.ts`), which do not touch object storage.

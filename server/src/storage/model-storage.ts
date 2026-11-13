@@ -762,6 +762,11 @@ export class ModelStorageClient {
       try {
         stats.push(await this.getBucketStats(bucket));
       } catch (error) {
+        // A store that is not answering will not answer for the next bucket
+        // either: asking all of them in turn made this one request last as
+        // many deadlines as there are buckets (TASK-491). A missing bucket is
+        // different — that one counts as empty.
+        if ((error as { name?: unknown } | null)?.name === 'TimeoutError') throw error;
         console.warn(`[ModelStorage] Failed to get stats for ${bucket}:`, error);
         stats.push({
           bucket,

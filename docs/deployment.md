@@ -539,6 +539,11 @@ each network counts down from its own budget.
 | `RUSTFS_ENDPOINT` | No | — | S3-compatible storage endpoint, e.g. `http://localhost:9000`. Set means required: while RustFS is down, writes (dataset imports and uploads, twin artifacts, incident clips, sensor scans, patrol photos) answer 503 `STORAGE_UNAVAILABLE` naming the `errorKind` instead of falling back to local disk. Unset, they use local disk |
 | `RUSTFS_ACCESS_KEY` | With `RUSTFS_ENDPOINT` | — | S3 access key; no built-in default |
 | `RUSTFS_SECRET_KEY` | With `RUSTFS_ENDPOINT` | — | S3 secret key; no built-in default |
+| `RUSTFS_CONNECT_TIMEOUT_MS` | No | `5000` | Longest a TCP connect to RustFS may take |
+| `RUSTFS_SOCKET_TIMEOUT_MS` | No | `120000` | Longest a RustFS socket may carry no bytes in either direction before its request is ended. Bounds a hung store, a stalled upload and a paused video player; a transfer that keeps moving is never cut, however long it takes. Raise it if the store goes silent for longer than this while it completes a very large multipart upload |
+| `RUSTFS_RESPONSE_TIMEOUT_MS` | No | `15000` | Longest a RustFS call may wait for the answer to begin, the wait for a free socket included. The call then fails (video answers 503 `STORAGE_TIMEOUT` with `Retry-After`) instead of hanging. Not applied to uploads, completing a multipart upload or copies. Keep it below the edge proxy's own timeout |
+| `RUSTFS_MAX_SOCKETS` | No | `64` | Sockets for RustFS calls that return at once (HEAD, list, ranged reads, the `/health` probe) |
+| `RUSTFS_MAX_STREAM_SOCKETS` | No | `128` | Sockets for long-lived RustFS streams — one per episode video being played or artifact being downloaded. A pool of its own, so open streams cannot starve the calls above |
 | `RUSTFS_MULTIPART_MAX_AGE_HOURS` | No | `24` | Age after which the server aborts an incomplete multipart upload (parts an interrupted upload left in a bucket). Keep it above the longest single-file upload |
 | `RUSTFS_MULTIPART_SWEEP_INTERVAL_HOURS` | No | `6` | How often that sweep runs; it also runs whenever RustFS becomes ready |
 | `HF_IMPORT_CONCURRENCY` | No | `5` | Concurrent HuggingFace file transfers, capped at 5; use `1` when storage has limited room for temporary multipart uploads |

@@ -309,6 +309,11 @@ storageRoutes.get('/stats', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[StorageRoutes] Error getting storage stats:', error);
+    if ((error as { name?: unknown } | null)?.name === 'TimeoutError') {
+      res.setHeader('Retry-After', '5');
+      res.status(503).json({ error: 'Object storage did not answer in time', code: 'STORAGE_TIMEOUT' });
+      return;
+    }
     res.status(500).json({ error: 'Failed to get storage statistics' });
   }
 });
