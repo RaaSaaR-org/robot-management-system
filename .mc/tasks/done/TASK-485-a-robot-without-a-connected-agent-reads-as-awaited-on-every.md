@@ -3,7 +3,7 @@ id: "TASK-485"
 aliases: []
 title: "A robot without a connected agent reads as awaited on every page, and an unused robot type can be deleted"
 slug: "a-robot-without-a-connected-agent-reads-as-awaited-on-every"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
