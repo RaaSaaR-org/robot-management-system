@@ -78,6 +78,7 @@ const CATEGORY_MAP: Record<string, string> = {
   'training-run-export': 'Training',
   'huggingface-publish': 'Training',
   'dataset-upload': 'Training',
+  'dataset-download': 'Training',
   'research-publications': 'Research',
   'deployment': 'Operations',
   'dev-workflow': 'Operations',
