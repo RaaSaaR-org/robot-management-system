@@ -156,6 +156,10 @@ repo link, but the component is not mounted anywhere).
 ## Notes
 
 - Not changed: a dataset with names and no groups still draws every channel at once
-  (31 lines for the demo dataset without its `modality.json`); its tooltip is then a
-  31-row table, taller than the panel. Grouping such a vector by name prefix would be a
-  separate task.
+  (31 lines for the demo dataset without its `modality.json`). Grouping such a vector
+  by name prefix would be a separate task.
+- Added in review: where `observation.state` and `action` name a channel differently,
+  labels stay `<group>[n]` — one label stands for the state line and the action line
+  (`channelNamesAgree`). And on the wide plot under the videos a tooltip of more than
+  eight rows (`arms[0]`…`arms[13]`) is laid out in columns (`tooltipColumns`); in one
+  column its last rows were cut off below the panel.

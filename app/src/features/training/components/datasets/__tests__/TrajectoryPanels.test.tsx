@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { JointChartPanel, rightSideColor } from '../TrajectoryPanels';
+import { JointChartPanel, rightSideColor, tooltipColumns } from '../TrajectoryPanels';
 import { chartChannelColor } from '@/shared/components/ui';
 import type { FrameData } from '../../../types';
 
@@ -189,5 +189,20 @@ describe('JointChartPanel', () => {
       expect(elbow).toHaveAttribute('aria-pressed', 'false');
       expect(legend().getByRole('button', { name: 'shoulder_pitch' })).not.toHaveClass('opacity-50');
     });
+  });
+});
+
+describe('the columns of the chart tooltip (TASK-494)', () => {
+  it('keeps one column beside the video and for a few rows', () => {
+    expect(tooltipColumns(14, 290)).toBe(1);
+    expect(tooltipColumns(3, 862)).toBe(1);
+    expect(tooltipColumns(0, 862)).toBe(1);
+  });
+
+  it('puts many rows side by side on the wide plot, as far as its width allows', () => {
+    // arms[0]…arms[13] under the videos: fourteen rows in one column were cut off.
+    expect(tooltipColumns(14, 862)).toBe(2);
+    expect(tooltipColumns(31, 862)).toBe(3);
+    expect(tooltipColumns(31, 400)).toBe(1);
   });
 });

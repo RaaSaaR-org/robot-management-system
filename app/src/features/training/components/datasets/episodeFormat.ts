@@ -91,6 +91,17 @@ export function realChannelNames(names: readonly string[] | undefined, width: nu
 }
 
 /**
+ * Whether one list of names can label both vectors of a chart that draws a
+ * channel's state and its action as one pair. False when the other vector has
+ * a real name of its own at some index and it is a different one: `arms[5]`
+ * is true of both lines there, the action's name is true of one.
+ */
+export function channelNamesAgree(names: readonly string[], other: readonly string[] | undefined): boolean {
+  if (!other) return true;
+  return other.every((name, i) => i >= names.length || isPlaceholderName(name) || name === names[i]);
+}
+
+/**
  * One label per channel of a `width`-wide vector that has joint groups. The
  * joint's own name when `names` (out of info.json) really names every channel
  * — "arms[5]" says nothing where the vector alternates left and right — and

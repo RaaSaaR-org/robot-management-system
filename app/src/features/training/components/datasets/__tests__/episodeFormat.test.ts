@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  cameraKeys, cameraLabel, channelLabels, channelSides, channelStats, cursorFraction, featureNames, formatPlayhead, formatStat,
+  cameraKeys, cameraLabel, channelLabels, channelNamesAgree, channelSides, channelStats, cursorFraction, featureNames, formatPlayhead, formatStat,
   groupLabel, isPlaceholderName, mostActiveGroup, realChannelNames, shortChannelNames, statsFrameCount,
 } from '../episodeFormat';
 
@@ -97,6 +97,19 @@ describe('real channel names inside joint groups (TASK-494)', () => {
     expect(channelLabels(G1_GROUPS, 43, ['observation_to_policy'])).toEqual(byIndex);
     expect(channelLabels(G1_GROUPS, 43, Array.from({ length: 43 }, (_, i) => `motor_${i}`))).toEqual(byIndex);
     expect(channelLabels(G1_DEX3_GROUPS, 31, G1_DEX3_NAMES.slice(0, 30))[8]).toBe('arms[5]');
+  });
+
+  it('lets one list label state and action only where the two vectors do not name a channel differently', () => {
+    expect(channelNamesAgree(G1_DEX3_NAMES, G1_DEX3_NAMES)).toBe(true);
+    // The other vector has no names, placeholders, or is shorter: nothing contradicts.
+    expect(channelNamesAgree(G1_DEX3_NAMES, undefined)).toBe(true);
+    expect(channelNamesAgree(G1_DEX3_NAMES, [])).toBe(true);
+    expect(channelNamesAgree(G1_DEX3_NAMES, G1_DEX3_NAMES.map((_, i) => `motor_${i}`))).toBe(true);
+    expect(channelNamesAgree(G1_DEX3_NAMES, G1_DEX3_NAMES.slice(0, 17))).toBe(true);
+    // The state lists the left arm first where the action alternates: channel 4 is two joints.
+    const leftFirst = [...G1_DEX3_NAMES];
+    [leftFirst[4], leftFirst[5]] = [leftFirst[5]!, leftFirst[4]!];
+    expect(channelNamesAgree(G1_DEX3_NAMES, leftFirst)).toBe(false);
   });
 
   it('shortens a suffix every name shares, and only then', () => {

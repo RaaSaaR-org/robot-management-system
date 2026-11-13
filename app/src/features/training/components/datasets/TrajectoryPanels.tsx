@@ -153,6 +153,22 @@ function TooltipSwatch({ color }: { color: string }) {
  */
 const PAIRED_TOOLTIP_FROM_PX = 360;
 
+/** Rows of the tooltip that fit over the low, wide plot under the videos. */
+const TOOLTIP_ROWS = 8;
+/** The width one column of channel rows takes, a full joint name included. */
+const TOOLTIP_COLUMN_PX = 260;
+
+/**
+ * How many columns the rows of the tooltip are laid out in. One beside the
+ * video, where the plot is tall. On the wide plot under the videos fourteen
+ * `arms[i]` rows in one column hung out of the panel and the last were cut
+ * off: there they go side by side, as many columns as the chart has room for.
+ */
+export function tooltipColumns(rows: number, chartWidth: number): number {
+  if (chartWidth < PAIRED_TOOLTIP_FROM_PX) return 1;
+  return Math.max(1, Math.min(Math.ceil(rows / TOOLTIP_ROWS), Math.floor(chartWidth / TOOLTIP_COLUMN_PX)));
+}
+
 /**
  * What the chart says under the pointer: a row per joint, its state and its
  * action side by side — and on a wide plot both sides of a left/right pair in
@@ -160,8 +176,11 @@ const PAIRED_TOOLTIP_FROM_PX = 360;
  * own list has a row per line with every digit of the float: twenty-eight.
  */
 function JointTooltip({ point, time, channels }: { point: Record<string, number>; time: unknown; channels: Channel[] }) {
-  const wide = (useChartWidth() ?? 0) >= PAIRED_TOOLTIP_FROM_PX;
+  const width = useChartWidth() ?? 0;
+  const wide = width >= PAIRED_TOOLTIP_FROM_PX;
   const paired = wide && channels.length > 0 && channels.every((c) => c.side);
+  const columns = paired ? 1 : tooltipColumns(channels.length, width);
+  const perColumn = Math.ceil(channels.length / columns);
   const joints = paired ? [...new Set(channels.map((c) => c.entry))] : [];
   const cells = (c: Channel | undefined, digits: number) => (
     <>
@@ -175,44 +194,59 @@ function JointTooltip({ point, time, channels }: { point: Record<string, number>
   return (
     <div style={chartTheme.tooltip.contentStyle} data-testid="joint-chart-tooltip">
       <p style={chartTheme.tooltip.labelStyle}>{labelFormat(time)}</p>
-      <table className={TOOLTIP_TABLE}>
-        <thead className="text-ink-tertiary">
-          {paired && (
+      {paired ? (
+        <table className={TOOLTIP_TABLE}>
+          <thead className="text-ink-tertiary">
             <tr>
               <th />
               <th colSpan={2} className={TOOLTIP_HEAD}>left</th>
               <th colSpan={2} className={TOOLTIP_HEAD}>right</th>
             </tr>
-          )}
-          <tr>
-            <th />
-            <th className={TOOLTIP_HEAD}>state</th>
-            <th className={TOOLTIP_HEAD}>action</th>
-            {paired && <th className={TOOLTIP_HEAD}>state</th>}
-            {paired && <th className={TOOLTIP_HEAD}>action</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {paired
-            ? joints.map((joint) => (
-                <tr key={joint}>
-                  <th scope="row" className="whitespace-nowrap text-left font-normal">{joint}</th>
-                  {cells(channels.find((c) => c.entry === joint && c.side === 'left'), 2)}
-                  {cells(channels.find((c) => c.entry === joint && c.side === 'right'), 2)}
+            <tr>
+              <th />
+              <th className={TOOLTIP_HEAD}>state</th>
+              <th className={TOOLTIP_HEAD}>action</th>
+              <th className={TOOLTIP_HEAD}>state</th>
+              <th className={TOOLTIP_HEAD}>action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {joints.map((joint) => (
+              <tr key={joint}>
+                <th scope="row" className="whitespace-nowrap text-left font-normal">{joint}</th>
+                {cells(channels.find((c) => c.entry === joint && c.side === 'left'), 2)}
+                {cells(channels.find((c) => c.entry === joint && c.side === 'right'), 2)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div className="flex items-start gap-4">
+          {Array.from({ length: columns }, (_, column) => (
+            <table key={column} className={TOOLTIP_TABLE}>
+              <thead className="text-ink-tertiary">
+                <tr>
+                  <th />
+                  <th className={TOOLTIP_HEAD}>state</th>
+                  <th className={TOOLTIP_HEAD}>action</th>
                 </tr>
-              ))
-            : channels.map((c) => (
-                <tr key={c.name}>
-                  <th scope="row" className="whitespace-nowrap text-left font-normal">
-                    <TooltipSwatch color={c.color} />
-                    {c.label}
-                  </th>
-                  <td className={TOOLTIP_NUMBER}>{valueFormat(point[`obs_${c.name}`])}</td>
-                  <td className={TOOLTIP_NUMBER}>{valueFormat(point[`action_${c.name}`])}</td>
-                </tr>
-              ))}
-        </tbody>
-      </table>
+              </thead>
+              <tbody>
+                {channels.slice(column * perColumn, (column + 1) * perColumn).map((c) => (
+                  <tr key={c.name}>
+                    <th scope="row" className="whitespace-nowrap text-left font-normal">
+                      <TooltipSwatch color={c.color} />
+                      {c.label}
+                    </th>
+                    <td className={TOOLTIP_NUMBER}>{valueFormat(point[`obs_${c.name}`])}</td>
+                    <td className={TOOLTIP_NUMBER}>{valueFormat(point[`action_${c.name}`])}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

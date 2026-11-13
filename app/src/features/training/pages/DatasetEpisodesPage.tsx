@@ -50,7 +50,7 @@ import { formatDuration } from '../components/datasets/datasetFormat';
 import { formatLerobotVersion } from '../components/datasets/importFormat';
 import { DatasetProvenance } from '../components/datasets/DatasetProvenance';
 import { DatasetStatsPanel } from '../components/datasets/DatasetStatsPanel';
-import { cameraKeys, channelLabels, featureNames } from '../components/datasets/episodeFormat';
+import { cameraKeys, channelLabels, channelNamesAgree, featureNames } from '../components/datasets/episodeFormat';
 import { useDatasetViews } from '../hooks/useDatasetViews';
 import { useTrainingJobs } from '../hooks/useTrainingJobs';
 import { isDatasetView } from '../types';
@@ -196,7 +196,11 @@ export function DatasetEpisodesPage() {
       const key = groupedVector === 'action' ? 'action' : 'observation.state';
       const shape = (features as Record<string, { shape?: unknown }> | null | undefined)?.[key]?.shape;
       const declared = Array.isArray(shape) && typeof shape[0] === 'number' ? shape[0] : 0;
-      return channelLabels(jointGroups, Math.max(declared, ...jointGroups.map((g) => g.end)), infoNames[groupedVector]);
+      // One list labels the state line and the action line of a channel: where
+      // the two vectors name a channel differently, the index is the honest label.
+      const names = infoNames[groupedVector];
+      const agreed = channelNamesAgree(names, infoNames[groupedVector === 'action' ? 'state' : 'action']) ? names : undefined;
+      return channelLabels(jointGroups, Math.max(declared, ...jointGroups.map((g) => g.end)), agreed);
     }
     return infoNames.action.length ? infoNames.action : DEFAULT_JOINTS;
   }, [features, jointGroups, groupedVector, infoNames]);

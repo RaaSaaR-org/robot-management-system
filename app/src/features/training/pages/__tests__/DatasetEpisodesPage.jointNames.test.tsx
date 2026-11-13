@@ -166,6 +166,38 @@ describe('the episode page on a dataset with joint groups and joint names (TASK-
     expect(legend.getAllByRole('button')).toHaveLength(14);
     expect(legend.queryByText(/motor_/)).not.toBeInTheDocument();
   });
+
+  it('falls back to group and index when state and action name a channel differently', async () => {
+    // The chart draws state and action of a channel as one pair under one label.
+    const stateNames = [...NAMES];
+    [stateNames[4], stateNames[5]] = [stateNames[5]!, stateNames[4]!];
+    trainingApiMock.getDataset.mockResolvedValue({
+      ...BOTTLES,
+      infoJson: {
+        features: { ...features(NAMES), 'observation.state': { dtype: 'float32', shape: [WIDTH], names: stateNames } },
+      } as unknown as Dataset['infoJson'],
+    });
+    renderPage();
+    const legend = within(await screen.findByTestId('joint-chart-legend'));
+    expect(legend.getByText('arms[1]')).toBeInTheDocument();
+    expect(legend.queryByText(/shoulder/)).not.toBeInTheDocument();
+  });
+
+  it('reads names that info.json nests under a key', async () => {
+    trainingApiMock.getDataset.mockResolvedValue({
+      ...BOTTLES,
+      infoJson: {
+        features: {
+          ...features(NAMES),
+          'observation.state': { dtype: 'float32', shape: [WIDTH], names: { motors: NAMES } },
+          action: { dtype: 'float32', shape: [WIDTH], names: { motors: NAMES } },
+        },
+      } as unknown as Dataset['infoJson'],
+    });
+    renderPage();
+    const legend = within(await screen.findByTestId('joint-chart-legend'));
+    expect(legend.getByRole('button', { name: 'elbow' })).toHaveAttribute('title', 'left_elbow_joint · right_elbow_joint');
+  });
 });
 
 describe('the header of the episode page (TASK-494)', () => {
