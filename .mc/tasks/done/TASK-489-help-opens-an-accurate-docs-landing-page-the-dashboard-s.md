@@ -3,7 +3,7 @@ id: "TASK-489"
 aliases: []
 title: "Help opens an accurate docs landing page, the dashboard's robot list sits inside its panel, and Agent Mode empty states speak to users"
 slug: "help-opens-an-accurate-docs-landing-page-the-dashboard-s"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
