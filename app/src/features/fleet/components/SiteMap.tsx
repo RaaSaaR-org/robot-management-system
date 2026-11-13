@@ -11,6 +11,10 @@
  *   `metadata.plannedPlace` names a zone of the site is drawn in that zone as
  *   a dashed outline marked "planned" and listed as not connected, so it is
  *   never read as a live position (TASK-493).
+ *   Names on the map are sized in screen px, not viewBox px: the dashboard's
+ *   map is half the height of the fleet page's and showed 12-unit names at
+ *   under 6 px. Planned-robot labels keep clear of zone names and of each
+ *   other (TASK-495).
  *   Imports the twin feature by path: its barrel pulls in three.js.
  * @feature fleet
  * @dependencies @/features/digitaltwin, @/features/robots, @/features/safety
@@ -30,7 +34,16 @@ import {
   toast,
   useCssColor,
 } from '@/shared/components/ui';
-import { TwinTopDown } from '@/features/digitaltwin/components/TwinTopDown';
+import {
+  TOP_DOWN_LABEL_SIZE,
+  TOP_DOWN_VIEW_H,
+  TOP_DOWN_VIEW_W,
+  TwinTopDown,
+  estimateTextWidth,
+  labelBoxesCollide,
+  layoutZoneLabels,
+  type LabelBox,
+} from '@/features/digitaltwin/components/TwinTopDown';
 import { ZoneLegend, ZONE_TYPE_LABELS } from '@/features/digitaltwin/components/ZoneLegend';
 import { useTwinStore, selectTwins } from '@/features/digitaltwin/store/twinStore';
 import { twinZoneApi } from '@/features/digitaltwin/api/twinZoneApi';
@@ -104,30 +117,84 @@ export function groupSiteRobots(
   return groups;
 }
 
-/** Rows of planned markers in one zone are this far apart, in viewBox px. */
-const PLANNED_ROW_GAP = 18;
+/** How large a name on the map is shown, in screen px. */
+export const MAP_LABEL_PX = { full: 12, compact: 11 } as const;
 
 /**
- * Where to write each planned robot's label, in viewBox px: over its zone's
- * name (drawn at the centroid), one row per robot of that zone going up, so
- * two robots planned into the same zone do not sit on top of each other or on
- * the name. `at` is the label's centre; the marker sits at its left end.
+ * The size, in viewBox px, a label needs to be shown `px` screen px tall on a
+ * map whose viewBox is drawn at `unitsPerPx` — never under the viewBox's own
+ * 12, and capped where a name would outgrow the map it labels.
+ */
+export function mapLabelSize(px: number, unitsPerPx: number | undefined): number {
+  if (!unitsPerPx || !Number.isFinite(unitsPerPx)) return TOP_DOWN_LABEL_SIZE;
+  return Math.min(28, Math.max(TOP_DOWN_LABEL_SIZE, px * unitsPerPx));
+}
+
+/** The ring in front of a planned robot's name takes this much of the label's width, in em. */
+const PLANNED_RING_EM = 16 / 12;
+/** How many lines above and below a zone's name are tried for a planned label. */
+const PLANNED_ROWS_TRIED = 6;
+
+export interface PlannedLayoutOptions {
+  /** Size of the labels, in viewBox px */
+  fontSize?: number;
+  /** Labels already on the map (the zone names) that a planned label must not cover */
+  obstacles?: LabelBox[];
+}
+
+/** The text a planned robot is labelled with on the map. */
+export function plannedLabel(robot: Robot): string {
+  return `${robot.name} (planned)`;
+}
+
+/** Width of a planned robot's ring and label, in viewBox px (mixed case: narrower than a zone name). */
+function plannedLabelWidth(robot: Robot, fontSize: number): number {
+  return fontSize * PLANNED_RING_EM + estimateTextWidth(plannedLabel(robot), fontSize, 0.52);
+}
+
+/**
+ * Where to write each planned robot's label, in viewBox px: on the first free
+ * line around its zone's name (drawn at the centroid) — the line above it, the
+ * line below, two above, two below… A line is free when the label covers
+ * neither a zone name nor a label placed before it, so the G1 and the SO-101
+ * planned into one zone no longer sit on each other or on "STAGING".
+ *
+ * A label is centred on its zone unless that would put its ring left of the
+ * zone: a long name starts at the zone's left edge and runs out to the right,
+ * so the ring — the thing that says where — stays over the zone. The longest
+ * label picks its line first; a short one fits into what is left.
+ *
+ * `at` is the label's centre on its baseline; the ring sits at its left end.
+ * The result is in the order of `planned`.
  */
 export function plannedMarkerPositions(
   planned: PlannedRobot[],
   worldToScreen: (p: { x: number; y: number }) => { x: number; y: number },
+  { fontSize = TOP_DOWN_LABEL_SIZE, obstacles = [] }: PlannedLayoutOptions = {},
 ): Array<PlannedRobot & { at: { x: number; y: number } }> {
-  const rowOf = new Map<string, number>();
-  return planned.map((entry) => {
-    const { points } = entry.zone;
-    const centroid = worldToScreen({
+  const taken = [...obstacles];
+  const line = fontSize * 1.5;
+  const at = new Map<PlannedRobot, { x: number; y: number }>();
+  const widest = [...planned].sort((a, b) => plannedLabelWidth(b.robot, fontSize) - plannedLabelWidth(a.robot, fontSize));
+  for (const entry of widest) {
+    const points = entry.zone.points.map(worldToScreen);
+    const centroid = {
       x: points.reduce((a, p) => a + p.x, 0) / points.length,
       y: points.reduce((a, p) => a + p.y, 0) / points.length,
-    });
-    const row = rowOf.get(entry.zone.id) ?? 0;
-    rowOf.set(entry.zone.id, row + 1);
-    return { ...entry, at: { x: centroid.x, y: centroid.y - 16 - row * PLANNED_ROW_GAP } };
-  });
+    };
+    const w = plannedLabelWidth(entry.robot, fontSize);
+    const left = Math.max(centroid.x - w / 2, Math.min(...points.map((p) => p.x)) + fontSize / 2);
+    const boxAt = (y: number): LabelBox => ({ x: left, y: y - fontSize * 0.8, w, h: fontSize });
+    // Baselines, nearest first: above the name sits a little closer than a full line.
+    const candidates: number[] = [];
+    for (let k = 0; k < PLANNED_ROWS_TRIED; k += 1) {
+      candidates.push(centroid.y - fontSize * PLANNED_RING_EM - k * line, centroid.y + (k + 1) * line);
+    }
+    const y = candidates.find((c) => !taken.some((box) => labelBoxesCollide(boxAt(c), box))) ?? candidates[0]!;
+    taken.push(boxAt(y));
+    at.set(entry, { x: left + w / 2, y });
+  }
+  return planned.map((entry) => ({ ...entry, at: at.get(entry)! }));
 }
 
 /**
@@ -140,26 +207,34 @@ export function sitePoseOf(robot: Robot): { x: number; y: number; heading?: numb
   return robot.location.sitePose ?? { x: robot.location.x, y: robot.location.y, heading: robot.location.heading };
 }
 
+/** What the map needs to know of the element it is shown in. */
+interface MapView {
+  /** Width / height */
+  aspect: number;
+  /** viewBox px per screen px: the 4:3 viewBox is fitted into the element whole */
+  unitsPerPx: number;
+}
+
 /**
- * Width / height of an element, kept current as it resizes; undefined until it
- * is measured, and where there is no ResizeObserver. A callback ref, because
- * the map is not in the first render (the site list loads first).
+ * The shape and scale of an element, kept current as it resizes; undefined
+ * until it is measured, and where there is no ResizeObserver. A callback ref,
+ * because the map is not in the first render (the site list loads first).
  */
-function useAspect(): [(el: HTMLElement | null) => void, number | undefined] {
+function useMapView(): [(el: HTMLElement | null) => void, MapView | undefined] {
   const [el, setEl] = useState<HTMLElement | null>(null);
-  const [aspect, setAspect] = useState<number | undefined>(undefined);
+  const [view, setView] = useState<MapView | undefined>(undefined);
   useEffect(() => {
     if (!el || typeof ResizeObserver === 'undefined') return;
     const measure = () => {
       const { clientWidth: w, clientHeight: h } = el;
-      setAspect(w > 0 && h > 0 ? w / h : undefined);
+      setView(w > 0 && h > 0 ? { aspect: w / h, unitsPerPx: Math.max(TOP_DOWN_VIEW_W / w, TOP_DOWN_VIEW_H / h) } : undefined);
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
   }, [el]);
-  return [setEl, aspect];
+  return [setEl, view];
 }
 
 export interface SiteMapProps {
@@ -176,7 +251,8 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
   const { robots, fetchRobots } = useRobots();
   const triggerZoneEStop = useSafetyStore((s) => s.triggerZoneEStop);
 
-  const [mapRef, mapAspect] = useAspect();
+  const [mapRef, mapView] = useMapView();
+  const labelSize = mapLabelSize(MAP_LABEL_PX[size], mapView?.unitsPerPx);
   const [pickedId, setPickedId] = useState<string | null>(readLastSite);
   const [zones, setZones] = useState<TwinZoneDTO[]>([]);
   const [fetched, setFetched] = useState(false);
@@ -285,7 +361,8 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
             twin={site}
             zones={zones}
             fitZones
-            viewAspect={mapAspect}
+            viewAspect={mapView?.aspect}
+            labelSize={labelSize}
             onZoneClick={(z) => void stopZone(z)}
             zoneLabel={(z) => `Stop zone ${z.name} (${ZONE_TYPE_LABELS[z.type] ?? z.type})`}
             aria-label={`Site map of ${site.name}`}
@@ -293,13 +370,16 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
             {(t) => (
               <>
                 <g data-testid="site-map-planned-robots">
-                  {plannedMarkerPositions(groups.planned, t.worldToScreen).map(({ robot, zone, at }) => (
-                    <PlannedMarker key={robot.id} robot={robot} zoneName={zone.name} at={at} />
+                  {plannedMarkerPositions(groups.planned, t.worldToScreen, {
+                    fontSize: labelSize,
+                    obstacles: layoutZoneLabels(zones, t.worldToScreen, labelSize, true).map((l) => l.box),
+                  }).map(({ robot, zone, at }) => (
+                    <PlannedMarker key={robot.id} robot={robot} zoneName={zone.name} at={at} fontSize={labelSize} />
                   ))}
                 </g>
                 <g data-testid="site-map-robots">
                   {groups.plotted.map((r) => (
-                    <RobotDot key={r.id} robot={r} at={t.worldToScreen(sitePoseOf(r))} />
+                    <RobotDot key={r.id} robot={r} at={t.worldToScreen(sitePoseOf(r))} fontSize={labelSize} />
                   ))}
                 </g>
               </>
@@ -313,7 +393,7 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
 }
 
 /** A plotted robot: a dot, a heading tick (degrees, CCW from +x) and its name. */
-function RobotDot({ robot, at }: { robot: Robot; at: { x: number; y: number } }) {
+function RobotDot({ robot, at, fontSize }: { robot: Robot; at: { x: number; y: number }; fontSize: number }) {
   const fill = useCssColor('--color-primary');
   const halo = useCssColor('--color-canvas', 'white');
   const heading = sitePoseOf(robot).heading;
@@ -334,7 +414,7 @@ function RobotDot({ robot, at }: { robot: Robot; at: { x: number; y: number } })
         />
       )}
       <circle cx={at.x} cy={at.y} r={7} fill={fill} stroke={halo} strokeWidth={2} />
-      <text x={at.x + 10} y={at.y - 10} fontSize={12} fill={fill}>
+      <text x={at.x + 10} y={at.y - 10} fontSize={fontSize} fill={fill}>
         {robot.name}
       </text>
     </g>
@@ -346,25 +426,46 @@ function RobotDot({ robot, at }: { robot: Robot; at: { x: number; y: number } })
  * ink — nothing of the solid, primary-coloured dot a live robot gets — and the
  * word "planned" in its label.
  */
-function PlannedMarker({ robot, zoneName, at }: { robot: Robot; zoneName: string; at: { x: number; y: number } }) {
+function PlannedMarker({
+  robot,
+  zoneName,
+  at,
+  fontSize,
+}: {
+  robot: Robot;
+  zoneName: string;
+  at: { x: number; y: number };
+  fontSize: number;
+}) {
   const ink = useCssColor('--color-ink-primary', 'gray');
   const halo = useCssColor('--color-canvas', 'white');
   const state = robotProvisioning(robot)?.state ?? 'awaiting_agent';
-  const label = `${robot.name} (planned)`;
-  // Centre ring + label on `at`: about 6 px a character at this size.
-  const left = at.x - (label.length * 6 + 16) / 2;
+  const label = plannedLabel(robot);
+  // Everything about the marker grows with its label.
+  const em = fontSize / TOP_DOWN_LABEL_SIZE;
+  // Centre ring + label on `at`.
+  const left = at.x - plannedLabelWidth(robot, fontSize) / 2;
   return (
     <g data-testid={`site-map-planned-${robot.id}`} pointerEvents="none">
       <title>{`${robot.name} — planned position in ${zoneName}. ${ROBOT_PROVISIONING_LABELS[state]}, not a live position.`}</title>
-      <circle cx={left + 6} cy={at.y - 4} r={5.5} fill={halo} fillOpacity={0.6} stroke={ink} strokeWidth={1.5} strokeDasharray="3,2.5" />
+      <circle
+        cx={left + 6 * em}
+        cy={at.y - 4 * em}
+        r={5.5 * em}
+        fill={halo}
+        fillOpacity={0.6}
+        stroke={ink}
+        strokeWidth={1.5 * em}
+        strokeDasharray={`${3 * em},${2.5 * em}`}
+      />
       {/* The halo keeps the label readable where it runs over a zone edge. */}
       <text
-        x={left + 16}
+        x={left + fontSize * PLANNED_RING_EM}
         y={at.y}
-        fontSize={12}
+        fontSize={fontSize}
         fill={ink}
         stroke={halo}
-        strokeWidth={3}
+        strokeWidth={3 * em}
         strokeOpacity={0.75}
         paintOrder="stroke"
         strokeLinejoin="round"

@@ -189,6 +189,51 @@ export function mostActiveGroup(groups: ChannelGroup[], frames: FrameData[]): st
   return best;
 }
 
+/** The y axis of a chart fitted to its data: where it starts and ends, and the round values it is labelled at. */
+export interface FittedAxis {
+  domain: [number, number];
+  ticks: number[];
+  /** Decimals the tick labels need to tell two neighbours apart. */
+  digits: number;
+}
+
+/**
+ * A y axis that fits the values on screen: from just under the lowest to just
+ * over the highest (5 % of the span each side), labelled at round values in
+ * between. Recharts' own axis rounds both ends OUT to its tick step, so arms
+ * that stay within about ±2 rad were drawn on −4…4 and used half the plot.
+ * The ends here are not ticks, so no step of empty plot is added.
+ *
+ * `values` yields everything drawn (state and action of every visible channel
+ * over the whole episode — not the part under the cursor, so the axis holds
+ * still while the episode plays). Null when nothing in it is a finite number.
+ */
+export function fitAxis(values: Iterable<number | undefined>, wantedTicks = 5): FittedAxis | null {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const v of values) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  if (lo > hi) return null;
+  // A flat line still gets a band around it, wide enough to read its value.
+  const pad = hi > lo ? (hi - lo) * 0.05 : Math.max(Math.abs(hi) * 0.05, 0.05);
+  const domain: [number, number] = [lo - pad, hi + pad];
+
+  const rough = (domain[1] - domain[0]) / wantedTicks;
+  const magnitude = 10 ** Math.floor(Math.log10(rough));
+  const step = ([1, 2, 2.5, 5, 10].find((m) => m * magnitude >= rough * (1 - 1e-9)) ?? 10) * magnitude;
+  let digits = 0;
+  while (digits < 12 && Math.abs(step * 10 ** digits - Math.round(step * 10 ** digits)) > 1e-9 * step * 10 ** digits) digits += 1;
+  const ticks: number[] = [];
+  for (let k = Math.ceil(domain[0] / step - 1e-9); k * step <= domain[1] + step * 1e-9; k += 1) {
+    // Without the float tail (0.30000000000000004) that would end up in a label; and no −0.
+    ticks.push(Number((k * step).toFixed(digits)) + 0);
+  }
+  return { domain, ticks, digits };
+}
+
 /** One channel's row of the statistics table. */
 export interface ChannelStats {
   index: number;

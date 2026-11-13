@@ -46,7 +46,7 @@ export const DARK_ON_FILL = '#0a2225';
 export const DEFAULT_BRAND: BrandConfig = {
   name: 'NeoDEM',
   nameExpansion: 'Neo Data & Execution Management',
-  tagline: 'Fleet Management System',
+  tagline: 'Open Physical AI Platform',
   shortSlogan: 'Bringing Intelligence to Motion',
   copyright: 'NeoDEM Contributors',
 };

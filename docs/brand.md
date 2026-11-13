@@ -66,6 +66,12 @@ Confident but never arrogant, clear, calm, safety-first. Technical but human.
 | *"Transparent AI. Aligned autonomy."* | Compliance |
 | *"I know Kung Fu."* | Skill transfer (sparingly) |
 
+The product descriptor is **Open Physical AI Platform** — what follows the name
+where the product has to say what it is in a few words: the browser title
+("NeoDEM — Open Physical AI Platform") and `tagline` in
+`app/src/brand/defaults.ts`. It is a category, not a slogan: never "fleet
+management system", which names one of the six stages.
+
 Matrix references ("skill upload", "the Oracle" for the inference server,
 "awakening" for a robot coming online with new skills) are seasoning, never
 the dish — keep them tasteful and out of safety surfaces.

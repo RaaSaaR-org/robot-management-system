@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { JointChartPanel, rightSideColor, tooltipColumns } from '../TrajectoryPanels';
+import { DOCKED_TOOLTIP_UNDER_PX, JointChartPanel, rightSideColor, tooltipColumns } from '../TrajectoryPanels';
 import { chartChannelColor } from '@/shared/components/ui';
 import type { FrameData } from '../../../types';
 
@@ -193,8 +193,8 @@ describe('JointChartPanel', () => {
 });
 
 describe('the columns of the chart tooltip (TASK-494)', () => {
-  it('keeps one column beside the video and for a few rows', () => {
-    expect(tooltipColumns(14, 290)).toBe(1);
+  it('keeps one column for a few rows', () => {
+    expect(tooltipColumns(8, 290)).toBe(1);
     expect(tooltipColumns(3, 862)).toBe(1);
     expect(tooltipColumns(0, 862)).toBe(1);
   });
@@ -203,6 +203,13 @@ describe('the columns of the chart tooltip (TASK-494)', () => {
     // arms[0]…arms[13] under the videos: fourteen rows in one column were cut off.
     expect(tooltipColumns(14, 862)).toBe(2);
     expect(tooltipColumns(31, 862)).toBe(3);
-    expect(tooltipColumns(31, 400)).toBe(1);
+    expect(tooltipColumns(31, 700)).toBe(2);
+  });
+
+  it('halves a long list in the tooltip docked above the narrow plot beside the video (TASK-495)', () => {
+    // Fourteen rows in one column were taller than the 174 px plot they described.
+    expect(tooltipColumns(14, 290)).toBe(2);
+    expect(tooltipColumns(31, 400)).toBe(2);
+    expect(tooltipColumns(14, DOCKED_TOOLTIP_UNDER_PX - 1)).toBe(2);
   });
 });

@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  cameraKeys, cameraLabel, channelLabels, channelNamesAgree, channelSides, channelStats, cursorFraction, featureNames, formatPlayhead, formatStat,
+  cameraKeys, cameraLabel, channelLabels, channelNamesAgree, channelSides, channelStats, cursorFraction, featureNames, fitAxis, formatPlayhead, formatStat,
   groupLabel, isPlaceholderName, mostActiveGroup, realChannelNames, shortChannelNames, statsFrameCount,
 } from '../episodeFormat';
 
@@ -259,5 +259,46 @@ describe('cursorFraction (TASK-484)', () => {
   it('has no position without samples, and one position on a single sample', () => {
     expect(cursorFraction(1, undefined, undefined)).toBeNull();
     expect(cursorFraction(1, 3, 3)).toBe(0);
+  });
+});
+
+describe('fitAxis (TASK-495)', () => {
+  it('ends the axis just outside the data instead of at the next round step', () => {
+    // Two arms of the bottle dataset: Recharts drew this on −4…4.
+    const axis = fitAxis([-2.3, 0.4, 1.4, -0.8])!;
+    expect(axis.domain[0]).toBeCloseTo(-2.485);
+    expect(axis.domain[1]).toBeCloseTo(1.585);
+    expect(axis.ticks).toEqual([-2, -1, 0, 1]);
+    expect(axis.digits).toBe(0);
+  });
+
+  it('labels a small range at round values with the decimals they need', () => {
+    const axis = fitAxis([0.02, 0.08])!;
+    expect(axis.ticks).toEqual([0.02, 0.04, 0.06, 0.08]);
+    expect(axis.digits).toBe(2);
+    expect(fitAxis([0, 1])!.ticks).toEqual([0, 0.25, 0.5, 0.75, 1]);
+    expect(fitAxis([0, 1])!.digits).toBe(2);
+  });
+
+  it('never labels a tick −0 or with a float tail', () => {
+    const { ticks } = fitAxis([-0.3, 0.3])!;
+    expect(ticks.map(String)).toEqual(['-0.2', '0', '0.2']);
+  });
+
+  it('gives a flat line a band to sit in', () => {
+    const still = fitAxis([0, 0, 0])!;
+    expect(still.domain[0]).toBeLessThan(0);
+    expect(still.domain[1]).toBeGreaterThan(0);
+    expect(still.ticks).toContain(0);
+    const offset = fitAxis([1.5, 1.5])!;
+    expect(offset.domain[0]).toBeLessThan(1.5);
+    expect(offset.domain[1]).toBeGreaterThan(1.5);
+    expect(offset.ticks.length).toBeGreaterThan(1);
+  });
+
+  it('skips what is not a finite number, and says null when nothing is', () => {
+    expect(fitAxis([undefined, NaN, 2, Infinity, 4])!.ticks).toEqual([2, 2.5, 3, 3.5, 4]);
+    expect(fitAxis([undefined, NaN])).toBeNull();
+    expect(fitAxis([])).toBeNull();
   });
 });

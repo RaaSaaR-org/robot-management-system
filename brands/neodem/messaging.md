@@ -40,6 +40,6 @@ Bring your robot into a connected Physical AI workflow. We integrate your robot'
 
 ## Messaging consistency
 
-Lead with the primary tagline and the modular Physical AI category. The runtime [brand defaults](../../app/src/brand/defaults.ts) still contain “Fleet Management System” and “Bringing Intelligence to Motion.” Those existing UI strings differ from the current [brand contract](../../docs/brand.md) and [landing hero](../../app/src/components/landing/HeroSection.tsx); use the current brand contract for new communication.
+Lead with the primary tagline and the modular Physical AI category. The runtime [brand defaults](../../app/src/brand/defaults.ts) carry the product descriptor “Open Physical AI Platform” as their tagline, in line with the [brand contract](../../docs/brand.md). Their short slogan, “Bringing Intelligence to Motion,” still differs from the brand contract and the [landing hero](../../app/src/components/landing/HeroSection.tsx); use the current brand contract for new communication.
 
 When using phrases such as “any model” or “every embodiment,” include the applicable compatibility and integration scope. Reuse measured performance claims only with their evidence and test conditions.
