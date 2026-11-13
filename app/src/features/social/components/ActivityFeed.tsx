@@ -14,6 +14,7 @@ import { EvidenceChips } from './EvidenceChips';
 import { RatingValue } from './RatingWidget';
 import { SUBJECT_LABEL, subjectLink } from '../utils/social';
 import type { ActorType } from '../types/social.types';
+import { formatDateTime } from '@/shared/utils/format';
 
 type Filter = 'all' | ActorType;
 
@@ -40,7 +41,7 @@ export function ActivityFeed({ limit = 50 }: { limit?: number }) {
         {items.map((it) => (
           <li key={`${it.kind}-${it.id}`} className="flex flex-col gap-1.5 border-b border-line-subtle pb-3">
             <div className="flex flex-wrap items-center gap-2">
-              <ActorBadge actor={it} meta={new Date(it.at).toLocaleString()} />
+              <ActorBadge actor={it} meta={formatDateTime(it.at)} />
               <span className="text-xs text-ink-muted">{it.kind === 'rating' ? 'rated' : 'commented on'}</span>
               <Link to={subjectLink(it)} className="text-xs text-primary hover:underline">
                 {SUBJECT_LABEL[it.subjectType]}

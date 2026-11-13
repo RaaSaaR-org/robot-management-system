@@ -74,9 +74,10 @@ export function TeamPage() {
       />
 
       {!multiTenancyEnabled && (
-        <GatedNotice>
-          Members are listed, but per-organization access only applies when the server runs with{' '}
-          <EnvVar>MULTI_TENANCY_ENABLED=true</EnvVar>.
+        <GatedNotice
+          adminHint={<>Access is limited per organization once the server runs with <EnvVar>MULTI_TENANCY_ENABLED=true</EnvVar>.</>}
+        >
+          Members are listed here, but on this instance everyone can reach the same robots and data.
         </GatedNotice>
       )}
 

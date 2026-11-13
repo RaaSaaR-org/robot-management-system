@@ -7,7 +7,7 @@
 
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Button, EmptyState, ErrorState, PageHeader, Panel, SegmentedControl, Spinner, StatusTag, toast, errorMessage } from '@/shared/components/ui';
+import { AdminCode, AdminHint, Button, EmptyState, ErrorState, PageHeader, Panel, SegmentedControl, Spinner, StatusTag, toast, errorMessage } from '@/shared/components/ui';
 import { useExperiments } from '../hooks/useExperiments';
 import { experimentsApi } from '../api/experimentsApi';
 import { ApproveExperimentDialog } from '../components/ApproveExperimentDialog';
@@ -51,7 +51,15 @@ export function ExperimentsPage() {
         ) : error ? (
           <ErrorState title="Couldn't load experiments" message={error} onRetry={() => void reload()} />
         ) : experiments.length === 0 ? (
-          <EmptyState title="No experiments" description="An agent proposes experiments through POST /api/experiments; they appear here for approval." />
+          <EmptyState
+            title={filter === 'all' ? 'No experiments yet' : 'No experiments with this status'}
+            description="An experiment tests one idea with several training runs. When an AI agent proposes one, it shows up here for you to approve."
+            hint={
+              <AdminHint data-testid="experiments-admin-hint">
+                Agents propose experiments through the API: <AdminCode>POST /api/experiments</AdminCode>.
+              </AdminHint>
+            }
+          />
         ) : (
           <ul className="flex flex-col divide-y divide-border-subtle" data-testid="experiment-list">
             {experiments.map((e) => (

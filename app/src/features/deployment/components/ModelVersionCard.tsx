@@ -7,7 +7,7 @@
 
 import { Link2 } from 'lucide-react';
 import { Badge, Panel, StatusTag } from '@/shared/components/ui';
-import { UI_DATE_LOCALE, cn } from '@/shared/utils';
+import { cn, formatDate } from '@/shared/utils';
 import { useModelVersionFromStore } from '../hooks/useModelVersions';
 import { MODEL_SOURCE_KIND_LABELS } from '../types';
 import type { ModelVersion } from '../types';
@@ -22,7 +22,7 @@ export interface ModelVersionCardProps {
 }
 
 export function ModelVersionCard({ version, onClick, selected, compact = false, className }: ModelVersionCardProps) {
-  const formattedDate = new Date(version.createdAt).toLocaleDateString(UI_DATE_LOCALE);
+  const formattedDate = formatDate(version.createdAt);
   const parentFromStore = useModelVersionFromStore(version.parentModelVersionId);
   const parent = version.parent ?? parentFromStore;
   const m = version.metrics;

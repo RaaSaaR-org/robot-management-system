@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Check, Database, Film, KeyRound, Loader2, Minus, Package, Plus, Sparkles } from 'lucide-react';
 import {
-  Button, FormField, KeyValueList, Modal, Panel, ProgressBar, StatusTag, Textarea, ToggleChip, confirm,
+  AdminCode, AdminHint, Button, FormField, KeyValueList, Modal, Panel, ProgressBar, StatusTag, Textarea, ToggleChip, confirm,
 } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { trainingApi } from '../api/trainingApi';
@@ -370,15 +370,26 @@ function ConfigureView({
       </div>
 
       {!configLoading && !selected.available && (
-        <Notice tone="error">
-          Generator not found on the server. Check{' '}
-          <code className="font-mono text-xs">{mode === 'forward-dynamics' ? 'server/curation/cosmos3_synth.py' : 'server/curation/neural_traj/'}</code>.
+        <Notice tone="error" testId="synthetic-not-installed">
+          <p>
+            This synthetic data generator is not installed on this instance, so it cannot create episodes here.
+            Importing or recording a dataset works as usual.
+          </p>
+          <AdminHint className="mt-1" data-testid="synthetic-admin-hint">
+            The server did not find the generator at{' '}
+            <AdminCode>{mode === 'forward-dynamics' ? 'server/curation/cosmos3_synth.py' : 'server/curation/neural_traj/'}</AdminCode>.
+          </AdminHint>
         </Notice>
       )}
       {!configLoading && selected.available && selected.requiresToken && !selected.hasToken && (
-        <Notice tone="warning">
-          No Hugging Face PRO token configured. Set <code className="font-mono text-xs">HF_TOKEN</code> on the server
-          (or <code className="font-mono text-xs">scratch/cosmos3/.env</code>) to run generation.
+        <Notice tone="warning" testId="synthetic-no-token">
+          <p>
+            This generator runs on a Hugging Face PRO account, and none is connected on this instance yet.
+          </p>
+          <AdminHint className="mt-1">
+            Set <AdminCode>HF_TOKEN</AdminCode> on the server (or in <AdminCode>scratch/cosmos3/.env</AdminCode>) to a
+            PRO account&rsquo;s token.
+          </AdminHint>
         </Notice>
       )}
       {error && <Notice tone="error">{error}</Notice>}
@@ -530,11 +541,12 @@ function LogBlock({ lines, empty }: { lines: string[]; empty?: string }) {
   );
 }
 
-function Notice({ tone, children }: { tone: 'warning' | 'error'; children: React.ReactNode }) {
+function Notice({ tone, children, testId }: { tone: 'warning' | 'error'; children: React.ReactNode; testId?: string }) {
   const Icon = tone === 'error' ? AlertTriangle : KeyRound;
   return (
     <div
       role="alert"
+      data-testid={testId}
       className={cn(
         'flex items-start gap-2 rounded-control border bg-inset p-3 text-sm text-ink-secondary',
         tone === 'error' ? 'border-signal-stopped/40' : 'border-signal-estimated/40',

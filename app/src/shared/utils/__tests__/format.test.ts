@@ -45,7 +45,7 @@ describe('formatTimeAgo', () => {
 
   it('falls back to the fixed English locale date string at 7 days or more', () => {
     const old = ago(7 * 24 * 60 * 60 * 1000);
-    expect(formatTimeAgo(old)).toBe(new Date(old).toLocaleDateString(UI_DATE_LOCALE));
+    expect(formatTimeAgo(old)).toBe('Jun 15, 2026');
   });
 
   it('handles boundary exactly at 60 minutes -> 1h', () => {

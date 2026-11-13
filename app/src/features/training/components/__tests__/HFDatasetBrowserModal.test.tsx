@@ -324,3 +324,41 @@ describe('search', () => {
     expect(screen.queryByTestId('search-widened')).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// TASK-486 — a repository that does not exist is not offered for import
+// ---------------------------------------------------------------------------
+
+describe('a preview that fails', () => {
+  async function previewDirect(repoId: string) {
+    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Direct link' }));
+    fireEvent.change(screen.getByLabelText(/Hugging Face URL or repo ID/), { target: { value: repoId } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    await screen.findByTestId('hf-preview-error');
+  }
+
+  it('offers no import for a repository the Hub does not have', async () => {
+    previewHuggingFace.mockRejectedValue({
+      code: 'REPO_NOT_FOUND',
+      message: 'No dataset repo you can read at nobody/does-not-exist',
+      statusCode: 404,
+    });
+    await previewDirect('nobody/does-not-exist');
+
+    expect(screen.getByTestId('hf-preview-error')).toHaveTextContent('No dataset repo you can read');
+    expect(screen.getByTestId('hf-preview-missing')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Import/ })).toBeNull();
+    // The way out is still there.
+    expect(screen.getByRole('button', { name: 'Back' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Re-check' })).toBeInTheDocument();
+  });
+
+  it('still lets a repository through when only the preview could not be read', async () => {
+    previewHuggingFace.mockRejectedValue({ code: 'REPO_UNREACHABLE', message: 'The Hub did not answer', statusCode: 502 });
+    await previewDirect('lerobot/pusht');
+
+    expect(screen.queryByTestId('hf-preview-missing')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Import anyway' })).toBeInTheDocument();
+  });
+});

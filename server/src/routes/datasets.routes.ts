@@ -23,7 +23,7 @@ import {
   HuggingFaceImportError,
   huggingFaceImportService,
 } from '../services/HuggingFaceImportService.js';
-import { importActivityLog } from '../services/ImportActivityLog.js';
+import { importActivityLog, settledImportProgress } from '../services/ImportActivityLog.js';
 import { datasetEpisodeFlagRepository } from '../repositories/DatasetEpisodeFlagRepository.js';
 import type { EpisodeFlag } from '../repositories/DatasetEpisodeFlagRepository.js';
 import { robotTypeRepository } from '../repositories/index.js';
@@ -671,7 +671,8 @@ datasetRoutes.get('/:id/import/log', async (req: Request, res: Response) => {
       datasetId: dataset.id,
       status: dataset.status,
       importError: dataset.importError ?? null,
-      progress: activity?.progress ?? null,
+      // The row decides: a ready dataset never reports "validating, 95 %" (TASK-486).
+      progress: settledImportProgress(dataset.status, activity?.progress ?? null),
       lines: activity?.lines ?? [],
       dropped: activity?.dropped ?? 0,
       retained: activity !== null,

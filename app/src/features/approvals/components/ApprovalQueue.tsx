@@ -15,6 +15,7 @@ import {
 import { useApprovalsStore } from '../store';
 import type { ApprovalRequest } from '../types';
 import { formatRelative, humanize, isOpen, priorityTone, slaInfo, statusTone } from './approvalFormat';
+import { formatDateTime } from '@/shared/utils/format';
 
 export interface ApprovalQueueProps {
   rows: ApprovalRequest[];
@@ -82,7 +83,7 @@ export function ApprovalQueue({ rows, isLoading, error, onRetry, onOpen, hasFilt
       sortable: true,
       sortValue: (r) => new Date(r.createdAt),
       cell: (r) => (
-        <span className="whitespace-nowrap text-[13px] text-ink-tertiary" title={new Date(r.createdAt).toLocaleString()}>
+        <span className="whitespace-nowrap text-[13px] text-ink-tertiary" title={formatDateTime(r.createdAt)}>
           {formatRelative(r.createdAt)}
         </span>
       ),

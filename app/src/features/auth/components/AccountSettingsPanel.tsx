@@ -5,18 +5,18 @@
  */
 
 import { KeyValueList, Panel, StatusTag } from '@/shared/components/ui';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import { useFeatures } from '@/shared/hooks/useFeatures';
 import { useAuth } from '../hooks/useAuth';
 import { ChangePasswordForm } from './ChangePasswordForm';
 import { SecuritySettings } from './SecuritySettings';
+import { formatDate as formatUiDate } from '@/shared/utils/format';
 
 export interface AccountSettingsPanelProps {
   /** Callback when password is changed */
   onPasswordChanged?: () => void;
 }
 
-const formatDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString(UI_DATE_LOCALE) : undefined);
+const formatDate = (iso?: string) => (iso ? formatUiDate(iso) : undefined);
 
 export function AccountSettingsPanel({ onPasswordChanged }: AccountSettingsPanelProps) {
   const { user } = useAuth();

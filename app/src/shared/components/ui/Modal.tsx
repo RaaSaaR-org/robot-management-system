@@ -31,7 +31,7 @@ import { panelTitle } from './styles';
 // TYPES
 // ============================================================================
 
-export type ModalSize = 'sm' | 'md' | 'lg' | 'xl' | 'full';
+export type ModalSize = 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | 'full';
 
 export interface ModalProps {
   /** Control modal visibility */
@@ -82,6 +82,10 @@ const sizeStyles: Record<ModalSize, string> = {
   md: 'max-w-md',
   lg: 'max-w-lg',
   xl: 'max-w-xl',
+  // Wide dialogs: a stepper with six labels, a side-by-side comparison table.
+  '2xl': 'max-w-2xl',
+  '3xl': 'max-w-3xl',
+  '4xl': 'max-w-4xl',
   full: 'max-w-[calc(100vw-2rem)] sm:max-h-[calc(100vh-2rem)]',
 };
 

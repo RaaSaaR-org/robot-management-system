@@ -15,7 +15,7 @@ import { datacollectionApi } from '@/features/datacollection/api/datacollectionA
 import { trainingApi } from '@/features/training/api/trainingApi';
 import { deploymentApi } from '@/features/deployment/api/deploymentApi';
 import { simulationApi } from '@/features/simulation/api/simulationApi';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { formatDate } from '@/shared/utils/format';
 
 // ============================================================================
 // HELPERS
@@ -32,7 +32,7 @@ function formatRelativeTime(isoDate: string | Date | undefined | null): string {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   if (day < 7) return `${day}d ago`;
-  return date.toLocaleDateString(UI_DATE_LOCALE);
+  return formatDate(date);
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -183,7 +183,8 @@ function nextStageIndex(state: PipelineState): number {
 // PAGE
 // ============================================================================
 
-const TITLE = 'Pipeline';
+// The sidebar row that opens this page is "Skill Training"; the page answers to the same name (TASK-486).
+const TITLE = 'Skill Training';
 const DESCRIPTION = 'From demonstrations to a deployed policy, one stage at a time.';
 
 export function PipelinePage() {

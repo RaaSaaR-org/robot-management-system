@@ -13,6 +13,7 @@ import type {
   PatrolRunStatus,
   PatrolTimeWindow,
 } from '../types/patrol.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // STATUS STYLES
@@ -171,7 +172,7 @@ export function formatWhen(iso: string | null | undefined): string {
   if (!iso) return '—';
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return iso;
-  return new Date(t).toLocaleString(undefined, {
+  return new Date(t).toLocaleString(UI_DATE_LOCALE, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

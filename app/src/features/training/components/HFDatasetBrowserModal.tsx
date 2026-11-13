@@ -33,7 +33,7 @@ import type {
   RobotType,
 } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
-import { getErrorMessage } from '@/shared/utils';
+import { getErrorMessage, getErrorStatus } from '@/shared/utils';
 
 // ============================================================================
 // FEATURED DATASETS
@@ -179,6 +179,9 @@ export function HFDatasetBrowserModal({
   const [preview, setPreview] = useState<HFDatasetPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // The Hub answered 404: there is nothing at this address to import, so the
+  // dialog must not offer to import it "anyway" (TASK-486).
+  const [previewMissing, setPreviewMissing] = useState(false);
   const [includeVideos, setIncludeVideos] = useState(true);
   const [videosTouched, setVideosTouched] = useState(false);
 
@@ -274,6 +277,7 @@ export function HFDatasetBrowserModal({
   const loadPreview = useCallback(async (repoId: string, rev: string, keepChoice: boolean) => {
     setPreviewLoading(true);
     setPreviewError(null);
+    setPreviewMissing(false);
     setPreview(null);
     try {
       const result = await trainingApi.previewHuggingFace(repoId, rev.trim() || undefined);
@@ -284,6 +288,7 @@ export function HFDatasetBrowserModal({
       setIncludeVideos((current) => (keepChoice ? current : result.cameraKeys.length > 0));
     } catch (err) {
       setPreviewError(getErrorMessage(err, 'Could not read this repository'));
+      setPreviewMissing(getErrorStatus(err) === 404 || (err as { code?: unknown } | null)?.code === 'REPO_NOT_FOUND');
     } finally {
       setPreviewLoading(false);
     }
@@ -440,7 +445,7 @@ export function HFDatasetBrowserModal({
     { id: 'direct', label: 'Direct link', content: directLinkTab },
   ];
 
-  const backToList = () => { setImportState('idle'); setPreview(null); setPreviewError(null); };
+  const backToList = () => { setImportState('idle'); setPreview(null); setPreviewError(null); setPreviewMissing(false); };
 
   const footer =
     importState === 'idle' ? (
@@ -455,9 +460,13 @@ export function HFDatasetBrowserModal({
         >
           Re-check
         </Button>
-        <Button onClick={handleImport} disabled={previewLoading} isLoading={starting}>
-          {preview ? `Import ${formatBytes(preview.dataBytes + (includeVideos ? preview.videoBytes : 0))}` : 'Import anyway'}
-        </Button>
+        {/* A preview that failed for another reason (the Hub timed out) can still be
+            imported; a repository that does not exist cannot. */}
+        {!previewMissing && (
+          <Button onClick={handleImport} disabled={previewLoading} isLoading={starting}>
+            {preview ? `Import ${formatBytes(preview.dataBytes + (includeVideos ? preview.videoBytes : 0))}` : 'Import anyway'}
+          </Button>
+        )}
       </>
     ) : importState === 'error' ? (
       <>
@@ -503,7 +512,15 @@ export function HFDatasetBrowserModal({
             </div>
           )}
           {previewError && (
-            <p data-testid="hf-preview-error" role="alert" className="text-sm text-signal-stopped">{previewError}</p>
+            <div role="alert" className="flex flex-col gap-1">
+              <p data-testid="hf-preview-error" className="text-sm text-signal-stopped">{previewError}</p>
+              {previewMissing && (
+                <p data-testid="hf-preview-missing" className="text-[13px] text-ink-secondary">
+                  Check the owner and name, or the revision. A private or gated repository also looks like this
+                  until the instance&rsquo;s Hugging Face account has access to it.
+                </p>
+              )}
+            </div>
           )}
           {preview && <PreviewFacts preview={preview} />}
           <ImportOptions

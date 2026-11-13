@@ -133,7 +133,10 @@ describe('PublishDatasetDialog', () => {
   it('says how to set up a token and does not let you publish without one', async () => {
     getHubPublishStatus.mockResolvedValue({ configured: false, source: null, user: null, orgs: [], defaultNamespace: null });
     renderDialog();
-    expect(await screen.findByTestId('publish-not-configured')).toHaveTextContent('hf auth login');
+    // A visitor reads what is missing; the command is the administrator's, folded away.
+    expect(await screen.findByTestId('publish-not-configured')).toHaveTextContent('no Hugging Face account is connected');
+    expect(screen.getByTestId('publish-admin-hint')).not.toHaveAttribute('open');
+    expect(screen.getByTestId('publish-admin-hint')).toHaveTextContent('hf auth login');
     expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
   });
 

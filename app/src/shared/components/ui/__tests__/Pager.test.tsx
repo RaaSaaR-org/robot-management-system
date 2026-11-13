@@ -14,7 +14,7 @@ describe('Pager', () => {
   it('reads "Page x of y" with the total and a noun', () => {
     render(<Pager page={2} totalPages={7} total={1234} noun="entry" nounPlural="entries" onPageChange={() => {}} />);
     const nav = screen.getByRole('navigation', { name: 'Pagination' });
-    expect(nav).toHaveTextContent(`Page 2 of 7 · ${(1234).toLocaleString()} entries`);
+    expect(nav).toHaveTextContent('Page 2 of 7 · 1,234 entries');
   });
 
   it('pluralises with an s, uses the singular for one, and says "total" without a noun', () => {

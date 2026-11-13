@@ -158,7 +158,7 @@ test('the Skill Training rail reaches every build stage', async ({ page }, testI
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
 
   await page.locator('aside a[href="#/pipeline"]:visible').click();
-  await expect(page.getByRole('heading', { name: 'Pipeline', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Skill Training', exact: true })).toBeVisible();
 
   const rail = page.getByRole('navigation', { name: 'Section' });
   const stages = [
@@ -189,11 +189,11 @@ test('model registry renders and remains usable after loading models', async ({ 
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('./#/models');
-  await expect(page.getByRole('heading', { name: 'Model Registry', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
   await page.waitForLoadState('networkidle');
   // The page header's primary action; an empty registry repeats it in the empty state.
   await expect(
-    page.locator('header', { hasText: 'Model Registry' }).getByRole('button', { name: 'Register model', exact: true }),
+    page.locator('header', { hasText: 'Models' }).getByRole('button', { name: 'Register model', exact: true }),
   ).toBeEnabled();
   expect(errors).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath('models.png'), fullPage: true });

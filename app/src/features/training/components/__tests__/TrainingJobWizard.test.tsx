@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { TrainingJobWizard } from '../TrainingJobWizard';
+import { suggestBaseModel } from '../jobs/wizard/wizardModel';
 import type { CompatibilityReport, Dataset } from '../../types';
 import type { ModelCheckpoint, ModelVersion } from '@/features/deployment/types';
 
@@ -444,7 +445,8 @@ describe('continuing from an existing model', () => {
 
     const startsFrom = screen.getByTestId('review-starts-from');
     expect(startsFrom).toHaveTextContent('GR00T-N1.7 AppleToPlate');
-    expect(startsFrom).toHaveTextContent('(groot_n1_7)');
+    // The picker's spelling, not the id.
+    expect(startsFrom).toHaveTextContent('(GR00T N1.7)');
   });
 
   it('names the epoch when the run continues from a checkpoint', async () => {
@@ -466,8 +468,9 @@ describe('continuing from an existing model', () => {
     const onSubmit = renderOnModelStep();
 
     await advanceToReview();
-    // Still the architecture, spelled the way it always was.
-    expect(screen.getByTestId('review-starts-from')).toHaveTextContent('PI0');
+    // Still the architecture — spelled the way the picker spells it, not "PI0".
+    expect(screen.getByTestId('review-starts-from')).toHaveTextContent('Pi0');
+    expect(screen.getByTestId('review-starts-from')).not.toHaveTextContent('PI0');
 
     fireEvent.click(screen.getByRole('button', { name: 'Create training job' }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
@@ -489,5 +492,88 @@ describe('continuing from an existing model', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /OpenVLA/ }));
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-486 — the default architecture follows the dataset's robot
+//
+// A 43-wide Unitree G1 dataset opened the wizard on Pi0 + LoRA, an architecture
+// with no G1 action head, while GR00T N1.7 — which ships one — sat two cards
+// further down.
+// ---------------------------------------------------------------------------
+
+const G1_DATASET: Dataset = {
+  ...dataset('ds-g1', 'Apple to Plate — our G1 recording'),
+  infoJson: { robot_type: 'unitree_g1' } as Dataset['infoJson'],
+};
+const SO101_DATASET: Dataset = {
+  ...dataset('ds-so101', 'Object in Box — SO-101'),
+  infoJson: { robot_type: 'so101_follower' } as Dataset['infoJson'],
+};
+
+describe('the default base model', () => {
+  const pressed = (name: RegExp) => screen.getByRole('button', { name }).getAttribute('aria-pressed') ?? screen.getByRole('button', { name }).getAttribute('aria-checked');
+
+  function openOnModelStep(datasets: Dataset[], pick: RegExp) {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<TrainingJobWizard isOpen onClose={() => {}} onSubmit={onSubmit} datasets={datasets} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(screen.getByRole('button', { name: pick }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    return onSubmit;
+  }
+
+  it('recognises a Unitree G1 from the robot type or from info.json', () => {
+    expect(suggestBaseModel(G1_DATASET)).toBe('groot_n1_7');
+    expect(suggestBaseModel({ ...dataset('a', 'a'), robotType: { id: 'rt', name: 'Unitree G1', manufacturer: 'Unitree', model: 'G1' } })).toBe('groot_n1_7');
+    expect(suggestBaseModel({ ...dataset('b', 'b'), robotType: { id: 'rt', name: 'G1 + Dex3', manufacturer: 'Unitree', model: 'g1_dex3' } })).toBe('groot_n1_7');
+    expect(suggestBaseModel(SO101_DATASET)).toBeNull();
+    // "g1" inside another word is not a G1.
+    expect(suggestBaseModel({ ...dataset('c', 'c'), infoJson: { robot_type: 'rig10' } as Dataset['infoJson'] })).toBeNull();
+    expect(suggestBaseModel(undefined)).toBeNull();
+  });
+
+  it('is GR00T N1.7 for a Unitree G1 dataset, and says why', async () => {
+    const onSubmit = openOnModelStep([G1_DATASET, SO101_DATASET], /our G1 recording/);
+
+    expect(pressed(/GR00T N1\.7.*native LeRobot/)).toBe('true');
+    expect(screen.getByTestId('model-suggestion')).toHaveTextContent('recorded on a Unitree G1');
+
+    await advanceToReview();
+    expect(screen.getByTestId('review-starts-from')).toHaveTextContent('GR00T N1.7');
+    fireEvent.click(screen.getByRole('button', { name: 'Create training job' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0].baseModel).toBe('groot_n1_7');
+  });
+
+  it('stays Pi0 for a robot it has no better answer for', () => {
+    openOnModelStep([G1_DATASET, SO101_DATASET], /SO-101/);
+    expect(pressed(/Pi0\s*Physical Intelligence/)).toBe('true');
+    expect(screen.queryByTestId('model-suggestion')).toBeNull();
+  });
+
+  it('never overrides a model the person picked themselves', () => {
+    openOnModelStep([G1_DATASET, SO101_DATASET], /our G1 recording/);
+    fireEvent.click(screen.getByRole('button', { name: /OpenVLA/ }));
+
+    // Back to the datasets, swap the G1 set for the SO-101 one, forward again.
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('button', { name: /our G1 recording/ }));
+    fireEvent.click(screen.getByRole('button', { name: /SO-101/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(pressed(/OpenVLA\s*Open vision/)).toBe('true');
+  });
+});
+
+describe('the step indicator', () => {
+  it('stays on one line: it does not wrap, and only the current step keeps its label when space is short', () => {
+    render(<TrainingJobWizard isOpen onClose={() => {}} onSubmit={vi.fn()} datasets={DATASETS} />);
+    const steps = screen.getByTestId('wizard-steps');
+    expect(steps.className).toContain('flex-nowrap');
+    expect(steps.className).not.toContain('flex-wrap');
+    const current = steps.querySelector('[aria-current="step"]');
+    expect(current?.querySelector('span:last-child')?.className).not.toContain('hidden');
   });
 });

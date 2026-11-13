@@ -74,3 +74,30 @@ export class ImportActivityLog {
 }
 
 export const importActivityLog = new ImportActivityLog();
+
+/**
+ * The last progress frame of an import, made to agree with the dataset row.
+ *
+ * The importer's last frame is `validating`, 95 %: it hands over to the
+ * validation job, and it is that job — not the importer — which later writes
+ * `ready` or `failed` to the row. Nobody rewrites the frame afterwards, so the
+ * import log of a dataset that has been ready for an hour still said
+ * "validating, 95 %" (TASK-486). The row is the verdict; a frame that
+ * contradicts a finished row is brought in line with it here, where it is read.
+ */
+export function settledImportProgress(
+  rowStatus: string,
+  progress: HuggingFaceImportProgress | null,
+): HuggingFaceImportProgress | null {
+  if (!progress) return null;
+  if (rowStatus === 'ready') {
+    return progress.status === 'ready' && progress.progress === 100
+      ? progress
+      : { ...progress, status: 'ready', phase: 'validating', progress: 100 };
+  }
+  if (rowStatus === 'failed') {
+    // Where it stopped is worth keeping; only the status is wrong.
+    return progress.status === 'failed' ? progress : { ...progress, status: 'failed' };
+  }
+  return progress;
+}

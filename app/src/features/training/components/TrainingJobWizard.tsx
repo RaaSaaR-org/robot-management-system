@@ -4,7 +4,7 @@
  * @feature training
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check } from 'lucide-react';
 import { Button, Modal, toast } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
@@ -13,7 +13,7 @@ import { useSimulationStore, selectScenes, selectScenesLoading } from '@/feature
 import { HyperparameterForm, getDefaultHyperparameters } from './HyperparameterForm';
 import { DatasetStep, ModelStep, ResourcesStep, SceneStep, StepSection, TypeStep } from './jobs/wizard/WizardSteps';
 import { ReviewStep } from './jobs/wizard/ReviewStep';
-import { INITIAL_FORM, TRAINING_PRESETS, badWeights, stepsFor, type FormState, type Step } from './jobs/wizard/wizardModel';
+import { INITIAL_FORM, TRAINING_PRESETS, badWeights, baseModelLabel, stepsFor, suggestBaseModel, type FormState, type Step } from './jobs/wizard/wizardModel';
 import type {
   BaseModel,
   CompatibilityReport,
@@ -69,7 +69,26 @@ export function TrainingJobWizard({ isOpen, onClose, onSubmit, datasets, isSubmi
   const steps = stepsFor(form.kind);
   const index = steps.findIndex((s) => s.id === step);
 
+  // The default architecture follows the first dataset's robot — GR00T N1.7 for
+  // a Unitree G1 — until the person picks one themselves; after that the
+  // choice is theirs and a dataset change leaves it alone. (TASK-486)
+  const modelChosen = useRef(false);
+  const firstDataset = useMemo(
+    () => datasets.find((d) => d.id === form.mixture[0]?.datasetId),
+    [datasets, form.mixture],
+  );
+  const suggestedModel = suggestBaseModel(firstDataset);
+  useEffect(() => {
+    if (modelChosen.current) return;
+    const next = suggestedModel ?? INITIAL_FORM.baseModel;
+    setForm((prev) => (prev.baseModel === next ? prev : { ...prev, baseModel: next, initFrom: null }));
+  }, [suggestedModel]);
+  const suggestion = suggestedModel && firstDataset
+    ? { model: suggestedModel, reason: `${baseModelLabel(suggestedModel)} is suggested because “${firstDataset.name}” was recorded on a Unitree G1.` }
+    : null;
+
   const close = useCallback(() => {
+    modelChosen.current = false;
     setStep('type');
     setForm(INITIAL_FORM);
     setError(null);
@@ -97,8 +116,10 @@ export function TrainingJobWizard({ isOpen, onClose, onSubmit, datasets, isSubmi
 
   // Changing the architecture drops the picked model: the server refuses a run
   // whose baseModel differs from the weights it starts from. (TASK-239)
-  const onBaseModel = (value: BaseModel) =>
+  const onBaseModel = (value: BaseModel) => {
+    modelChosen.current = true;
     setForm((prev) => (prev.baseModel === value ? prev : { ...prev, baseModel: value, initFrom: null }));
+  };
   const onWeightsSource = (source: WeightsSource) =>
     setForm((prev) => ({ ...prev, weightsSource: source, initFrom: source === 'foundation' ? null : prev.initFrom }));
   const onInitFrom = (initFrom: InitFromSelection | null) => patch({ initFrom });
@@ -176,14 +197,14 @@ export function TrainingJobWizard({ isOpen, onClose, onSubmit, datasets, isSubmi
   );
 
   return (
-    <Modal isOpen={isOpen} onClose={close} title="New training job" size="xl" closeOnBackdrop={false} footer={footer}>
+    <Modal isOpen={isOpen} onClose={close} title="New training job" size="3xl" closeOnBackdrop={false} footer={footer}>
       <div className="flex flex-col gap-6">
         <StepIndicator steps={steps} index={index} onJump={(id) => setStep(id)} />
         <div className="min-h-[280px]">
           {step === 'type' && <TypeStep form={form} patch={patch} />}
           {step === 'scene' && <SceneStep form={form} patch={patch} scenes={scenes} loading={scenesLoading} />}
           {step === 'dataset' && <DatasetStep form={form} datasets={datasets} onToggle={toggleMember} onWeight={setWeight} />}
-          {step === 'model' && <ModelStep form={form} onBaseModel={onBaseModel} onWeightsSource={onWeightsSource} onInitFrom={onInitFrom} onMethod={onMethod} />}
+          {step === 'model' && <ModelStep form={form} onBaseModel={onBaseModel} onWeightsSource={onWeightsSource} onInitFrom={onInitFrom} onMethod={onMethod} suggested={suggestion} />}
           {step === 'hyperparams' && (
             <StepSection title="Settings" description="Start from a preset, then adjust. Defaults suit the chosen fine-tuning method.">
               <div className="flex flex-wrap gap-2">
@@ -214,12 +235,14 @@ export function TrainingJobWizard({ isOpen, onClose, onSubmit, datasets, isSubmi
 
 function StepIndicator({ steps, index, onJump }: { steps: { id: Step; label: string }[]; index: number; onJump: (id: Step) => void }) {
   return (
-    <ol className="flex flex-wrap items-center gap-x-2 gap-y-2" aria-label="Steps">
+    // One line at every width: the connectors give way first, and below md the
+    // labels of the other steps do, so six steps never wrap onto a second row.
+    <ol className="flex flex-nowrap items-center gap-1.5 overflow-hidden" aria-label="Steps" data-testid="wizard-steps">
       {steps.map((s, i) => {
         const done = i < index;
         const current = i === index;
         return (
-          <li key={s.id} className="flex items-center gap-2">
+          <li key={s.id} className={cn('flex min-w-0 items-center gap-1.5', i < steps.length - 1 && 'flex-1')}>
             <button
               type="button"
               onClick={() => done && onJump(s.id)}
@@ -227,21 +250,21 @@ function StepIndicator({ steps, index, onJump }: { steps: { id: Step; label: str
               aria-current={current ? 'step' : undefined}
               aria-label={`${s.label}${done ? ' (done)' : ''}`}
               className={cn(
-                'flex items-center gap-2 rounded-control px-1 py-0.5 text-[13px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
+                'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-control px-1 py-0.5 text-[13px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
                 done && 'cursor-pointer hover:text-ink-primary'
               )}
             >
               <span
                 className={cn(
-                  'flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
+                  'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
                   current ? 'bg-primary text-on-primary' : done ? 'bg-primary/15 text-primary' : 'bg-inset text-ink-tertiary'
                 )}
               >
                 {done ? <Check className="h-3.5 w-3.5" strokeWidth={2} /> : i + 1}
               </span>
-              <span className={cn('hidden sm:inline', current ? 'font-medium text-ink-primary' : 'text-ink-secondary')}>{s.label}</span>
+              <span className={cn(current ? 'font-medium text-ink-primary' : 'hidden text-ink-secondary md:inline')}>{s.label}</span>
             </button>
-            {i < steps.length - 1 && <span aria-hidden className="h-px w-4 bg-line sm:w-6" />}
+            {i < steps.length - 1 && <span aria-hidden className="h-px min-w-2 flex-1 bg-line" />}
           </li>
         );
       })}
