@@ -58,6 +58,7 @@ import { trainingRoutes, trainingWorkerRoutes } from './routes/training.routes.j
 import { storageRoutes } from './routes/storage.routes.js';
 import { getRustFSStatus, probeRustFS } from './storage/index.js';
 import { datasetRoutes } from './routes/datasets.routes.js';
+import { datasetUploadRoutes, isDatasetUploadPart } from './routes/dataset-uploads.routes.js';
 import { datasetViewRoutes } from './routes/dataset-views.routes.js';
 import { deploymentsRoutes } from './routes/deployments.routes.js';
 import { modelsRoutes } from './routes/models.routes.js';
@@ -159,7 +160,10 @@ const apiLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
   skip: (req) =>
-    rateLimitDisabled || req.path === '/health' || req.path.startsWith('/api/compliance'),
+    rateLimitDisabled || req.path === '/health' || req.path.startsWith('/api/compliance')
+    // A dataset is hundreds to thousands of upload parts (TASK-480); they are
+    // bounded by the upload service's own concurrency limit instead.
+    || isDatasetUploadPart(req.method, req.path),
 });
 
 // Strict rate limit for credential endpoints (login, register, password reset):
@@ -386,6 +390,10 @@ export function createApp(): Express {
   // authenticates a GET on `/:id/episodes/:index/video/:camera` from a
   // `?ticket=` naming that dataset — the header a `<video>` cannot set.
   app.use('/api/datasets', datasetVideoTicket, ...protect, datasetViewRoutes);
+  // Direct upload (TASK-480): its own router, ahead of the main one for the
+  // same reason as the views. `/uploads` and `/:id/upload` do not collide with
+  // the presigned-archive routes `/:id/upload/initiate|complete` further down.
+  app.use('/api/datasets', ...protect, datasetUploadRoutes);
   app.use('/api/datasets', ...protect, datasetRoutes);
 
   // Deployment routes (protected) - VLA model fleet deployment

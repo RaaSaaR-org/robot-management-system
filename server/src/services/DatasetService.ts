@@ -1098,6 +1098,21 @@ export class DatasetService extends EventEmitter {
   // ============================================================================
 
   /**
+   * A dataset a direct upload (TASK-480) is filling is `uploading` too, so the
+   * archive flow would accept it and unpack an archive over a tree that is
+   * arriving file by file. Called after the tenant-scoped lookup of the row.
+   */
+  private async refuseArchiveIntoDirectUpload(id: string): Promise<void> {
+    const upload = await prisma.datasetUpload.findUnique({ where: { datasetId: id }, select: { state: true } });
+    if (upload && upload.state !== 'completed') {
+      throw new ConflictError(
+        'This dataset is being filled by a direct upload; send its files through /api/datasets/:id/upload instead.',
+        { code: 'DIRECT_UPLOAD_IN_PROGRESS' },
+      );
+    }
+  }
+
+  /**
    * Initiate dataset upload - get presigned URL
    */
   async initiateUpload(
@@ -1113,6 +1128,7 @@ export class DatasetService extends EventEmitter {
     if (dataset.status !== 'uploading') {
       throw new Error(`Dataset upload already completed or in progress: ${id}`);
     }
+    await this.refuseArchiveIntoDirectUpload(id);
 
     // Configured but down is a 503 naming the errorKind (TASK-350);
     // unconfigured keeps its old refusal — an upload has no local-disk path.
@@ -1155,6 +1171,7 @@ export class DatasetService extends EventEmitter {
     if (dataset.status !== 'uploading') {
       throw new Error(`Dataset not in uploading state: ${id} (status: ${dataset.status})`);
     }
+    await this.refuseArchiveIntoDirectUpload(id);
 
     // Before the status moves: the archive is in RustFS, so while RustFS is
     // down the unpack below could only fail and mark a good upload `failed`.

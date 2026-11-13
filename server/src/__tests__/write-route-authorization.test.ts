@@ -70,9 +70,11 @@ const app = createApp();
 // TASK-478 adds one on the guarded /api/datasets mount: POST /:id/video-ticket,
 // a POST-shaped read (it mints the ticket a `<video>` is read with).
 // TASK-477 adds one on the guarded /api/robots mount: PUT /:id/expected.
-// TASK-485 adds one on the guarded /api/datasets mount: DELETE /robot-types/:id
-// (ownerOnly).
-const EXPECTED_WRITE_ROUTES = 388;
+// TASK-480 adds four on the guarded /api/datasets mount, the direct upload:
+// POST /uploads, PUT /:id/upload/files/:fileId/parts/:partNumber, and POST
+// /:id/upload/finish and /cancel.
+// TASK-485 adds one on the same mount: DELETE /robot-types/:id (ownerOnly).
+const EXPECTED_WRITE_ROUTES = 392;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;

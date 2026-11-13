@@ -24,6 +24,8 @@ import {
   huggingFaceImportService,
 } from '../services/HuggingFaceImportService.js';
 import { importActivityLog } from '../services/ImportActivityLog.js';
+import { datasetUploadService } from '../services/datasetUpload/DatasetUploadService.js';
+import { DatasetUploadError } from '../services/datasetUpload/uploadManifest.js';
 import { datasetEpisodeFlagRepository } from '../repositories/DatasetEpisodeFlagRepository.js';
 import type { EpisodeFlag } from '../repositories/DatasetEpisodeFlagRepository.js';
 import { robotTypeRepository } from '../repositories/index.js';
@@ -962,6 +964,14 @@ datasetRoutes.delete('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
+    // A direct upload that is still open (TASK-480) holds parts that are not
+    // objects yet — a prefix delete would leave them in the bucket — and may be
+    // streaming one right now. The tenant-scoped lookup comes first: the
+    // upload's own table carries no tenant.
+    if (await datasetService.get(id)) {
+      await datasetUploadService.releaseForDelete(id);
+    }
+
     const deleted = await datasetService.delete(id);
     if (!deleted) {
       return res.status(404).json({ error: 'Dataset not found' });
@@ -977,6 +987,9 @@ datasetRoutes.delete('/:id', async (req: Request, res: Response) => {
     if (error instanceof ConflictError) {
       return res.status(409).json({ error: error.message });
     }
+    if (error instanceof DatasetUploadError) {
+      return res.status(error.statusCode).json({ error: error.message, code: error.code });
+    }
     // Object storage could not remove its files, so the row was kept: retry later.
     if (error instanceof ServiceUnavailableError) {
       return res.status(503).json({ error: error.message });
@@ -989,6 +1002,10 @@ datasetRoutes.delete('/:id', async (req: Request, res: Response) => {
 // ============================================================================
 // POST /api/datasets/:id/upload/initiate - Get presigned upload URL
 // ============================================================================
+//
+// The presigned-archive upload, kept as it was: the upload modal still uses it.
+// The direct upload (TASK-480) lives in dataset-uploads.routes.ts; the service
+// refuses an archive for a dataset a direct upload is filling.
 
 datasetRoutes.post('/:id/upload/initiate', async (req: Request, res: Response) => {
   try {
