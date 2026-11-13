@@ -199,6 +199,24 @@ deleted after it was picked — stops the upload at once and names the file inst
 being retried six times. The real run above was repeated on the final code (Firefox and
 Chromium, same numbers); the parts carry `X-Chunk-Sha256` there.
 
+### Review (2026-11-13)
+
+An independent pass re-ran the dialog against a throwaway RustFS in Chromium (dark) and
+Firefox (light), with the proxy killed mid-upload: the stopped state named the part and
+`NETWORK_ERROR`, "Try again" sent only the missing parts (38 of 58 in one run, 2 in the
+other, none stored twice), cancel left no row, no object and no pending multipart upload.
+Three defects were found in `datasetUploadStore.ts` and fixed with tests:
+
+- Deleting the dataset from its row while this tab uploaded it left a "Upload stopped"
+  chip, an error toast ("Dataset not found") and a dialog offering "Try again" for a
+  dataset that no longer existed. A `404 NOT_FOUND` / `NO_UPLOAD` on a part, on finish or
+  on the resume's status now ends the upload ("Upload ended") instead.
+- A finish that a cancel overtook was reported as a failed upload for the moment until
+  the cancel answered.
+- When finish was accepted just before a cancel arrived, two loops polled for the verdict.
+
+Gates after these: `npx tsc`, `npx vitest run` and `npm run build` in `app/`; CI on the PR.
+
 ### Left for later
 
 - An upload interrupted by closing or reloading the tab cannot be resumed from the
