@@ -119,6 +119,9 @@ compared a mount-relative path against a full one.
 - **Deployment follow-up, not in this repo:** an instance behind Cloudflare and
   one ingress should set `TRUST_PROXY=2` on the server. Until then it behaves as
   before (one budget per Cloudflare edge), only with budgets twelve times larger.
+  With the Helm chart that is `server.env.trustProxy: "2"`; the budgets are
+  `server.env.rateLimitMax` / `rateLimitMediaMax` / `rateLimitWriteMax` /
+  `rateLimitWindowMs` (all empty by default, which keeps the server defaults).
 - The counters are in memory per replica; a shared store is a separate decision.
 - Not changed: clients that call `fetch` directly instead of `apiClient` do not
   get the retry.

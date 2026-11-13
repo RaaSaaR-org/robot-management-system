@@ -8,6 +8,10 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
+import { parse } from 'yaml';
 import express from 'express';
 import request from 'supertest';
 import {
@@ -238,5 +242,34 @@ describe('the client a request is counted against', () => {
       .set('CF-Connecting-IP', '8.8.8.8')
       .set('X-Real-IP', '7.7.7.7')
       .expect(429);
+  });
+});
+
+describe('a deployment can set every knob', () => {
+  const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const read = (...parts: string[]) => readFileSync(resolve(REPO_ROOT, ...parts), 'utf8');
+  // Variable → the Helm value that carries it.
+  const KNOBS = {
+    TRUST_PROXY: 'trustProxy',
+    RATE_LIMIT_MAX: 'rateLimitMax',
+    RATE_LIMIT_MEDIA_MAX: 'rateLimitMediaMax',
+    RATE_LIMIT_WRITE_MAX: 'rateLimitWriteMax',
+    RATE_LIMIT_WINDOW_MS: 'rateLimitWindowMs',
+  } as const;
+
+  it.each(Object.entries(KNOBS))('%s is passed by the Helm chart from server.env.%s', (variable, value) => {
+    const values = parse(read('helm', 'neodem', 'values.yaml')) as { server: { env: Record<string, unknown> } };
+    // Present and empty: the server's own default applies unless it is set.
+    expect(values.server.env[value]).toBe('');
+    const deployment = read('helm', 'neodem', 'templates', 'server-deployment.yaml');
+    const block = new RegExp(
+      `\\{\\{- with \\.Values\\.server\\.env\\.${value} \\}\\}\\s+- name: ${variable}\\s+value: \\{\\{ \\. \\| quote \\}\\}\\s+\\{\\{- end \\}\\}`
+    );
+    expect(deployment).toMatch(block);
+  });
+
+  it.each(Object.keys(KNOBS))('%s is documented in .env.example and the deployment guide', (variable) => {
+    expect(read('server', '.env.example')).toContain(`# ${variable}=`);
+    expect(read('docs', 'deployment.md')).toContain(`\`${variable}\``);
   });
 });

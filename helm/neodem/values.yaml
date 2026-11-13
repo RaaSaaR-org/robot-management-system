@@ -172,6 +172,19 @@ server:
     # 512Mi pod ended up with ~240 MB of it. 384 MB leaves room for buffers and
     # native memory under the limit below; keep the two in step (TASK-355).
     nodeOptions: "--max-old-space-size=384"
+    # Reverse proxies between clients and the server (TASK-482): the client
+    # address the rate limits count against is read that many hops back in
+    # X-Forwarded-For. "" keeps the server default of 1 (one ingress); "2" for
+    # Cloudflare in front of one ingress; "0" for none. Too low and everyone
+    # behind the outer proxy shares one budget; too high and a client can pick
+    # its own address. See docs/deployment.md "Rate limiting".
+    trustProxy: ""
+    # Requests per client address per window; "" keeps the server defaults
+    # (1200 general, 3000 dataset browsing, 300 writes, 60000 ms).
+    rateLimitMax: ""
+    rateLimitMediaMax: ""
+    rateLimitWriteMax: ""
+    rateLimitWindowMs: ""
   resources:
     requests:
       memory: "256Mi"

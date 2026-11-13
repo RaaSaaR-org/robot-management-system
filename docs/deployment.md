@@ -496,6 +496,10 @@ ranges (`TRUST_PROXY="10.42.0.0/16, 173.245.48.0/20"`) trusts exactly those
 hops instead of counting them. `TRUST_PROXY=true` (believe the whole header)
 is refused, and `CF-Connecting-IP` / `X-Real-IP` are never read.
 
+With the Helm chart, set `server.env.trustProxy` and
+`server.env.rateLimitMax` / `rateLimitMediaMax` / `rateLimitWriteMax` /
+`rateLimitWindowMs` (quoted strings; empty keeps the defaults).
+
 To check a deployment, send two requests from two different networks and
 compare the `RateLimit-Remaining` response header: with the right setting
 each network counts down from its own budget.
