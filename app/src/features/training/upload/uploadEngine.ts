@@ -67,7 +67,10 @@ export type RetryClass =
  */
 export function classifyRefusal(status: number, code?: string | null): RetryClass {
   if (code === 'ABORTED') return 'fatal';
-  if (status === 0) return 'transient'; // no answer: the network, a timeout
+  // No answer: the network or a timeout is worth another attempt; anything
+  // else without a status went wrong in the browser (a file that can no longer
+  // be read) and will go wrong the same way again.
+  if (status === 0) return code === 'NETWORK_ERROR' ? 'transient' : 'fatal';
   if (status === 503 && code === 'UPLOAD_BUSY') return 'busy';
   if (status === 400 && code === 'PART_INTERRUPTED') return 'transient';
   if (status === 422 && code === 'CHECKSUM_MISMATCH') return 'transient';
@@ -288,14 +291,23 @@ export class UploadProgress {
 export type PartTransport = (request: PartRequest) => Promise<PartAck>;
 export type PartHash = (bytes: ArrayBuffer) => Promise<string | undefined>;
 
-/** SHA-256 as 64 hex characters; undefined where the page is not a secure context. */
+/**
+ * SHA-256 as 64 hex characters. Undefined where it cannot be computed — a page
+ * that is not a secure context has no `crypto.subtle` — and the part then goes
+ * out without `X-Chunk-Sha256`, which the contract allows: a checksum that
+ * cannot be made must not be what stops an upload.
+ */
 export const sha256Hex: PartHash = async (bytes) => {
-  const subtle = globalThis.crypto?.subtle;
-  if (!subtle) return undefined;
-  const digest = new Uint8Array(await subtle.digest('SHA-256', bytes));
-  let hex = '';
-  for (const byte of digest) hex += byte.toString(16).padStart(2, '0');
-  return hex;
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) return undefined;
+    const digest = new Uint8Array(await subtle.digest('SHA-256', bytes));
+    let hex = '';
+    for (const byte of digest) hex += byte.toString(16).padStart(2, '0');
+    return hex;
+  } catch {
+    return undefined;
+  }
 };
 
 export interface SendPartsOptions {
@@ -342,7 +354,18 @@ export async function sendParts(options: SendPartsOptions): Promise<void> {
       try {
         // Read once, hash, and send that same buffer: the hash is of the bytes
         // that go out, and memory stays at one part per request in flight.
-        const bytes = await file.blob.slice(start, end).arrayBuffer();
+        let bytes: ArrayBuffer;
+        try {
+          bytes = await file.blob.slice(start, end).arrayBuffer();
+        } catch {
+          // The browser reads lazily: a file moved, changed or deleted after
+          // the folder was picked only fails here.
+          throw new UploadRefusal({
+            status: 0, code: 'LOCAL_FILE_UNREADABLE',
+            message: `${file.path} can no longer be read — it was moved, changed or deleted since the folder was picked. Cancel the upload and start it again.`,
+            context: { path: file.path, partNumber: part },
+          });
+        }
         const sha256 = await hash(bytes);
         // Reading and hashing take a moment; the run may have ended meanwhile.
         if (run.signal.aborted) throw aborted();

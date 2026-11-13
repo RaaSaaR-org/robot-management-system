@@ -73,6 +73,9 @@ describe('classifyRefusal', () => {
     expect(classifyRefusal(403, 'HTTP_403')).toBe('fatal');
     expect(classifyRefusal(507, 'INSUFFICIENT_STORAGE')).toBe('fatal');
     expect(classifyRefusal(0, 'ABORTED')).toBe('fatal');
+    // Went wrong in the browser, not on the wire: it would go wrong again.
+    expect(classifyRefusal(0, 'LOCAL_FILE_UNREADABLE')).toBe('fatal');
+    expect(classifyRefusal(0, 'CLIENT_ERROR')).toBe('fatal');
   });
 });
 
@@ -268,6 +271,32 @@ describe('sendParts', () => {
       hash: async () => 'abcd',
     });
     expect(calls).toBe(2);
+  });
+
+  it('stops with the file\'s name when a file can no longer be read, without retrying', async () => {
+    const file = planned(0, 5);
+    file.blob = { size: 5, slice: () => ({ arrayBuffer: () => Promise.reject(new Error('NotReadableError')) }) } as unknown as Blob;
+    const transport = vi.fn(async (req: PartRequest) => ack(req));
+    const sleep = vi.fn(noSleep);
+    await expect(sendParts({ ...base([file], transport), sleep })).rejects.toMatchObject({
+      code: 'LOCAL_FILE_UNREADABLE',
+      message: expect.stringContaining('videos/file-0.mp4 can no longer be read'),
+    });
+    expect(transport).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('sends a part without a checksum when one cannot be computed', async () => {
+    const transport = vi.fn(async (req: PartRequest) => ack(req));
+    const digest = vi.spyOn(globalThis.crypto.subtle, 'digest').mockRejectedValue(new TypeError('not an ArrayBuffer'));
+    try {
+      // The default hash, not the test's stand-in.
+      await sendParts({ ...base([planned(0, 5)], transport), hash: undefined });
+    } finally {
+      digest.mockRestore();
+    }
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0][0].sha256).toBeUndefined();
   });
 
   it('stops when the caller aborts', async () => {
