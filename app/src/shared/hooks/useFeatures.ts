@@ -17,6 +17,12 @@ export interface FeatureFlags {
   multiTenancyEnabled: boolean;
   /** Anonymous signup on /register is open (TASK-369: closed by default with auth on). */
   selfRegistrationEnabled: boolean;
+  /**
+   * A browser has to sign in before it can use the API. False only on a server
+   * running without authentication, where everyone is the same shared user and
+   * the app opens without a sign-in form (TASK-483).
+   */
+  signInRequired: boolean;
   natsEnabled: boolean;
   rustfsEnabled: boolean;
 }
@@ -32,9 +38,16 @@ interface FeaturesState {
 const DEFAULT_FLAGS: FeatureFlags = {
   multiTenancyEnabled: false,
   selfRegistrationEnabled: false,
+  // Safe default: until the server says otherwise, a session is needed.
+  signInRequired: true,
   natsEnabled: false,
   rustfsEnabled: false,
 };
+
+// One request at a time. A second caller joins it instead of returning early,
+// so "await fetch()" always means "the flags are settled" (TASK-483: the auth
+// store waits on this before deciding whether a sign-in form is needed).
+let inFlight: Promise<void> | null = null;
 
 export const useFeaturesStore = create<FeaturesState>((set, get) => ({
   flags: DEFAULT_FLAGS,
@@ -42,20 +55,28 @@ export const useFeaturesStore = create<FeaturesState>((set, get) => ({
   loading: false,
   error: null,
 
-  async fetch() {
+  fetch() {
     // Guard against duplicate fetches during strict-mode double-mount
-    if (get().loading || get().loaded) return;
+    if (get().loaded) return Promise.resolve();
+    if (inFlight) return inFlight;
     set({ loading: true, error: null });
-    try {
-      const response = await apiClient.get<FeatureFlags>('/config/features');
-      set({ flags: response.data, loaded: true, loading: false });
-    } catch (err) {
-      set({
-        error: err instanceof Error ? err.message : 'Failed to load feature flags',
-        loading: false,
-        // Keep DEFAULT_FLAGS so the UI stays in its safe "disabled" state.
-      });
-    }
+    inFlight = (async () => {
+      try {
+        const response = await apiClient.get<Partial<FeatureFlags>>('/config/features');
+        // Over the defaults: a server that predates a flag leaves it at its
+        // safe value instead of `undefined`.
+        set({ flags: { ...DEFAULT_FLAGS, ...response.data }, loaded: true, loading: false });
+      } catch (err) {
+        set({
+          error: err instanceof Error ? err.message : 'Failed to load feature flags',
+          loading: false,
+          // Keep DEFAULT_FLAGS so the UI stays in its safe "disabled" state.
+        });
+      } finally {
+        inFlight = null;
+      }
+    })();
+    return inFlight;
   },
 }));
 

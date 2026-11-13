@@ -7,6 +7,7 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { authService, type TokenPayload } from '../services/AuthService.js';
 import { authenticateServiceToken } from '../services/ServiceAccountService.js';
 import { DEFAULT_TENANT_ID, MULTI_TENANCY_ENABLED } from '../config/features.js';
+import { anonymousUserName } from '../config/anonymousUser.js';
 import { PLATFORM_TENANT, tenantStore } from './tenantContext.js';
 import { complianceLogService } from '../services/ComplianceLogService.js';
 import { verifyCameraTicket } from '../security/cameraTicket.js';
@@ -51,16 +52,20 @@ export interface AuthenticatedRequest extends Request {
 }
 
 /**
- * Mock user for development mode — carries the DEFAULT tenantId so
- * multi-tenancy flows work end-to-end under AUTH_DISABLED=true.
+ * The shared user every request runs as under AUTH_DISABLED=true — carries the
+ * DEFAULT tenantId so multi-tenancy flows work end-to-end. Its id and email
+ * are fixed (rows reference them); only the display name follows the
+ * deployment (`anonymousUserName`, TASK-483).
  */
-const MOCK_USER: AuthUser = {
-  id: 'dev-user-id',
-  email: 'dev@neodem.local',
-  name: 'Dev User',
-  role: 'super-admin',
-  tenantId: DEFAULT_TENANT_ID,
-};
+function mockUser(): AuthUser {
+  return {
+    id: 'dev-user-id',
+    email: 'dev@neodem.local',
+    name: anonymousUserName(),
+    role: 'super-admin',
+    tenantId: DEFAULT_TENANT_ID,
+  };
+}
 
 /**
  * Check if auth is disabled (development mode)
@@ -302,7 +307,7 @@ export async function authMiddleware(
 ): Promise<void> {
   // Keep local browser access while honoring explicit researcher credentials.
   if (usesDevelopmentBypass(req)) {
-    req.user = MOCK_USER;
+    req.user = mockUser();
     return continueWithTenant(req, req.user, next);
   }
 
@@ -382,7 +387,7 @@ export async function optionalAuthMiddleware(
 ): Promise<void> {
   // Keep local browser access while honoring explicit service credentials.
   if (usesDevelopmentBypass(req)) {
-    req.user = MOCK_USER;
+    req.user = mockUser();
     return continueWithTenant(req, req.user, next);
   }
 

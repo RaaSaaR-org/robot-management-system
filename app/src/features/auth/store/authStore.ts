@@ -10,6 +10,7 @@
 import { createStore } from '@/store';
 import { tokenStorage } from '@/api/client';
 import { getErrorStatus } from '@/shared/utils';
+import { useFeaturesStore } from '@/shared/hooks/useFeatures';
 import { authApi } from '../api/authApi';
 import { isMFAChallengeResponse } from '../types/auth.types';
 import type { AuthStore, User, AuthErrorCode } from '../types/auth.types';
@@ -53,6 +54,18 @@ const ERROR_MESSAGES: Record<AuthErrorCode, string> = {
 function isAuthRejection(error: unknown): boolean {
   const status = getErrorStatus(error);
   return status === 401 || status === 403;
+}
+
+/**
+ * Whether the server runs without sign-in (TASK-483). Asks the public feature
+ * snapshot and waits for the answer; anything but an explicit "not required"
+ * — an older server, an outage — counts as required, the state the app was in
+ * before it could ask.
+ */
+async function serverNeedsNoSignIn(): Promise<boolean> {
+  await useFeaturesStore.getState().fetch();
+  const { loaded, flags } = useFeaturesStore.getState();
+  return loaded && flags.signInRequired === false;
 }
 
 // ============================================================================
@@ -186,6 +199,36 @@ export const useAuthStore = createStore<AuthStore>(
       const accessToken = tokenStorage.getAccessToken();
 
       if (!accessToken) {
+        // TASK-483: a server without sign-in answers /me for anyone, as its one
+        // shared user. Ask it instead of demanding a token nobody can obtain.
+        if (await serverNeedsNoSignIn()) {
+          set((state) => {
+            state.isLoading = true;
+          });
+          try {
+            const user = await authApi.getCurrentUser();
+            set((state) => {
+              state.user = user;
+              state.isAuthenticated = true;
+              state.isLoading = false;
+              state.isInitialized = true;
+              state.mustChangePassword = false;
+            });
+          } catch {
+            // Unreachable or rate limited. Not signed out — there is nothing
+            // to sign in to — so the route guard offers a retry instead.
+            set((state) => {
+              state.user = null;
+              state.isAuthenticated = false;
+              state.isLoading = false;
+              state.isInitialized = true;
+            });
+          }
+          return;
+        }
+
+        // Sign-in is required and there is no token: whatever an earlier
+        // session persisted, nobody is signed in.
         set((state) => {
           state.isInitialized = true;
         });

@@ -183,10 +183,10 @@ logout.
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/register` | Register user account — 403 `SELF_REGISTRATION_DISABLED` while auth is on and `ALLOW_SELF_REGISTRATION` is not `true`; `GET /api/config/features` reports it as `selfRegistrationEnabled` |
+| GET | `/me` | Current user. Under `AUTH_DISABLED=true` it needs no token and answers the shared user (`dev-user-id`, named by `ANONYMOUS_USER_NAME`); `GET /api/config/features` reports that mode as `signInRequired: false`, which is how the app knows to skip the sign-in page |
 | POST | `/login` | Login. Returns JWT or MFA challenge |
 | POST | `/logout` | Invalidate refresh token |
 | POST | `/refresh` | Refresh access token |
-| GET | `/me` | Current user info |
 | POST | `/forgot-password` | Request password reset |
 | POST | `/reset-password` | Reset password with token |
 | POST | `/change-password` | Change password |

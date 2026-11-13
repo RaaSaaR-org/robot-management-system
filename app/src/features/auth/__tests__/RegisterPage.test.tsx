@@ -16,7 +16,7 @@ vi.mock('@/api', () => ({
 import { useFeaturesStore } from '@/shared/hooks';
 import { RegisterPage } from '../pages/RegisterPage';
 
-const FLAGS = { multiTenancyEnabled: false, natsEnabled: false, rustfsEnabled: false };
+const FLAGS = { multiTenancyEnabled: false, signInRequired: true, natsEnabled: false, rustfsEnabled: false };
 
 function renderPage() {
   return render(

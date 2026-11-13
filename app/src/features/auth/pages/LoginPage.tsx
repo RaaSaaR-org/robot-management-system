@@ -5,7 +5,7 @@
  */
 
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { useFeatures } from '@/shared/hooks';
 import { AuthLayout, authLinkClass } from '../components/AuthLayout';
 import { LoginForm, type MFAChallengeRequest } from '../components/LoginForm';
@@ -22,9 +22,13 @@ export interface LoginPageProps {
 }
 
 export function LoginPage({ onLoginSuccess, title, tagline }: LoginPageProps) {
-  const { selfRegistrationEnabled } = useFeatures();
+  const { selfRegistrationEnabled, signInRequired } = useFeatures();
   const completeMFALogin = useAuthStore((s) => s.completeMFALogin);
   const [challenge, setChallenge] = useState<MFAChallengeRequest | null>(null);
+
+  // TASK-483: a server without sign-in has no credentials to enter here, so an
+  // old bookmark or a link to /login opens the app instead of a dead end.
+  if (!signInRequired) return <Navigate to="/dashboard" replace />;
 
   if (challenge) {
     return (
