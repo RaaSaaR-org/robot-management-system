@@ -15,6 +15,7 @@ import {
 } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { trainingApi } from '../api/trainingApi';
+import { useDatasetVideoTicket } from '../hooks/useDatasetVideoTicket';
 import { useSyntheticGeneration } from '../hooks/useSyntheticGeneration';
 import type { CosmosJobStatus, SyntheticGeneratorMode, SyntheticModeInfo } from '../types';
 
@@ -472,7 +473,9 @@ function ResultView({ datasetId, datasetName, episodes, camera }: {
   /** Video key suffix of the dataset's camera (mode-dependent). */
   camera: string;
 }) {
-  const videoUrl = trainingApi.getEpisodeVideoUrl(datasetId, 0, camera);
+  // A <video> cannot send the bearer token; the ticket is what opens it (TASK-478).
+  const { ticket, ready } = useDatasetVideoTicket(datasetId);
+  const videoUrl = trainingApi.getEpisodeVideoUrl(datasetId, 0, camera, undefined, ticket);
   const [videoFailed, setVideoFailed] = useState(false);
   return (
     <div className="flex flex-col gap-4">
@@ -487,7 +490,9 @@ function ResultView({ datasetId, datasetName, episodes, camera }: {
       <div className="flex flex-col gap-1.5">
         <span className="text-xs font-medium text-ink-tertiary">Preview · episode 0</span>
         <div className="overflow-hidden rounded-panel border border-line bg-canvas">
-          {videoFailed ? (
+          {!ready ? (
+            <div className="aspect-video w-full" />
+          ) : videoFailed ? (
             <div className="flex aspect-video w-full items-center justify-center">
               <Sparkles className="h-7 w-7 text-ink-muted" strokeWidth={1.75} />
             </div>

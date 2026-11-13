@@ -55,7 +55,8 @@ sending it a motion command (`POST /api/robots/:id/command`) both need the same
 access — with one wrinkle: the camera stream is a `GET`, but nothing can read it
 without a ticket, and the ticket is minted by a `POST`. That mint is therefore
 exempt (class 3); without it a viewer's cockpit answers "The server refused a
-stream ticket for this camera."
+stream ticket for this camera." A dataset's episode videos work the same way
+(`POST /api/datasets/:id/video-ticket`).
 
 There are exactly four classes of exception, and nothing else.
 
@@ -119,6 +120,7 @@ granting it to a viewer grants no more than a `GET` would:
 |--------|------|-----|
 | POST | `/api/patrol/cron/validate` | Returns the next five fire times for a cron expression. A viewer plans a schedule in the UI before asking a member to save it. |
 | POST | `/api/robots/:id/camera/:name/ticket` | Mints the two-minute, one-camera ticket the MJPEG stream is read with — an `<img>` cannot send an `Authorization` header, so the ticket is the only way to open a stream a viewer is allowed to watch. Persists nothing, and reads only the robot row `GET /api/robots/:id` already serves them. |
+| POST | `/api/datasets/:id/video-ticket` | Mints the fifteen-minute, one-dataset ticket the episode videos are played with — a `<video>` cannot send an `Authorization` header on its request or its Range requests. `GET /api/datasets/:id/episodes/:index/video/:camera?ticket=…` accepts it; it opens nothing else. Persists nothing, and reads only the dataset row `GET /api/datasets/:id` already serves them. |
 
 **4. Halts** (`SAFETY_HALT_WRITES`), because a read-only operator who can see a
 hazard must be able to stop it:

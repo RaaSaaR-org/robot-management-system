@@ -10,6 +10,7 @@ import { DEFAULT_TENANT_ID, MULTI_TENANCY_ENABLED } from '../config/features.js'
 import { PLATFORM_TENANT, tenantStore } from './tenantContext.js';
 import { complianceLogService } from '../services/ComplianceLogService.js';
 import { verifyCameraTicket } from '../security/cameraTicket.js';
+import { verifyDatasetVideoTicket } from '../security/datasetVideoTicket.js';
 
 /**
  * Unified role model (TASK-162).
@@ -230,6 +231,65 @@ export function cameraStreamTicket(
 }
 
 /**
+ * Paths, relative to the `/api/datasets` mount, that serve an episode video.
+ * `/:id/episodes/:index/video/:camera` and nothing else.
+ */
+const DATASET_VIDEO_PATH = /^\/([^/]+)\/episodes\/[^/]+\/video\/[^/]+\/?$/;
+
+/**
+ * Authenticate an episode video request from a `?ticket=` in its URL (TASK-478).
+ *
+ * The same problem `cameraStreamTicket` solves, on the other media element: a
+ * `<video>` cannot set an `Authorization` header on its request or on the
+ * Range requests that follow it, so with sign-in on every dataset video was a
+ * 401. The ticket (`security/datasetVideoTicket.ts`) opens the videos of the
+ * one dataset it names and authorises nothing else.
+ *
+ * The same guards, for the same reasons: GET only, the video path only, never
+ * when a real Authorization header was supplied, and the ticket must name the
+ * dataset in the path it arrived on. A ticket that fails any of them is not
+ * refused here — it is simply not an identity, and `authMiddleware` answers
+ * the 401 it answers for anything else unauthenticated.
+ *
+ * `req.user.tenantId` is the scope the ticket was minted in, so the video is
+ * looked up in the tenant the ticket request ran in — including a tenant a
+ * super-admin was impersonating, which the `<video>` request has no header to
+ * say again.
+ */
+export function datasetVideoTicket(
+  req: AuthenticatedRequest,
+  _res: Response,
+  next: NextFunction
+): void {
+  if (req.method !== 'GET' || req.headers.authorization) return next();
+  const match = DATASET_VIDEO_PATH.exec(req.path);
+  if (!match) return next();
+
+  const claims = verifyDatasetVideoTicket(req.query.ticket);
+  if (!claims) return next();
+
+  // A malformed escape (`%zz`) throws; that is a 401, not a 500.
+  let datasetId: string;
+  try {
+    datasetId = decodeURIComponent(match[1]);
+  } catch {
+    return next();
+  }
+  if (claims.datasetId !== datasetId) return next();
+
+  req.user = {
+    id: claims.userId,
+    email: '',
+    name: '',
+    role: claims.role as AuthUser['role'],
+    tenantId: claims.tenantId,
+    authType: 'human',
+  };
+  (req as AuthenticatedRequest & { [TICKET_AUTHENTICATED]?: boolean })[TICKET_AUTHENTICATED] = true;
+  next();
+}
+
+/**
  * Authentication middleware - requires valid JWT
  *
  * When AUTH_DISABLED=true, injects a mock user unless a service token is supplied.
@@ -246,9 +306,10 @@ export async function authMiddleware(
     return continueWithTenant(req, req.user, next);
   }
 
-  // A camera stream that presented a valid ticket is already identified
-  // (`cameraStreamTicket`, mounted immediately before this). The mark is a
-  // module-private symbol, so this is not reachable by setting a field.
+  // A camera stream or an episode video that presented a valid ticket is
+  // already identified (`cameraStreamTicket` / `datasetVideoTicket`, mounted
+  // ahead of this). The mark is a module-private symbol, so this is not
+  // reachable by setting a field.
   if ((req as AuthenticatedRequest & { [TICKET_AUTHENTICATED]?: boolean })[TICKET_AUTHENTICATED]) {
     return continueWithTenant(req, req.user, next);
   }
@@ -547,6 +608,14 @@ export const POST_SHAPED_READS: RegExp[] = [
   // the caller's own identity, good for that one camera for two minutes
   // (`security/cameraTicket.ts`) and authorising nothing else.
   /^\/api\/robots\/[^/]+\/camera\/[^/]+\/ticket\/?$/,
+  // POST /api/datasets/:id/video-ticket — the same thing for a dataset's episode
+  // videos (TASK-478): a `<video>` cannot send an Authorization header either,
+  // so refusing the mint would leave a viewer with a dataset page whose player
+  // is black. It persists nothing. One dataset lookup — the row
+  // `GET /api/datasets/:id` already serves the same viewer — then a signature
+  // good for that dataset's video GETs for fifteen minutes
+  // (`security/datasetVideoTicket.ts`) and authorising nothing else.
+  /^\/api\/datasets\/[^/]+\/video-ticket\/?$/,
 ];
 
 /**

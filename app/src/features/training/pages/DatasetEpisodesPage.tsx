@@ -32,6 +32,8 @@ import { ViewBanner } from '../components/datasets/ViewBanner';
 import { DatasetExpectationsPanel } from '../components/datasets/DatasetExpectationsPanel';
 import { EpisodeListPanel } from '../components/datasets/EpisodeListPanel';
 import { EpisodeViewer, type PlaybackSpeed } from '../components/datasets/EpisodeViewer';
+import { featureVideoCodec } from '../components/datasets/videoCodec';
+import { useDatasetVideoTicket } from '../hooks/useDatasetVideoTicket';
 import { CuratePanel } from '../components/datasets/CuratePanel';
 import { JointChartPanel, RewardCurvePanel } from '../components/datasets/TrajectoryPanels';
 import { AnnotationsPanel } from '../components/datasets/AnnotationsPanel';
@@ -108,6 +110,10 @@ export function DatasetEpisodesPage() {
     useState<{ datasetId: string; stats: Record<string, FeatureStats> | null } | null>(null);
 
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  // A <video> cannot send the bearer token, so the URL carries a short-lived
+  // ticket for this dataset's videos. Re-checked per episode: that is when the
+  // video changes anyway, so a renewed ticket never interrupts playback.
+  const videoTicket = useDatasetVideoTicket(datasetId, selectedEpisode);
   const { submitJob } = useTrainingJobs();
 
   // Camera feature keys (dtype video/image). State-only datasets have none; the
@@ -140,6 +146,14 @@ export function DatasetEpisodesPage() {
     }
     return infoNames.action.length ? infoNames.action : DEFAULT_JOINTS;
   }, [dataset, jointGroups, infoNames]);
+
+  // The codec each camera's video is stored in, so the player can say when
+  // this browser cannot play it instead of showing a blank box (TASK-478).
+  const codecFor = useCallback(
+    (cam: string) =>
+      featureVideoCodec((dataset?.infoJson?.features as Record<string, unknown> | undefined)?.[cam]),
+    [dataset]
+  );
 
   const primaryCamera = cameraNames[0];
   const selectedMeta = useMemo(() => episodes.find((e) => e.index === selectedEpisode) ?? null, [episodes, selectedEpisode]);
@@ -605,7 +619,10 @@ export function DatasetEpisodesPage() {
             <>
               <EpisodeViewer
                 cameras={cameraNames}
-                srcFor={(cam) => trainingApi.getEpisodeVideoUrl(datasetId, selectedEpisode, cam, windowFor(cam))}
+                srcFor={(cam) => trainingApi.getEpisodeVideoUrl(datasetId, selectedEpisode, cam, windowFor(cam), videoTicket.ticket)}
+                codecFor={codecFor}
+                ready={videoTicket.ready}
+                onReload={videoTicket.refresh}
                 primaryCamera={primaryCamera}
                 videoRefs={videoRefs}
                 onTimeUpdate={handleTimeUpdate}
