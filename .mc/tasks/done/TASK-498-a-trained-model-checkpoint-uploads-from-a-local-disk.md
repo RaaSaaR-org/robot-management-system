@@ -3,7 +3,7 @@ id: "TASK-498"
 aliases: []
 title: "A trained model checkpoint uploads from a local disk straight into the instance's storage and appears in the model registry"
 slug: "a-trained-model-checkpoint-uploads-from-a-local-disk"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
@@ -200,4 +200,13 @@ the upload's base path, `dataset_download.rs` a `Kind`).
   6.9 GB: until that volume is grown, the instance refuses its upload at start with
   `507 INSUFFICIENT_STORAGE` — as designed, and before a byte is sent.
 - Not done: an "Upload model" dialog in the app (see Decisions).
+- Measured on 2026-11-13 against a local server, RustFS and Postgres, with the real g11
+  checkpoint read from a hard disk: upload 173 s in all — 88 s hashing the 15 files on
+  the client, 78 s sending 220 parts (89 MB/s, the source disk's read speed), 6 s for the
+  server to assemble two multipart files and read all 6.9 GB back for their SHA-256;
+  download 9 s including the SHA-256 comparison; `diff -r` against the source identical
+  (6,918,209,810 bytes, 15 files); no open multipart upload left.
+- A second start of a name and version whose upload is still open is refused
+  (`409 UPLOAD_IN_PROGRESS`, with the open upload's id), so a retried start cannot store
+  a checkpoint twice.
 - The rmsctl half is RaaSaaR-org/rmsctl `feat/models-upload`.
