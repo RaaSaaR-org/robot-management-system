@@ -482,7 +482,7 @@ export function KeyboardTeleopSection({
             size="sm"
             icon={<Keyboard />}
             title="Not connected"
-            description={`Connect to ${robot.name}'s robot agent to list its joints and drive them.`}
+            description={`Connect to the robot agent of ${robot.name} to list its joints and drive them.`}
           />
         ) : (
           <>

@@ -37,7 +37,7 @@ vi.mock('@/shared/components/ui', async (importOriginal) => {
 import { confirm, toast } from '@/shared/components/ui';
 import { useTwinStore } from '@/features/digitaltwin/store/twinStore';
 import { useSafetyStore } from '@/features/safety/store/safetyStore';
-import { SiteMap, LAST_SITE_KEY, groupSiteRobots, sitePoseOf } from '../SiteMap';
+import { SiteMap, LAST_SITE_KEY, groupSiteRobots, plannedMarkerPositions, sitePoseOf } from '../SiteMap';
 
 const BOUNDS = { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 10, maxZ: 3 };
 const twin = (id: string, name: string) =>
@@ -65,6 +65,19 @@ const robot = (id: string, twinId: string | null, siteAligned?: boolean): Robot 
     location: { x: 2, y: 3, heading: 90, siteAligned },
     twinId,
   }) as unknown as Robot;
+
+/** An expected robot (TASK-477): offline, no agent, `metadata.provisioning` set by the server. */
+const expected = (id: string, twinId: string | null, plannedPlace?: string, state = 'awaiting_agent'): Robot =>
+  ({
+    id,
+    name: `Robot ${id}`,
+    status: 'offline',
+    location: { x: 0, y: 0 },
+    twinId,
+    metadata: { provisioning: state, ...(plannedPlace ? { plannedPlace } : {}) },
+  }) as unknown as Robot;
+
+const KEEPOUT: TwinZoneDTO = { ...DOCK, id: 'tz-edge', name: 'Edge', type: 'keepout' } as TwinZoneDTO;
 
 function renderMap(size?: 'full' | 'compact') {
   return render(
@@ -223,4 +236,101 @@ describe('SiteMap', () => {
       expect(screen.queryByText(/Your role can't use this stop/)).toBeNull();
     },
   );
+});
+
+describe('expected robots on the site map (TASK-493)', () => {
+  it('groups one with a planned zone as planned, one without as expected, and neither as unaligned', () => {
+    const g = groupSiteRobots(
+      [
+        expected('g1', 'tw-1', 'Dock'),
+        expected('arm', 'tw-1'),
+        expected('typo', 'tw-1', 'No such zone'),
+        expected('fence', 'tw-1', 'Edge'),
+        expected('lab', 'tw-2', 'Dock'),
+        expected('loose', null, 'Dock'),
+        robot('b', 'tw-1', false),
+      ],
+      'tw-1',
+      [DOCK, KEEPOUT],
+    );
+    expect(g.planned.map((p) => `${p.robot.id}@${p.zone.name}`)).toEqual(['g1@Dock']);
+    // A zone that is not there, and a keep-out, are no place to stand.
+    expect(g.expected.map((r) => r.id)).toEqual(['arm', 'typo', 'fence']);
+    expect(g.unaligned.map((r) => r.id)).toEqual(['b']);
+    expect(g.unbound.map((r) => r.id)).toEqual(['loose']);
+    expect(g.plotted).toEqual([]);
+  });
+
+  it('believes a live pose over a planned place once the robot is connected', () => {
+    const live = { ...expected('g1', 'tw-1', 'Dock'), status: 'online', location: { x: 2, y: 3, siteAligned: true } } as unknown as Robot;
+    const stale = { ...expected('g2', 'tw-1', 'Dock'), status: 'online' } as unknown as Robot;
+    const g = groupSiteRobots([live, stale], 'tw-1', [DOCK]);
+    expect(g.plotted.map((r) => r.id)).toEqual(['g1']);
+    expect(g.planned).toEqual([]);
+    // Connected but not aligned: the planned place is not its position.
+    expect(g.unaligned.map((r) => r.id)).toEqual(['g2']);
+  });
+
+  it('stacks the robots planned into one zone under its name instead of on top of each other', () => {
+    const at = plannedMarkerPositions(
+      [
+        { robot: expected('a', 'tw-1', 'Dock'), zone: DOCK },
+        { robot: expected('b', 'tw-1', 'Dock'), zone: DOCK },
+        { robot: expected('c', 'tw-1', 'Other'), zone: { ...DOCK, id: 'tz-other' } },
+      ],
+      (p) => ({ x: p.x * 10, y: p.y * 10 }),
+    ).map((m) => m.at);
+    // Over the zone's name (drawn at the centroid, y = 20), going up.
+    expect(at[0]).toEqual({ x: 30, y: 4 });
+    expect(at[1]).toEqual({ x: 30, y: -14 });
+    expect(at[2]).toEqual(at[0]);
+  });
+
+  it('draws a planned robot as planned — never among the live robots — and lists it as not connected', async () => {
+    robotsHook.robots = [expected('g1', 'tw-1', 'Dock'), expected('duck', 'tw-1', 'Dock', 'arriving'), robot('a', 'tw-1', true)];
+    renderMap();
+
+    const marker = await screen.findByTestId('site-map-planned-g1');
+    expect(marker).toHaveTextContent('Robot g1 (planned)');
+    expect(marker.querySelector('title')).toHaveTextContent('Robot g1 — planned position in Dock. Not connected, not a live position.');
+    expect(marker.querySelector('circle')).toHaveAttribute('stroke-dasharray');
+    const live = screen.getByTestId('site-map-robots');
+    expect(within(live).getByTestId('site-map-robot-a')).toBeInTheDocument();
+    expect(live).not.toHaveTextContent('Robot g1');
+
+    expect(screen.getByTestId('site-map-count')).toHaveTextContent(
+      '1 robot live on the map. 2 expected robots are drawn where they are planned to stand.',
+    );
+    const list = screen.getByTestId('site-map-planned');
+    expect(list.querySelector('h3')).toHaveTextContent('Planned position2');
+    const row = within(list).getByRole('link', { name: 'Robot g1' }).closest('li');
+    expect(row).toHaveTextContent('planned in Dock');
+    expect(row).toHaveTextContent('not connected');
+    expect(within(list).getByRole('link', { name: 'Robot duck' }).closest('li')).toHaveTextContent('arriving');
+    expect(screen.queryByTestId('site-map-unaligned')).toBeNull();
+  });
+
+  it('lists an expected robot without a planned place as not connected, not as "not aligned"', async () => {
+    robotsHook.robots = [expected('arm', 'tw-1')];
+    renderMap('compact');
+    const group = await screen.findByTestId('site-map-expected');
+    expect(group).toHaveTextContent('Robot arm');
+    expect(group).toHaveTextContent('not connected');
+    expect(screen.queryByTestId('site-map-unaligned')).toBeNull();
+    expect(screen.queryByTestId('site-map-planned-arm')).toBeNull();
+  });
+
+  it('compact says a planned robot on two lines without a tag, and shortens "not aligned"', async () => {
+    robotsHook.robots = [expected('g1', 'tw-1', 'Dock'), robot('b', 'tw-1', false)];
+    renderMap('compact');
+    const planned = await screen.findByTestId('site-map-planned');
+    const row = within(planned).getByRole('link', { name: 'Robot g1' }).closest('li');
+    expect(row).toHaveTextContent('Robot g1planned in Dock · not connected');
+    expect(row?.querySelector('[data-tone]')).toBeNull();
+
+    const unaligned = screen.getByTestId('site-map-unaligned');
+    const tag = unaligned.querySelector('[data-tone]');
+    expect(tag).toHaveTextContent(/^not aligned$/);
+    expect(tag?.getAttribute('title')).toMatch(/fences do not hold it/);
+  });
 });

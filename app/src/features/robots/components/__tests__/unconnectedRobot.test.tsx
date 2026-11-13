@@ -204,7 +204,7 @@ describe('the Teleop tab', () => {
     inRouter(<TeleopTab robot={expectedArm} robotId={expectedArm.id} />);
     expect(screen.getByTestId('teleop-awaiting-agent')).toHaveTextContent('Not connected yet');
     expect(screen.getByTestId('teleop-awaiting-agent')).toHaveTextContent(
-      "Keyboard and VR teleop open when SO-101's robot agent connects to this server.",
+      "Keyboard and VR teleop open when the robot agent of SO-101 connects to this server.",
     );
     expect(screen.queryByRole('button', { name: /connect/i })).toBeNull();
     expect(screen.queryByTestId('readiness-panel')).toBeNull();
@@ -239,7 +239,7 @@ describe('the Voice tab', () => {
   it('asks no voice service of a robot without an agent and offers no composer', () => {
     inRouter(<VoiceTab robot={expectedG1} robotId={expectedG1.id} />);
     expect(screen.getByTestId('voice-awaiting-agent')).toHaveTextContent(
-      "Voice opens when Unitree G1 with Dex3 hands's robot agent connects to this server.",
+      "Voice opens when the robot agent of Unitree G1 with Dex3 hands connects to this server.",
     );
     expect(screen.queryByTestId('voice-composer')).toBeNull();
     expect(h.useVoiceChannel).not.toHaveBeenCalled();
@@ -284,7 +284,7 @@ describe('the Overview tab', () => {
   it('replaces the skill and quick-action panels of an expected robot with one sentence', () => {
     inRouter(<OverviewTab {...props(expectedArm)} />);
     expect(screen.getByTestId('overview-awaiting-agent')).toHaveTextContent(
-      "Skills and quick actions become available when SO-101's robot agent connects to this server.",
+      "Skills and quick actions become available when the robot agent of SO-101 connects to this server.",
     );
     expect(screen.queryByTestId('vla-section')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Charge' })).toBeNull();
@@ -352,7 +352,7 @@ describe('the Telemetry tab', () => {
   it('does not print the seed time of an expected robot as "last seen"', () => {
     tab(expectedArm);
     expect(screen.getByText('Not connected yet')).toBeInTheDocument();
-    expect(screen.getByText("Telemetry appears here when SO-101's robot agent connects to this server.")).toBeInTheDocument();
+    expect(screen.getByText("Telemetry appears here when the robot agent of SO-101 connects to this server.")).toBeInTheDocument();
     expect(screen.queryByText(/Last seen/)).toBeNull();
     expect(screen.queryByText(/is offline/)).toBeNull();
   });

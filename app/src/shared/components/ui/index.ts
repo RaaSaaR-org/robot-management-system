@@ -108,6 +108,7 @@ export { cssColor, useCssColor } from './cssColor';
 export { DataTable } from './DataTable';
 export type {
   DataTableProps,
+  DataTableBreakpoint,
   DataTableColumn,
   DataTableSort,
   DataTablePagination,

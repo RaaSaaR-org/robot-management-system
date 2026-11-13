@@ -9,6 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { DatasetList } from '../DatasetList';
 import { useImportJobsStore } from '../../store/importJobsStore';
+import { useDatasetUploadStore } from '../../store/datasetUploadStore';
 import { CompatibilityModal } from '../datasets/CompatibilityModal';
 import type { Dataset } from '../../types';
 
@@ -164,6 +165,107 @@ describe('a Hub import in the list (#370)', () => {
         })]}
       />,
     );
-    expect(screen.getByText('lerobot/pusht@89d5752c · LeRobot v3.0')).toBeInTheDocument();
+    // Said as provenance, not as a second name under the title (TASK-493).
+    expect(screen.getByText('From Hugging Face: lerobot/pusht@89d5752c · LeRobot v3.0')).toBeInTheDocument();
+  });
+});
+
+describe('the table fits its panel (TASK-493)', () => {
+  // The four names on the demo instance, and the robot type an import minted.
+  const LIVE_NAMES = [
+    'Apple to Plate — NVIDIA GR00T reference',
+    'Apple to Plate — our G1 recording',
+    'Object in Box — SO-101 community set',
+    'Bottle Sorting — our G1 Dex3 simulation',
+  ];
+  const AUTO_TYPE = 'unitree_g1_dex3 (action 31, state 31)';
+  const rows = LIVE_NAMES.map((name, i) => dataset({ id: `d${i}`, name }));
+  const types = [{ id: 'rt1', name: AUTO_TYPE } as never];
+  const headerOf = (label: string) => screen.getByRole('columnheader', { name: new RegExp(label) });
+
+  it('gives the name column the slack and lets it shrink, with the whole name on hover', () => {
+    render(<DatasetList datasets={rows} robotTypes={types} rowActions={() => [{ label: 'Delete', onSelect: () => {} }]} />);
+    for (const name of LIVE_NAMES) {
+      const label = screen.getByText(name);
+      expect(label).toHaveAttribute('title', name);
+      expect(label).toHaveClass('line-clamp-2');
+      // `width: 100%; max-width: 0` on the cell: it takes what is left and never more.
+      expect(label.closest('td')).toHaveClass('sm:w-full', 'sm:max-w-0');
+    }
+    expect(screen.getAllByRole('button', { name: /^Actions for / })).toHaveLength(4);
+  });
+
+  it('keeps a long robot type to two lines of a fixed width, whole on hover', () => {
+    render(<DatasetList datasets={rows.slice(0, 1)} robotTypes={types} />);
+    const cell = screen.getByText(AUTO_TYPE);
+    expect(cell).toHaveAttribute('title', AUTO_TYPE);
+    expect(cell).toHaveClass('line-clamp-2', 'w-40');
+  });
+
+  it('folds the low-value columns away as the window narrows, status and name last', () => {
+    render(<DatasetList datasets={rows} robotTypes={types} />);
+    expect(headerOf('Frames')).toHaveClass('hidden', '2xl:table-cell');
+    expect(headerOf('Duration')).toHaveClass('hidden', 'min-[1440px]:table-cell');
+    expect(headerOf('Robot type')).toHaveClass('hidden', 'xl:table-cell');
+    expect(headerOf('Updated')).toHaveClass('hidden', 'xl:table-cell');
+    expect(headerOf('Episodes')).toHaveClass('hidden', 'sm:table-cell');
+    expect(headerOf('Name')).not.toHaveClass('hidden');
+    expect(headerOf('Status')).not.toHaveClass('hidden');
+  });
+
+  it('shows the duration under the episode count until it has a column of its own', () => {
+    render(<DatasetList datasets={[dataset({ totalDuration: 1857, demonstrationCount: 80 })]} />);
+    const inline = screen.getByTestId('dataset-duration-inline');
+    expect(inline).toHaveTextContent('30m 57s');
+    expect(inline).toHaveClass('min-[1440px]:hidden');
+    expect(inline.closest('td')).toHaveTextContent('80');
+  });
+
+  it('keeps an upload inside the same fixed-width status cell as a bare tag', () => {
+    useDatasetUploadStore.setState({
+      job: { datasetId: 'up', phase: 'uploading', sentBytes: 55_100_000, totalBytes: 425_000_000 } as never,
+    });
+    render(
+      <DatasetList
+        datasets={[dataset({ id: 'up', name: 'Uploading one', status: 'uploading' }), dataset({ id: 'ok', name: 'Ready one' })]}
+      />,
+    );
+    const cells = screen.getAllByTestId('dataset-status-cell');
+    expect(cells).toHaveLength(2);
+    for (const cell of cells) expect(cell).toHaveClass('w-28', 'sm:w-36', 'min-w-0');
+
+    const progress = screen.getByTestId('upload-progress-up');
+    expect(progress.closest('[data-testid="dataset-status-cell"]')).not.toBeNull();
+    // As wide as its cell, never a width of its own; the byte line truncates.
+    expect(progress).toHaveClass('w-full', 'min-w-0');
+    expect(progress.className).not.toMatch(/w-44/);
+    const line = within(progress).getByText(/MB/);
+    expect(line).toHaveClass('truncate');
+    expect(line).toHaveAttribute('title', line.textContent);
+    useDatasetUploadStore.setState({ job: null });
+  });
+
+  it('keeps a failed import’s reason inside the status cell, however long it is', () => {
+    render(
+      <DatasetList
+        datasets={[dataset({
+          id: 'f',
+          status: 'failed',
+          huggingFaceRepoId: 'some-org/broken',
+          importError: {
+            phase: 'downloading',
+            error: 'Hub answered 404 for meta/episodes/chunk-000/file-000.parquet at revision 37cb1d6e',
+            repoId: 'some-org/broken',
+            failedAt: '2026-10-12T00:00:00Z',
+          },
+        })]}
+      />,
+    );
+    const box = screen.getByTestId('dataset-import-error');
+    // The tooltip's wrappers shrink to fit, so `w-full` there is the text's own
+    // width: the box carries the cell's width itself and the line truncates in it.
+    expect(box).toHaveClass('w-28', 'sm:w-36', 'min-w-0');
+    expect(box).not.toHaveClass('w-full');
+    expect(within(box).getByText(/Hub answered 404/)).toHaveClass('truncate', 'max-w-full');
   });
 });

@@ -216,7 +216,7 @@ export function LiveSessionRedirect({
         ) : (
           <>
             <p className="text-[15px] font-medium text-ink-primary" data-testid="live-session-status" data-state="waiting">
-              {checks === 0 ? `Looking for ${robotId}'s live session…` : `No live session for ${robotId}. Waiting…`}
+              {checks === 0 ? `Looking for the live session of ${robotId}…` : `No live session for ${robotId}. Waiting…`}
             </p>
             <p className="text-[13px] text-ink-secondary">
               Create or start a data-collection session for this robot on the desktop; this page opens it on its own.
