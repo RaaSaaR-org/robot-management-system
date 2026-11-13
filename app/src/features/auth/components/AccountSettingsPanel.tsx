@@ -6,6 +6,7 @@
 
 import { KeyValueList, Panel, StatusTag } from '@/shared/components/ui';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { useFeatures } from '@/shared/hooks/useFeatures';
 import { useAuth } from '../hooks/useAuth';
 import { ChangePasswordForm } from './ChangePasswordForm';
 import { SecuritySettings } from './SecuritySettings';
@@ -19,6 +20,10 @@ const formatDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString(UI_
 
 export function AccountSettingsPanel({ onPasswordChanged }: AccountSettingsPanelProps) {
   const { user } = useAuth();
+  // TASK-483: without sign-in the profile is the server's shared user. It has
+  // no password or second factor to manage, and its address and dates are
+  // placeholders — /me stamps "member since" with the time of the request.
+  const { signInRequired } = useFeatures();
   if (!user) return null;
 
   const initials = user.name
@@ -46,26 +51,36 @@ export function AccountSettingsPanel({ onPasswordChanged }: AccountSettingsPanel
             )}
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-ink-primary">{user.name}</div>
-              <div className="truncate text-[13px] text-ink-tertiary">{user.email}</div>
+              <div className="truncate text-[13px] text-ink-tertiary">
+                {signInRequired ? user.email : 'Shared account'}
+              </div>
             </div>
           </div>
           <KeyValueList
             items={[
               { label: 'Role', value: <StatusTag tone="neutral">{user.role}</StatusTag> },
-              { label: 'Member since', value: formatDate(user.createdAt) },
-              { label: 'Last sign-in', value: formatDate(user.lastLoginAt) },
+              ...(signInRequired
+                ? [
+                    { label: 'Member since', value: formatDate(user.createdAt) },
+                    { label: 'Last sign-in', value: formatDate(user.lastLoginAt) },
+                  ]
+                : []),
               { label: 'User ID', value: user.id, mono: true },
             ]}
           />
         </Panel.Body>
       </Panel>
 
-      <Panel>
-        <Panel.Header title="Change password" description="You stay signed in on this device." />
-        <ChangePasswordForm onSuccess={onPasswordChanged} />
-      </Panel>
+      {signInRequired && (
+        <>
+          <Panel>
+            <Panel.Header title="Change password" description="You stay signed in on this device." />
+            <ChangePasswordForm onSuccess={onPasswordChanged} />
+          </Panel>
 
-      <SecuritySettings />
+          <SecuritySettings />
+        </>
+      )}
     </div>
   );
 }

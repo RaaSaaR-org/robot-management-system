@@ -684,6 +684,7 @@ export const handlers = [
   http.get('/api/config/features', () => HttpResponse.json({
     multiTenancyEnabled: false,
     selfRegistrationEnabled: true,
+    signInRequired: true,
     natsEnabled: false,
     rustfsEnabled: false,
   })),
