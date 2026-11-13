@@ -543,7 +543,9 @@ function generateSensorData(state: SimulatedRobotState): Record<string, number |
 
   return {
     // Distance sensors (in cm)
-    frontSonar: isMoving ? 50 + Math.random() * 200 : 999,
+    // Standing still it reads the far wall, inside the sensor's 3 m range — not
+    // an out-of-range sentinel that an operator sees as "999.0 cm".
+    frontSonar: isMoving ? 50 + Math.random() * 200 : 250 + Math.random() * 40,
     rearSonar: 150 + Math.random() * 100,
     leftSonar: 100 + Math.random() * 50,
     rightSonar: 100 + Math.random() * 50,

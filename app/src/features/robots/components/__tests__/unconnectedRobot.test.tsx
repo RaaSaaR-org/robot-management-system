@@ -380,6 +380,23 @@ describe('the Details tab', () => {
     expect(screen.queryByText('Place unknown')).toBeNull();
   });
 
+  it('reads a simulated robot\'s metadata as words, not raw keys and booleans (TASK-497)', async () => {
+    h.getRobotType.mockResolvedValue({ robotType: null, linkedBy: null });
+    const sim = makeRobot({
+      id: 'sim-robot-001',
+      name: 'SimBot-01',
+      status: 'online',
+      metadata: { isSimulated: true, hardwareConnected: false, robotType: 'g1', footprintRadiusM: 0.35 },
+    });
+    inRouter(<InfoTab robot={sim} robotId={sim.id} />);
+    await waitFor(() => expect(h.getRobotType).toHaveBeenCalledWith('sim-robot-001'));
+    expect(screen.getByText('Simulated').nextElementSibling).toHaveTextContent('Yes');
+    expect(screen.getByText('Hardware connected').nextElementSibling).toHaveTextContent('No');
+    expect(screen.getByText('Embodiment').nextElementSibling).toHaveTextContent('Unitree G1');
+    expect(screen.getByText('Footprint radius (m)').nextElementSibling).toHaveTextContent('0.35');
+    expect(screen.queryByText('Is simulated')).toBeNull();
+  });
+
   it('falls back to the type the robot states when the server cannot answer', async () => {
     h.getRobotType.mockRejectedValue(new Error('404'));
     inRouter(<InfoTab robot={expectedArm} robotId={expectedArm.id} />);

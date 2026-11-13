@@ -44,6 +44,8 @@ const DEFAULT_CONFIG: SimulationConfig = {
  */
 /** 'Critical battery level' (raised below 5 %) is dropped again from here up. */
 const CRITICAL_BATTERY_CLEAR_PCT = 10;
+/** The task name a robot reports while it stands on its charger. */
+const CHARGING_TASK_NAME = 'Charging';
 /** 'Low battery' (raised below 20 %) is dropped again from here up. */
 const LOW_BATTERY_CLEAR_PCT = 25;
 
@@ -170,6 +172,15 @@ export class SimulationEngine {
       stateChanged = moved;
     }
 
+    // 'Charging' names the charging state and nothing else. A snapshot restored
+    // from before the full-charge path cleared it would show it forever.
+    if (state.status !== 'charging' && state.currentTaskName === CHARGING_TASK_NAME) {
+      this.stateUpdater((s) => {
+        s.currentTaskName = undefined;
+      });
+      stateChanged = true;
+    }
+
     // Handle battery
     if (state.status !== 'charging') {
       stateChanged = this.drainBattery(deltaTime) || stateChanged;
@@ -251,7 +262,7 @@ export class SimulationEngine {
     if (isAtChargingStation) {
       this.stateUpdater((s) => {
         s.status = 'charging';
-        s.currentTaskName = 'Charging';
+        s.currentTaskName = CHARGING_TASK_NAME;
       });
     }
   }
@@ -392,6 +403,8 @@ export class SimulationEngine {
     if (newState.batteryLevel >= 100) {
       this.stateUpdater((s) => {
         s.status = 'online';
+        // Full: the robot is idle again, so it no longer reports a task.
+        if (s.currentTaskName === CHARGING_TASK_NAME) s.currentTaskName = undefined;
         s.warnings = s.warnings.filter((w) => w !== 'Low battery');
         s.errors = s.errors.filter((e) => e !== 'Critical battery level');
       });

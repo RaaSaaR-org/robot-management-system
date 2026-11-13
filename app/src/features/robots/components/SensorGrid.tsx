@@ -48,6 +48,8 @@ export interface SensorConfig {
 const DEFAULT_SENSOR_CONFIG: SensorConfig = {
   frontSonar: { label: 'Front sonar', unit: 'cm', type: 'distance', max: 300 },
   rearSonar: { label: 'Rear sonar', unit: 'cm', type: 'distance', max: 300 },
+  leftSonar: { label: 'Left sonar', unit: 'cm', type: 'distance', max: 300 },
+  rightSonar: { label: 'Right sonar', unit: 'cm', type: 'distance', max: 300 },
   leftBumper: { label: 'Left bumper', type: 'boolean' },
   rightBumper: { label: 'Right bumper', type: 'boolean' },
   cliffDetector: { label: 'Cliff detector', type: 'boolean' },

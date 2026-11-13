@@ -262,7 +262,10 @@ robotAgent:
   env:
     robotId: "sim-robot-001"
     robotName: "SimBot-01"
-    robotModel: "SimBot H1"
+    robotModel: "Unitree G1 (simulated)"
+    # Embodiment the agent simulates: g1 | g1_edu | h1 | so101. Empty leaves
+    # ROBOT_TYPE unset and the agent on its own default (h1).
+    robotType: "g1"
     robotClass: "standard"
     maxPayloadKg: "10"
     robotDescription: "A versatile humanoid robot for general tasks"

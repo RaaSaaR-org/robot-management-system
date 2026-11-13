@@ -42,6 +42,19 @@ server {
         try_files $uri =404;
     }
 
+    # Robot 3D models (URDF + meshes, 30-35 MB per robot). nginx has no MIME
+    # type for them, so they went out as uncompressed application/octet-stream
+    # with no cache lifetime, and the live model stayed blank for many seconds
+    # on every visit. They are text (COLLADA, URDF) or compress well (STL), and
+    # they are not content-hashed, so: gzip, and a day of cache that
+    # revalidates by ETag after a deploy.
+    location ~* ^/assets/robots/.+\.(dae|stl|urdf|obj|glb)$ {
+        gzip_types application/octet-stream;
+        expires 1d;
+        add_header Cache-Control "public";
+        try_files $uri =404;
+    }
+
     # Health check endpoint
     location /health {
         access_log off;

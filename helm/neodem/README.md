@@ -123,6 +123,8 @@ helm install neodem ./helm/neodem \
 | `robotAgent.enabled` | Deploy robot agent | `true` |
 | `robotAgent.env.robotId` | Robot identifier | `sim-robot-001` |
 | `robotAgent.env.robotName` | Robot display name | `SimBot-01` |
+| `robotAgent.env.robotModel` | Model name shown under the robot's name | `Unitree G1 (simulated)` |
+| `robotAgent.env.robotType` | Embodiment the agent simulates (`ROBOT_TYPE`): `g1`, `g1_edu`, `h1`, `so101`. Empty = the agent's default (`h1`) | `g1` |
 
 ### VLA Inference
 
