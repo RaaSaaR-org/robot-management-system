@@ -43,8 +43,12 @@ function makeStore(uploads: Record<string, MultipartUploadInfo[] | Error>) {
   return store;
 }
 
-function makeSweep(store: MultipartSweepStore, overrides: { enabled?: boolean; buckets?: string[] } = {}) {
+function makeSweep(
+  store: MultipartSweepStore,
+  overrides: { enabled?: boolean; buckets?: string[]; keepPrefixes?: () => Promise<string[]> } = {},
+) {
   return new MultipartUploadSweep({
+    keepPrefixes: overrides.keepPrefixes ?? (async () => []),
     store: () => store,
     enabled: () => overrides.enabled ?? true,
     buckets: () => overrides.buckets ?? ['bucket-a', 'bucket-b'],
@@ -89,6 +93,34 @@ describe('MultipartUploadSweep.sweep (TASK-379)', () => {
       ['bucket-a', 'old/one', 'u1'],
       ['bucket-b', 'old/two', 'u3'],
     ]);
+  });
+
+  // TASK-480: a direct dataset upload opens its multipart uploads at start and
+  // may be resumed for longer than the cut-off.
+  it('keeps the old multipart uploads of a direct upload that is still running', async () => {
+    const store = makeStore({
+      'bucket-a': [
+        { key: 'live-upload/videos/cam/file-000.mp4', uploadId: 'u1', initiated: hoursAgo(72) },
+        { key: 'abandoned/videos/cam/file-000.mp4', uploadId: 'u2', initiated: hoursAgo(72) },
+      ],
+    });
+
+    const result = await makeSweep(store, { buckets: ['bucket-a'], keepPrefixes: async () => ['live-upload/', ''] }).sweep();
+
+    expect(result).toEqual({ aborted: 1, kept: 1, errors: [] });
+    expect(store.abortMultipartUpload.mock.calls).toEqual([['bucket-a', 'abandoned/videos/cam/file-000.mp4', 'u2']]);
+  });
+
+  it('aborts nothing when it cannot ask which uploads are still running', async () => {
+    const store = makeStore({ 'bucket-a': [{ key: 'old/one', uploadId: 'u1', initiated: hoursAgo(72) }] });
+
+    const result = await makeSweep(store, {
+      buckets: ['bucket-a'],
+      keepPrefixes: async () => { throw new Error('database timeout'); },
+    }).sweep();
+
+    expect(result).toEqual({ aborted: 0, kept: 0, errors: ['database timeout'] });
+    expect(store.abortMultipartUpload).not.toHaveBeenCalled();
   });
 
   it('never aborts an upload whose start time is unknown', async () => {

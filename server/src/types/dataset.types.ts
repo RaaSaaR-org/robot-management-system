@@ -131,8 +131,10 @@ export interface HuggingFacePreview {
  */
 export interface HuggingFaceImportProgress {
   datasetId: string;
-  status: 'importing' | 'validating' | 'ready' | 'failed';
-  phase: 'metadata' | 'downloading' | 'storing' | 'validating';
+  /** `uploading` is a direct upload (TASK-480); `importing` a Hub import. */
+  status: 'uploading' | 'importing' | 'validating' | 'ready' | 'failed';
+  /** A direct upload goes `uploading` → `storing` (assemble + verify) → `validating`. */
+  phase: 'metadata' | 'downloading' | 'uploading' | 'storing' | 'validating';
   progress: number;
   currentFile?: string;
   totalFiles?: number;

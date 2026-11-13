@@ -25,6 +25,7 @@ export type {
   UploadOptions,
   UploadProgress,
   MultipartUploadInfo,
+  MultipartPartInfo,
   ObjectMetadata,
   ListOptions,
   ListResult,

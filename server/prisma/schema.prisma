@@ -2481,6 +2481,8 @@ model Dataset {
   // do if the database has not already thrown them away.
   parent       Dataset?             @relation("DatasetDerivation", fields: [parentDatasetId], references: [id], onDelete: Restrict)
   derived      Dataset[]            @relation("DatasetDerivation")
+  // The direct upload that is filling (or filled) this dataset (TASK-480).
+  upload       DatasetUpload?
 
   @@index([robotTypeId])
   @@index([skillId])
@@ -2488,6 +2490,40 @@ model Dataset {
   @@index([huggingFaceRepoId])
   @@index([tenantId, updatedAt])
   @@index([parentDatasetId])
+}
+
+// One direct upload of a dataset tree, file by file, through the API server
+// (TASK-480). The row is the session: what the client declared it will send
+// and where it goes. Which parts have ARRIVED is deliberately not stored here —
+// the object store (or the local staging directory) is asked, so a part is
+// never recorded as received that the store does not hold, and a chunk costs
+// no database write. Reached only through its Dataset row, which carries the
+// tenant; it has no tenantId of its own.
+model DatasetUpload {
+  datasetId      String   @id
+  // 'uploading' — parts are accepted. 'processing' — finish was accepted and
+  // the files are being assembled and verified. 'completed' — handed to
+  // validation; the Dataset row's status is the verdict. 'failed' — assembling
+  // or verifying failed; the reason is on the Dataset row.
+  state          String   @default("uploading")
+  // 'rustfs' | 'local' — decided once at start, like an import's sink.
+  sink           String
+  // Same value as the Dataset row's storagePath, kept so cleanup never depends
+  // on a column something else may edit.
+  storagePath    String
+  // Bytes per part; every part but a file's last is exactly this long.
+  chunkSize      Int
+  // JSON: UploadFileEntry[] — { id, path, size, sha256?, partCount, uploadId? }.
+  filesJson      String
+  // Refreshed while parts arrive; an upload idle past the configured time is
+  // reaped (multipart uploads aborted, objects and the Dataset row deleted).
+  lastActivityAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  dataset Dataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@index([state, lastActivityAt])
 }
 
 // TrainingJob - Training job queue entries
