@@ -74,7 +74,18 @@ GET /api/datasets/:id/files?limit=1000&after=<nextCursor of the previous page>
   between listing and fetching. A dataset on local disk has none.
 
 The list is what is in the store, not what `meta/info.json` promises: a
-tables-only dataset (`importMode: "metadata"`) lists no `videos/`.
+tables-only dataset (`importMode: "metadata"`) lists no `videos/`. A dataset
+that was uploaded directly lists every file its client declared, the ones
+beside the LeRobot tree (`README.md`, …) included — from a server that stores
+them; one from before TASK-500 kept only `meta/`, `data/`, `videos/` and
+`images/` ([what may be uploaded](dataset-upload.md#what-may-be-uploaded)).
+
+**Checking a local copy without fetching it.** The list alone answers "is
+everything in this directory on the instance?": compare each local file's
+relative path and size with the list, and its SHA-256 with `sha256` where the
+list has one. `rmsctl datasets verify <dataset-id> <dir>` does that, names
+every difference and exits non-zero when there is one — the step to run before
+a local dataset is deleted.
 
 ## 2. One file
 

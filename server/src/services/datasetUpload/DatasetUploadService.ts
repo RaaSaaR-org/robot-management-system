@@ -309,9 +309,6 @@ export class DatasetUploadService {
         + `${info.total_episodes ?? 0} episodes, ${info.total_frames ?? 0} frames at ${info.fps} fps`,
     );
     this.log(datasetId, 'info', `Storage: ${sink.kind === 'rustfs' ? 'RustFS' : 'local disk'} at ${sink.storagePath}`);
-    if (manifest.ignored.length > 0) {
-      this.log(datasetId, 'info', `${manifest.ignored.length} declared file(s) are not part of a LeRobot tree and are left out`);
-    }
     this.emitProgress(datasetId, {
       datasetId,
       status: 'uploading',

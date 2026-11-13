@@ -206,15 +206,39 @@ describe('checkManifest', () => {
     expect(result.ignored).toEqual([]);
   });
 
-  it('leaves out files a LeRobot tree does not need, and says which', () => {
-    const result = checkManifest(
-      [...V3_TREE, { path: 'README.md', size: 10 }, { path: '.gitattributes', size: 5 }, { path: 'videos/cam/notes.txt', size: 1 }],
-      INFO_V3, 32 * MIB, LIMITS,
-    );
+  it('stores every safe file of the directory, not only the LeRobot tree', () => {
+    const extras = [
+      { path: 'README.md', size: 10 },
+      { path: '.gitattributes', size: 5 },
+      { path: 'videos/cam/notes.txt', size: 1 },
+      { path: 'notes/empty.txt', size: 0 },
+      { path: 'docs/übersicht — späte Schicht.md', size: 7 },
+    ];
+    const result = checkManifest([...V3_TREE, ...extras], INFO_V3, 32 * MIB, LIMITS);
 
-    expect(result.files).toHaveLength(V3_TREE.length);
-    expect(result.ignored.map((i) => i.path)).toEqual(['README.md', '.gitattributes', 'videos/cam/notes.txt']);
-    expect(result.totalBytes).toBe(1370 + 70 * MIB);
+    expect(result.files.map((f) => f.path)).toEqual([...V3_TREE, ...extras].map((f) => f.path));
+    expect(result.files.find((f) => f.path === 'notes/empty.txt')).toMatchObject({ size: 0, partCount: 1 });
+    expect(result.ignored).toEqual([]);
+    expect(result.totalBytes).toBe(1370 + 70 * MIB + 23);
+    expect(result.importMode).toBe('full');
+  });
+
+  it('still needs the LeRobot tree itself, whatever else is declared', () => {
+    const noTables = [...V3_TREE.filter((f) => !f.path.startsWith('data/')), { path: 'README.md', size: 10 }];
+    const error = refusal(() => checkManifest(noTables, INFO_V3, 32 * MIB, LIMITS));
+    expect(error.code).toBe('NOT_A_LEROBOT_DATASET');
+  });
+
+  it('refuses an unsafe path among the extra files, and one that is a file and a directory', () => {
+    expect(refusal(() => checkManifest([...V3_TREE, { path: '../README.md', size: 10 }], INFO_V3, 32 * MIB, LIMITS)).code)
+      .toBe('INVALID_PATH');
+    const both = [...V3_TREE, { path: 'notes', size: 3 }, { path: 'notes/a.txt', size: 3 }];
+    expect(refusal(() => checkManifest(both, INFO_V3, 32 * MIB, LIMITS)).code).toBe('INVALID_PATH');
+  });
+
+  it('does not call a dataset with a stray top-level file a camera upload', () => {
+    const tables = [...V3_TREE.filter((f) => !f.path.startsWith('videos/')), { path: 'preview.mp4', size: 9 }];
+    expect(checkManifest(tables, INFO_V3, 32 * MIB, LIMITS).importMode).toBe('metadata');
   });
 
   it('calls a manifest without camera files a metadata upload', () => {
@@ -279,9 +303,11 @@ describe('checkManifest', () => {
     expect(error.context).toEqual({ totalBytes: 1370 + 70 * MIB, maxTotalBytes: 10 * MIB });
   });
 
-  it('does not count ignored files against the size cap', () => {
+  it('counts the files beside the tree against the size cap — they are stored too', () => {
     const tree = [...V3_TREE.filter((f) => !f.path.startsWith('videos/')), { path: 'raw/recording.bag', size: 5000 * MIB }];
-    expect(checkManifest(tree, INFO_V3, 32 * MIB, LIMITS).totalBytes).toBe(1370);
+    const error = refusal(() => checkManifest(tree, INFO_V3, 32 * MIB, { ...LIMITS, maxTotalBytes: 100 * MIB }));
+    expect(error.code).toBe('UPLOAD_TOO_LARGE');
+    expect(error.context).toEqual({ totalBytes: 1370 + 5000 * MIB, maxTotalBytes: 100 * MIB });
   });
 
   it('refuses more files than the cap, and a file of more than 10,000 parts', () => {
