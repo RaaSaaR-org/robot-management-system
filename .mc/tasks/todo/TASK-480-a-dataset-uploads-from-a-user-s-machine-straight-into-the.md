@@ -3,7 +3,7 @@ id: "TASK-480"
 aliases: []
 title: "A dataset uploads from a user's machine straight into the instance's storage"
 slug: "a-dataset-uploads-from-a-user-s-machine-straight-into-the"
-status: "done"                # backlog | todo | in-progress | review | done | cancelled
+status: "review"              # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
@@ -92,8 +92,9 @@ dataset store. Contract: `docs/dataset-upload.md`.
 - **The presigned-archive endpoints stay.** They are not dead — the app's upload dialog
   uses them. They now refuse (409) a dataset that a direct upload is filling.
 
-Out of scope: the app. `DatasetUploadModal` still uses the archive flow; clients for the
-new API (browser dialog, CLI) are written from the contract in separate tasks.
+Out of scope: the app's upload dialog. `DatasetUploadModal` still uses the archive flow;
+clients for the new API (browser dialog, CLI) are written from the contract in separate
+tasks.
 
 ## Acceptance Criteria
 
@@ -154,5 +155,9 @@ per-part plus per-file sha256, `/mnt/data/rms-demo/g1-dex3-bottle-sorting-sim`
 ### Gates
 
 Server typecheck, vitest (full suite) and build; the Prisma migration replayed onto a
-clean Postgres 16 with `prisma migrate diff --exit-code` reporting no drift. The app is
-not touched.
+clean Postgres 16 with `prisma migrate diff --exit-code` reporting no drift.
+
+The app changes by one line: the in-app docs viewer loads every file under `docs/`, and
+its registry test refuses a doc with no category, so `dataset-upload` is filed under
+Training in `app/src/components/docs/docsRegistry.ts`. The first CI run failed on exactly
+that. App `tsc --noEmit`, vitest and both builds (default and `VITE_DEMO_MODE=true`) pass.
