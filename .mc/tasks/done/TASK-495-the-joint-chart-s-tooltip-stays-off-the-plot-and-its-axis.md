@@ -3,7 +3,7 @@ id: "TASK-495"
 aliases: []
 title: "The joint chart's tooltip stays off the plot and its axis fits the data, site map names are legible, and the product calls itself an open Physical AI platform"
 slug: "the-joint-chart-s-tooltip-stays-off-the-plot-and-its-axis"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 3                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
