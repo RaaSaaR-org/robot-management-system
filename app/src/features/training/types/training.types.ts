@@ -715,13 +715,6 @@ export interface TrainingDurationEstimate {
   confidence: 'high' | 'medium' | 'low';
 }
 
-export interface UploadInitiateResponse {
-  uploadUrl: string;
-  expiresIn: number;
-  storagePath: string;
-  message: string;
-}
-
 // ============================================================================
 // TRAINING RUN MANIFEST (GET /training/jobs/:id/export — TASK-220)
 // ============================================================================
@@ -1003,10 +996,6 @@ export interface TrainingState {
   workers: WorkerStatusListResponse | null;
   workersLoading: boolean;
 
-  // Upload progress
-  uploadProgress: number;
-  uploadError: string | null;
-
   // Filters
   datasetFilters: DatasetQueryParams;
   jobFilters: TrainingJobQueryParams;
@@ -1017,8 +1006,6 @@ export interface TrainingActions {
   fetchDatasets: (params?: DatasetQueryParams) => Promise<void>;
   createDataset: (input: CreateDatasetInput) => Promise<Dataset>;
   deleteDataset: (id: string) => Promise<void>;
-  initiateUpload: (datasetId: string, contentType: string, size: number) => Promise<UploadInitiateResponse>;
-  completeUpload: (datasetId: string) => Promise<void>;
   retryImport: (datasetId: string) => Promise<void>;
   setDatasetFilters: (filters: Partial<DatasetQueryParams>) => void;
 

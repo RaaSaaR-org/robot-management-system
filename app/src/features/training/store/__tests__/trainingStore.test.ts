@@ -23,7 +23,6 @@ import type {
   PaginationInfo,
   QueueStats,
   WorkerStatusListResponse,
-  UploadInitiateResponse,
   TrainingJobEvent,
 } from '../../types';
 
@@ -33,8 +32,6 @@ vi.mock('../../api', () => ({
     listDatasets: vi.fn(),
     createDataset: vi.fn(),
     deleteDataset: vi.fn(),
-    initiateUpload: vi.fn(),
-    completeUpload: vi.fn(),
     retryImport: vi.fn(),
     listTrainingJobs: vi.fn(),
     submitTrainingJob: vi.fn(),
@@ -114,8 +111,6 @@ function resetStore() {
     queueLoading: false,
     workers: null,
     workersLoading: false,
-    uploadProgress: 0,
-    uploadError: null,
     datasetFilters: {},
     jobFilters: {},
   });
@@ -134,7 +129,6 @@ describe('trainingStore', () => {
     expect(s.activeJob).toBeNull();
     expect(s.queueStats).toBeNull();
     expect(s.workers).toBeNull();
-    expect(s.uploadProgress).toBe(0);
     expect(s.datasetFilters).toEqual({});
     expect(s.jobFilters).toEqual({});
     expect(s.datasetsPagination).toEqual(INITIAL_PAGINATION);
@@ -247,53 +241,6 @@ describe('trainingStore', () => {
 
       expect(trainingApi.deleteDataset).toHaveBeenCalledWith('a');
       expect(useTrainingStore.getState().datasets.map((d) => d.id)).toEqual(['b']);
-    });
-  });
-
-  describe('initiateUpload', () => {
-    it('resets upload progress/error and returns the response', async () => {
-      useTrainingStore.setState({ uploadProgress: 50, uploadError: 'old' });
-      const resp: UploadInitiateResponse = {
-        uploadUrl: 'http://up',
-        expiresIn: 60,
-        storagePath: 's3://p',
-        message: 'ok',
-      };
-      vi.mocked(trainingApi.initiateUpload).mockResolvedValue(resp);
-
-      const result = await useTrainingStore
-        .getState()
-        .initiateUpload('ds-1', 'application/zip', 1234);
-
-      expect(result).toEqual(resp);
-      expect(trainingApi.initiateUpload).toHaveBeenCalledWith('ds-1', 'application/zip', 1234);
-      const s = useTrainingStore.getState();
-      expect(s.uploadProgress).toBe(0);
-      expect(s.uploadError).toBeNull();
-    });
-  });
-
-  describe('completeUpload', () => {
-    it('sets the matching dataset status to validating', async () => {
-      useTrainingStore.setState({
-        datasets: [makeDataset({ id: 'ds-1', status: 'uploading' })],
-      });
-      vi.mocked(trainingApi.completeUpload).mockResolvedValue(undefined);
-
-      await useTrainingStore.getState().completeUpload('ds-1');
-
-      expect(useTrainingStore.getState().datasets[0].status).toBe('validating');
-    });
-
-    it('is a no-op on the list when dataset id is unknown', async () => {
-      useTrainingStore.setState({
-        datasets: [makeDataset({ id: 'ds-1', status: 'uploading' })],
-      });
-      vi.mocked(trainingApi.completeUpload).mockResolvedValue(undefined);
-
-      await useTrainingStore.getState().completeUpload('missing');
-
-      expect(useTrainingStore.getState().datasets[0].status).toBe('uploading');
     });
   });
 
