@@ -184,6 +184,7 @@ import type {
 import { complianceLogService } from './ComplianceLogService.js';
 import { QUALITY_THRESHOLDS } from '../types/dataset.types.js';
 import { importActivityLog } from './ImportActivityLog.js';
+import { invalidateDatasetReads } from './lerobot/DatasetReadCache.js';
 
 // ============================================================================
 // CONSTANTS
@@ -679,6 +680,16 @@ export class DatasetService extends EventEmitter {
 
   private constructor() {
     super();
+    // Whatever the browser remembered about a dataset's stored files
+    // (TASK-490) may no longer hold once it is deleted, imported, re-uploaded,
+    // re-validated or edited. Every such change is announced on this emitter —
+    // by this service, the Hub importer and the upload service alike — so this
+    // is the one place that hears them all. Progress ticks and log lines say
+    // nothing has finished changing yet and are let through.
+    this.on('dataset:event', (event: DatasetEvent) => {
+      if (event.type.endsWith(':progress') || event.type.endsWith(':log')) return;
+      invalidateDatasetReads(event.datasetId);
+    });
   }
 
   /**

@@ -66,6 +66,13 @@ export interface LeRobotInfo {
 export type LeRobotLayout = 'v2' | 'v3';
 
 const V3_DATA_PATH = 'data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet';
+
+/**
+ * A parquet file up to this size is fetched in one request and parsed from
+ * memory. That covers `meta/episodes` files and v2.1's file per episode;
+ * anything larger is read in ranges, a row group at a time (TASK-355).
+ */
+export const WHOLE_FILE_BYTES = 4 * 1024 * 1024;
 const PARQUET_FILE_RE = /\/chunk-\d+\/file-\d+\.parquet$/;
 
 /**
@@ -169,8 +176,15 @@ async function readParquet(
       throw new DatasetReadError(502, `Could not read ${path} from object storage: ${messageOf(error)}`, path);
     }
     if (!stat) return null;
-    const readRange = store.readRange.bind(store);
-    source = { size: stat.size, read: (offset, length) => readRange(path, offset, length) };
+    if (stat.size <= WHOLE_FILE_BYTES) {
+      // One round trip instead of one per column chunk.
+      const buf = await fetchObject(store, path);
+      if (!buf) return null;
+      source = bufferSource(buf);
+    } else {
+      const readRange = store.readRange.bind(store);
+      source = { size: stat.size, read: (offset, length) => readRange(path, offset, length) };
+    }
   } else {
     const buf = await fetchObject(store, path);
     if (!buf) return null;
@@ -202,7 +216,7 @@ function toFrame(row: Row, position: number, fps: number): FrameData {
 }
 
 /** A v3.0 episode row plus where its frames live, when the row says so. */
-interface V3Episode {
+export interface V3Episode {
   meta: EpisodeMeta;
   dataChunk?: number;
   dataFile?: number;
@@ -280,6 +294,41 @@ async function readV2Episodes(store: DatasetObjectStore, fps: number): Promise<E
   );
 }
 
+/**
+ * A dataset's episode metadata as read from storage — what the episode list is
+ * answered from and, for v3.0, what says which data file holds an episode. It
+ * depends only on the stored files, so it is the unit the routes cache.
+ */
+export type EpisodeTable =
+  | { layout: 'v2'; episodes: EpisodeMeta[] }
+  | { layout: 'v3'; episodes: V3Episode[] };
+
+/** Read the dataset's episode metadata, in whichever layout it has. */
+export async function readEpisodeTable(
+  store: DatasetObjectStore,
+  info: LeRobotInfo | null | undefined,
+  fps: number,
+  recordVersion?: string | null,
+): Promise<EpisodeTable> {
+  return layoutOf(info, recordVersion) === 'v2'
+    ? { layout: 'v2', episodes: await readV2Episodes(store, fps) }
+    : { layout: 'v3', episodes: await readV3Episodes(store, fps) };
+}
+
+/** The episode list of a table. The objects are the table's own — copy before changing one. */
+export function episodesOf(table: EpisodeTable): EpisodeMeta[] {
+  return table.layout === 'v2' ? table.episodes : table.episodes.map((e) => e.meta);
+}
+
+/** Rough heap bytes of an episode table, for the cache's budget. */
+export function episodeTableWeight(table: EpisodeTable): number {
+  let weight = 0;
+  for (const meta of episodesOf(table)) {
+    weight += 160 + Object.keys(meta.videoWindows ?? {}).length * 180;
+  }
+  return weight;
+}
+
 /** Every episode of the dataset, read from its own metadata. */
 export async function readRemoteEpisodes(
   store: DatasetObjectStore,
@@ -287,9 +336,7 @@ export async function readRemoteEpisodes(
   fps: number,
   recordVersion?: string | null,
 ): Promise<EpisodeMeta[]> {
-  return layoutOf(info, recordVersion) === 'v2'
-    ? readV2Episodes(store, fps)
-    : (await readV3Episodes(store, fps)).map((e) => e.meta);
+  return episodesOf(await readEpisodeTable(store, info, fps, recordVersion));
 }
 
 export interface FramePage {
@@ -328,8 +375,12 @@ async function readV3Frames(
   info: LeRobotInfo | null | undefined,
   episodeIndex: number,
   fps: number,
+  loadTable?: () => Promise<EpisodeTable>,
 ): Promise<{ frames: FrameData[]; source: string }> {
-  const episodes = await readV3Episodes(store, fps);
+  // The episode metadata says which data file to open. A caller that already
+  // holds it passes it in, so opening an episode does not re-read the table.
+  const table = loadTable ? await loadTable() : null;
+  const episodes = table?.layout === 'v3' ? table.episodes : await readV3Episodes(store, fps);
   const episode = episodes.find((e) => e.meta.index === episodeIndex);
   if (!episode) throw notFound(episodeIndex, `not among the ${episodes.length} episodes in meta/episodes`);
 
@@ -380,17 +431,22 @@ async function readV3Frames(
   return { frames, source: read.join(', ') };
 }
 
-/** Every frame of one episode, read from the parquet that holds it. */
+/**
+ * Every frame of one episode, read from the parquet that holds it.
+ * `loadTable` supplies the dataset's episode table when the caller has it
+ * cached; only the v3.0 layout needs it.
+ */
 export async function readRemoteEpisodeFrames(
   store: DatasetObjectStore,
   info: LeRobotInfo | null | undefined,
   episodeIndex: number,
   fps: number,
   recordVersion?: string | null,
+  loadTable?: () => Promise<EpisodeTable>,
 ): Promise<{ frames: FrameData[]; source: string }> {
   return layoutOf(info, recordVersion) === 'v2'
     ? readV2Frames(store, info, episodeIndex, fps)
-    : readV3Frames(store, info, episodeIndex, fps);
+    : readV3Frames(store, info, episodeIndex, fps, loadTable);
 }
 
 /** One page of an episode's frames, read from the parquet that holds them. */

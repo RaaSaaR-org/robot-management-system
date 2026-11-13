@@ -49,7 +49,10 @@ import {
   pageOf,
   parseEpisodeRecords,
   readRemoteEpisodeFrames,
-  readRemoteEpisodes,
+  readEpisodeTable,
+  episodesOf,
+  layoutOf,
+  type EpisodeTable,
   toEpisodeMeta,
   toNumberArray,
   type DatasetObjectStore,
@@ -60,6 +63,13 @@ import {
   episodeVideoCandidates,
   type EpisodePathInfo,
 } from '../services/lerobot/episodePaths.js';
+import {
+  cachedEpisodeTable,
+  cachedLocation,
+  coldReadGate,
+  datasetVersionKey,
+  footerCachingStore,
+} from '../services/lerobot/DatasetReadCache.js';
 // TASK-220 — POST /compatibility, at the bottom of this file.
 import { analyzeDatasetIds, UnknownDatasetError } from '../services/lerobot/datasetCompatibility.js';
 import { ConflictError, ServiceUnavailableError } from '../utils/errors.js';
@@ -322,6 +332,12 @@ async function streamLocalVideo(
   return true;
 }
 
+/** S3's answer for an object that is not there: `NoSuchKey` on GET, `NotFound` on HEAD. */
+function isMissingObject(error: unknown): boolean {
+  const name = (error as { name?: string } | null)?.name;
+  return name === 'NoSuchKey' || name === 'NotFound';
+}
+
 /**
  * Object access to one RustFS dataset, for the episodes and frames readers.
  *
@@ -329,61 +345,100 @@ async function streamLocalVideo(
  * 'training-datasets' and the legacy 'datasets' that holds anything under the
  * dataset's prefix; a dataset in neither is a 422, not an empty listing.
  * Storage errors propagate — the reader turns them into a 502 naming the file.
+ *
+ * Every call here is a round trip, so none is made twice: the bucket is
+ * probed once per stored state of the dataset (`versionKey`), a read is one
+ * GET and a stat one HEAD — each used to be preceded by an `exists` HEAD of
+ * its own — and parquet footers are remembered (see `DatasetReadCache.ts`).
  */
-async function rustfsDatasetStore(storagePath: string): Promise<DatasetObjectStore | null> {
+async function rustfsDatasetStore(storagePath: string, versionKey: string): Promise<DatasetObjectStore | null> {
   const { isRustFSInitialized, getRustFSClient } = await import('../storage/rustfs-client.js');
   if (!isRustFSInitialized()) return null;
   const rustfs = getRustFSClient();
   const base = storagePath.endsWith('/') ? storagePath : `${storagePath}/`;
 
-  let bucket: string | null = null;
-  let firstError: unknown = null;
-  let listedAny = false;
-  for (const candidate of [BUCKETS.TRAINING_DATASETS, 'datasets']) {
-    try {
-      const probe = await rustfs.list(candidate, { prefix: base, maxKeys: 1 });
-      listedAny = true;
-      if (probe.objects.length > 0) {
-        bucket = candidate;
-        break;
+  const located = await cachedLocation(`${versionKey}#bucket`, async () => {
+    let firstError: unknown = null;
+    let listedAny = false;
+    for (const candidate of [BUCKETS.TRAINING_DATASETS, 'datasets']) {
+      try {
+        const probe = await rustfs.list(candidate, { prefix: base, maxKeys: 1 });
+        listedAny = true;
+        if (probe.objects.length > 0) return { bucket: candidate };
+      } catch (error) {
+        // The legacy bucket may not exist at all; only an error on every
+        // bucket says storage itself is failing.
+        firstError ??= error;
       }
-    } catch (error) {
-      // The legacy bucket may not exist at all; only an error on every
-      // bucket says storage itself is failing.
-      firstError ??= error;
     }
-  }
-  if (!bucket) {
     if (!listedAny) {
       throw new DatasetReadError(502, `Could not list ${base} in object storage: ${(firstError as Error).message}`);
     }
+    return null;
+  });
+  if (!located) {
     throw new DatasetReadError(422, `No files for this dataset in object storage (prefix ${base})`, base);
   }
-  const from = bucket;
-  return {
-    async read(path) {
-      const key = `${base}${path}`;
-      if (!(await rustfs.exists(from, key))) return null;
-      return rustfs.download(from, key);
+  const from = located.bucket;
+  return footerCachingStore(
+    {
+      async read(path) {
+        try {
+          return await rustfs.download(from, `${base}${path}`);
+        } catch (error) {
+          if (isMissingObject(error)) return null;
+          throw error;
+        }
+      },
+      async list(prefix) {
+        const paths: string[] = [];
+        for await (const obj of rustfs.listAll(from, `${base}${prefix}`)) {
+          paths.push(obj.key.slice(base.length));
+        }
+        return paths;
+      },
+      // Ranged access, so a 60 MB data file is never pulled into the heap whole (TASK-355).
+      async stat(path) {
+        try {
+          const meta = await rustfs.getMetadata(from, `${base}${path}`);
+          return { size: Number(meta.contentLength ?? 0) };
+        } catch (error) {
+          if (isMissingObject(error)) return null;
+          throw error;
+        }
+      },
+      readRange(path, offset, length) {
+        return rustfs.downloadRange(from, `${base}${path}`, offset, length);
+      },
     },
-    async list(prefix) {
-      const paths: string[] = [];
-      for await (const obj of rustfs.listAll(from, `${base}${prefix}`)) {
-        paths.push(obj.key.slice(base.length));
-      }
-      return paths;
-    },
-    // Ranged access, so a 60 MB data file is never pulled into the heap whole (TASK-355).
-    async stat(path) {
-      const key = `${base}${path}`;
-      if (!(await rustfs.exists(from, key))) return null;
-      const meta = await rustfs.getMetadata(from, key);
-      return { size: Number(meta.contentLength ?? 0) };
-    },
-    readRange(path, offset, length) {
-      return rustfs.downloadRange(from, `${base}${path}`, offset, length);
-    },
-  };
+    versionKey,
+  );
+}
+
+/** What the episodes and frames routes need to know about the dataset record. */
+interface BrowsedDataset {
+  id: string;
+  storagePath: string;
+  lerobotVersion?: string | null;
+  updatedAt?: Date | string | null;
+}
+
+/**
+ * The dataset's episode table from RustFS, read once per stored state of the
+ * dataset and then answered from memory (see `DatasetReadCache.ts`). The
+ * episode list is this table; a v3.0 frames read looks its data file up in it.
+ */
+function remoteEpisodeTable(
+  dataset: BrowsedDataset,
+  info: Parameters<typeof readEpisodeTable>[1],
+  fps: number,
+): Promise<EpisodeTable> {
+  const versionKey = datasetVersionKey(dataset);
+  return cachedEpisodeTable(versionKey, async () => {
+    const store = await rustfsDatasetStore(dataset.storagePath, versionKey);
+    if (!store) throw new DatasetReadError(503, 'Object storage is unavailable, so episodes cannot be read');
+    return readEpisodeTable(store, info, fps, dataset.lerobotVersion);
+  });
 }
 
 /**
@@ -1221,11 +1276,9 @@ datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
 
     // RustFS: read whatever layout the dataset has — never fabricate
     // episodes when that fails (TASK-354).
-    const store = await rustfsDatasetStore(dataset.storagePath);
-    if (!store) {
-      return res.status(503).json({ error: 'Object storage is unavailable, so episodes cannot be read' });
-    }
-    const episodes = await readRemoteEpisodes(store, info, fps, dataset.lerobotVersion);
+    // The table is cached per stored state of the dataset; the flags are
+    // read fresh above and laid over a copy of each row.
+    const episodes = episodesOf(await remoteEpisodeTable(dataset, info, fps));
     res.json({ episodes: episodes.map((e) => ({ ...e, flagged: flags.has(e.index) })) });
   } catch (error) {
     sendDatasetReadError(res, req.params.id, error, 'Failed to get episodes');
@@ -1281,11 +1334,26 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
     // that could not be read — never generated frames (TASK-354).
     // The decoded episode is cached, keyed by the record's updatedAt, so
     // paging through it reads storage once (TASK-355).
-    const cacheKey = `${dataset.id}@${new Date(dataset.updatedAt).getTime()}#${episodeIndex}`;
-    const episode = await episodeFramesCache.getOrLoad(cacheKey, episodeWeight, async () => {
-      const store = await rustfsDatasetStore(dataset.storagePath);
+    const versionKey = datasetVersionKey(dataset);
+    const episode = await episodeFramesCache.getOrLoad(`${versionKey}#${episodeIndex}`, episodeWeight, async () => {
+      const store = await rustfsDatasetStore(dataset.storagePath, versionKey);
       if (!store) throw new DatasetReadError(503, 'Object storage is unavailable, so frames cannot be read');
-      return readRemoteEpisodeFrames(store, info, episodeIndex, fps, dataset.lerobotVersion);
+      // A v3.0 episode's data file is named by the episode table, which is
+      // cached. It is fetched BEFORE taking a cold-read slot: the table load
+      // takes a slot of its own, and waiting for it while holding one would
+      // let six first-time frame requests starve the read they all wait on.
+      const table =
+        layoutOf(info, dataset.lerobotVersion) === 'v3' ? await remoteEpisodeTable(dataset, info, fps) : null;
+      return coldReadGate(() =>
+        readRemoteEpisodeFrames(
+          store,
+          info,
+          episodeIndex,
+          fps,
+          dataset.lerobotVersion,
+          table ? async () => table : undefined,
+        ),
+      );
     });
     const page = pageOf(episode, { offset, limit });
     // scripts/e2e-k3d/test.sh greps this line; keep its wording.
@@ -1416,16 +1484,20 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
       const base = dataset.storagePath.endsWith('/') ? dataset.storagePath : `${dataset.storagePath}/`;
       let found: { bucket: string; key: string; size: number } | null = null;
       try {
-        for (const candidate of candidatePaths) {
-          for (const bucket of [BUCKETS.TRAINING_DATASETS, 'datasets']) {
-            const key = `${base}${candidate}`;
-            if (!(await rustfs.exists(bucket, key))) continue;
-            const metadata = await rustfs.getMetadata(bucket, key);
-            found = { bucket, key, size: metadata.contentLength ?? 0 };
-            break;
+        // A player asks for the same file again on every seek and every
+        // buffer refill; where it is and how long it is does not change
+        // between those requests, so it is looked up once.
+        found = await cachedLocation(`${datasetVersionKey(dataset)}#video:${candidatePaths[0]}`, async () => {
+          for (const candidate of candidatePaths) {
+            for (const bucket of [BUCKETS.TRAINING_DATASETS, 'datasets']) {
+              const key = `${base}${candidate}`;
+              if (!(await rustfs.exists(bucket, key))) continue;
+              const metadata = await rustfs.getMetadata(bucket, key);
+              return { bucket, key, size: metadata.contentLength ?? 0 };
+            }
           }
-          if (found) break;
-        }
+          return null;
+        });
       } catch (err) {
         // RustFS unreachable — fall through to the HF proxy.
         console.warn('[DatasetRoutes] RustFS video lookup failed:', err instanceof Error ? err.message : err);

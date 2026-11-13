@@ -93,6 +93,47 @@ describe('readParquetRows', () => {
     expect(source.bytes()).toBeLessThan(buf.length / 2);
   });
 
+  it('fetches the wanted columns of a row group in one request, not one per column chunk', async () => {
+    const buf = await multiEpisodeFile();
+    // Footer: magic, footer length, footer.
+    const OPEN = 3;
+
+    // Every row of four row groups: one request each. This is the shape of a
+    // `meta/episodes` file, which used to cost a request per column chunk —
+    // 136 of them for the demo dataset's 80 episodes.
+    const all = countingSource(buf);
+    expect((await readParquetRows(all, { columns: FRAME_COLUMNS })).rows).toHaveLength(200);
+    expect(all.ranges).toHaveLength(OPEN + 4);
+
+    // One episode: the three other row groups are excluded on statistics, and
+    // the filter column arrives in the same request as the frame columns.
+    const one = countingSource(buf);
+    await readParquetRows(one, { columns: FRAME_COLUMNS, filter: { column: 'episode_index', equals: 4 } });
+    expect(one.ranges).toHaveLength(OPEN + 1);
+  });
+
+  it('gives the event loop a turn while decoding a file held in memory', async () => {
+    const buf = await multiEpisodeFile();
+    // Reads from memory resolve as microtasks; without a deliberate yield the
+    // whole file is decoded before any timer or socket is serviced.
+    let clock = 0;
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => (clock += 100));
+    let turns = 0;
+    let decoding = true;
+    const tick = (): void => {
+      if (!decoding) return;
+      turns++;
+      setImmediate(tick);
+    };
+    setImmediate(tick);
+    const { rows } = await readParquetRows(countingSource(buf), { columns: FRAME_COLUMNS });
+    decoding = false;
+    now.mockRestore();
+    expect(rows).toHaveLength(200);
+    // 200 rows in 7-row pages over five columns: well over a hundred pages.
+    expect(turns).toBeGreaterThan(50);
+  });
+
   it('returns every row when there is no filter, and nothing for an absent episode', async () => {
     const buf = await multiEpisodeFile();
     const all = await readParquetRows(countingSource(buf), { columns: ['frame_index'] });

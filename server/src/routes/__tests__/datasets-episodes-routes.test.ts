@@ -22,7 +22,14 @@ const storage = vi.hoisted(() => ({
   listError: null as Error | null,
   // Every object read, whole or ranged, as `key` or `key@offset+length`.
   reads: [] as string[],
+  // Every round trip to storage, reads included: `LIST …`, `HEAD …`, `GET …`.
+  calls: [] as string[],
 }));
+
+/** What S3 throws for an object that is not there. */
+function missing(name: 'NoSuchKey' | 'NotFound'): Error {
+  return Object.assign(new Error(name), { name });
+}
 
 vi.mock('../../services/DatasetService.js', () => ({
   datasetService: { get: datasets.get, on: vi.fn(), off: vi.fn(), emit: vi.fn() },
@@ -38,25 +45,33 @@ vi.mock('../../storage/rustfs-client.js', () => {
     Object.keys(storage.buckets[bucket] ?? {}).filter((k) => k.startsWith(prefix));
   const client = {
     async list(bucket: string, opts?: { prefix?: string; maxKeys?: number }) {
+      storage.calls.push(`LIST ${bucket}/${opts?.prefix ?? ''}`);
       if (storage.listError) throw storage.listError;
       if (!storage.buckets[bucket]) throw new Error('NoSuchBucket');
       const found = keys(bucket, opts?.prefix).slice(0, opts?.maxKeys ?? 1000);
       return { objects: found.map((key) => ({ key, size: 1, lastModified: new Date() })), isTruncated: false };
     },
     async *listAll(bucket: string, prefix?: string) {
+      storage.calls.push(`LIST ${bucket}/${prefix ?? ''}`);
       for (const key of keys(bucket, prefix)) yield { key, size: 1, lastModified: new Date() };
     },
     async exists(bucket: string, key: string) {
+      storage.calls.push(`HEAD ${key}`);
       return Boolean(storage.buckets[bucket]?.[key]);
     },
     async download(bucket: string, key: string) {
+      storage.calls.push(`GET ${key}`);
+      if (!storage.buckets[bucket]?.[key]) throw missing('NoSuchKey');
       storage.reads.push(key);
       return storage.buckets[bucket][key];
     },
     async getMetadata(bucket: string, key: string) {
+      storage.calls.push(`HEAD ${key}`);
+      if (!storage.buckets[bucket]?.[key]) throw missing('NotFound');
       return { contentLength: storage.buckets[bucket][key].length };
     },
     async downloadRange(bucket: string, key: string, start: number, length: number) {
+      storage.calls.push(`GET ${key}@${start}+${length}`);
       storage.reads.push(`${key}@${start}+${length}`);
       return storage.buckets[bucket][key].subarray(start, start + length);
     },
@@ -65,7 +80,11 @@ vi.mock('../../storage/rustfs-client.js', () => {
 });
 
 import { datasetRoutes } from '../datasets.routes.js';
-import { episodeFramesCache } from '../../services/lerobot/RemoteDatasetReader.js';
+import {
+  clearDatasetReadCaches,
+  datasetReadCacheUsage,
+  invalidateDatasetReads,
+} from '../../services/lerobot/DatasetReadCache.js';
 
 const INFO_V21 = { codebase_version: 'v2.1', fps: 30, chunks_size: 1000, total_episodes: 3, total_frames: 17 };
 const LENGTHS = [5, 9, 3];
@@ -111,7 +130,8 @@ describe('RustFS dataset episodes and frames', () => {
     storage.initialized = true;
     storage.listError = null;
     storage.reads = [];
-    episodeFramesCache.clear();
+    storage.calls = [];
+    clearDatasetReadCaches();
     storage.buckets = { 'training-datasets': { ...v21Files } };
     datasets.get.mockResolvedValue(DATASET);
     app = createApp();
@@ -177,14 +197,14 @@ describe('RustFS dataset episodes and frames', () => {
     expect(res.body.error).toMatch(/ECONNREFUSED/);
   });
 
-  it('reads a data file in byte ranges and serves the next page of the episode from the cache', async () => {
+  it("fetches a small episode file in one request and serves the episode's next page from the cache", async () => {
     const first = await request(app).get('/api/datasets/ds-apple/episodes/1/frames?offset=0&limit=4');
     expect(first.status).toBe(200);
     expect(first.body.total).toBe(9);
     expect(first.body.frames).toHaveLength(4);
-    const dataReads = storage.reads.filter((r) => r.includes('/data/'));
-    expect(dataReads.length).toBeGreaterThan(0);
-    expect(dataReads.every((r) => r.includes('@'))).toBe(true);
+    // One GET for the file, not one per column chunk (ranged reads are for
+    // files too large to hold — parquetEpisodeRows.test.ts covers those).
+    expect(storage.reads).toEqual(['ds-apple/data/chunk-000/episode_000001.parquet']);
 
     storage.reads = [];
     const second = await request(app).get('/api/datasets/ds-apple/episodes/1/frames?offset=4&limit=4');
@@ -212,5 +232,158 @@ describe('RustFS dataset episodes and frames', () => {
     const res = await request(app).get('/api/datasets/ds-apple/episodes');
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/codebase_version/);
+  });
+
+  describe('what is remembered between requests (TASK-490)', () => {
+    const INFO_V30 = { codebase_version: 'v3.0', fps: 30, total_episodes: 6, total_frames: 60 };
+    const V30 = {
+      id: 'ds-bottle',
+      storagePath: 'ds-bottle/',
+      lerobotVersion: 'v3.0',
+      fps: 30,
+      infoJson: JSON.stringify(INFO_V30),
+      updatedAt: new Date('2026-11-13T08:00:00Z'),
+    };
+    const META = 'ds-bottle/meta/episodes/chunk-000/file-000.parquet';
+    const DATA = 'ds-bottle/data/chunk-000/file-000.parquet';
+    let v30Files: Record<string, Buffer>;
+
+    beforeAll(async () => {
+      const episodeFields = {
+        episode_index: { type: 'INT64' as const },
+        length: { type: 'INT64' as const },
+        'data/chunk_index': { type: 'INT64' as const },
+        'data/file_index': { type: 'INT64' as const },
+        'videos/observation.images.head/chunk_index': { type: 'INT64' as const },
+        'videos/observation.images.head/file_index': { type: 'INT64' as const },
+        'videos/observation.images.head/from_timestamp': { type: 'DOUBLE' as const },
+        'videos/observation.images.head/to_timestamp': { type: 'DOUBLE' as const },
+        'stats/action/mean': { type: 'DOUBLE' as const, repeated: true },
+      };
+      const episodes = Array.from({ length: 6 }, (_, i) => ({
+        episode_index: i,
+        length: 10,
+        'data/chunk_index': 0,
+        'data/file_index': 0,
+        'videos/observation.images.head/chunk_index': 0,
+        'videos/observation.images.head/file_index': 0,
+        'videos/observation.images.head/from_timestamp': i,
+        'videos/observation.images.head/to_timestamp': i + 1,
+        'stats/action/mean': [i, i, i],
+      }));
+      v30Files = {
+        'ds-bottle/meta/info.json': Buffer.from(JSON.stringify(INFO_V30)),
+        // Two episodes a row group, as the recorder writes them: three row
+        // groups of eight wanted columns were 24 requests.
+        [META]: await parquetBuffer(episodeFields, episodes, { rowGroupSize: 2 }),
+        [DATA]: await parquetBuffer(
+          FRAME_FIELDS,
+          episodes.flatMap((e) => frameRows(e.episode_index, 10, 31)),
+          { rowGroupSize: 10 },
+        ),
+      };
+    });
+
+    beforeEach(() => {
+      storage.buckets = { 'training-datasets': { ...v30Files } };
+      datasets.get.mockResolvedValue(V30);
+    });
+
+    const list = () => request(app).get('/api/datasets/ds-bottle/episodes');
+    const frames = (episode: number) => request(app).get(`/api/datasets/ds-bottle/episodes/${episode}/frames`);
+
+    it('reads a v3.0 episode list in four round trips and answers the next one without any', async () => {
+      const first = await list();
+      expect(first.status).toBe(200);
+      expect(first.body.episodes).toHaveLength(6);
+      expect(first.body.episodes[4].videoWindows['observation.images.head']).toEqual({ from: 4, to: 5, chunk: 0, file: 0 });
+      expect(storage.calls).toEqual([
+        'LIST training-datasets/ds-bottle/',
+        'LIST training-datasets/ds-bottle/meta/episodes/',
+        `HEAD ${META}`,
+        `GET ${META}`,
+      ]);
+
+      storage.calls = [];
+      const second = await list();
+      expect(second.body).toEqual(first.body);
+      expect(storage.calls).toEqual([]);
+    });
+
+    it('lays the current flags over the remembered list', async () => {
+      const { datasetEpisodeFlagRepository } = await import('../../repositories/DatasetEpisodeFlagRepository.js');
+      const flagged = (body: { episodes: Array<{ index: number; flagged: boolean }> }) =>
+        body.episodes.filter((e) => e.flagged).map((e) => e.index);
+      expect(flagged((await list()).body)).toEqual([1]);
+      vi.mocked(datasetEpisodeFlagRepository.flaggedIndices).mockResolvedValueOnce(new Set([0, 5]));
+      expect(flagged((await list()).body)).toEqual([0, 5]);
+      // The remembered rows themselves were not marked by either answer.
+      expect(flagged((await list()).body)).toEqual([1]);
+    });
+
+    it('reads storage once for six lists asked for at the same time', async () => {
+      const answers = await Promise.all(Array.from({ length: 6 }, list));
+      expect(answers.map((a) => a.status)).toEqual([200, 200, 200, 200, 200, 200]);
+      expect(storage.calls.filter((c) => c === `GET ${META}`)).toHaveLength(1);
+      expect(storage.calls).toHaveLength(4);
+    });
+
+    it('opens further episodes without reading the episode metadata or probing the bucket again', async () => {
+      const first = await frames(2);
+      expect(first.status).toBe(200);
+      expect(first.body.total).toBe(10);
+      expect(first.body.frames[0].observationState[0]).toBe(2000);
+
+      storage.calls = [];
+      const next = await frames(5);
+      expect(next.body.frames[9].observationState[0]).toBe(5009);
+      // Only the bytes of the file holding it; even its size is remembered.
+      expect(storage.calls).toEqual([`GET ${DATA}`]);
+
+      storage.calls = [];
+      expect((await list()).body.episodes).toHaveLength(6);
+      expect((await frames(5)).body.total).toBe(10);
+      expect(storage.calls).toEqual([]);
+    });
+
+    it('answers six different episodes opened at once, reading the metadata once', async () => {
+      const answers = await Promise.all([0, 1, 2, 3, 4, 5].map(frames));
+      expect(answers.map((a) => a.body.total)).toEqual([10, 10, 10, 10, 10, 10]);
+      expect(answers.map((a) => a.body.frames[0].observationState[0])).toEqual([0, 1000, 2000, 3000, 4000, 5000]);
+      expect(storage.calls.filter((c) => c === `GET ${META}`)).toHaveLength(1);
+      expect(storage.calls.filter((c) => c.startsWith('LIST'))).toHaveLength(2);
+    });
+
+    it('reads again once the dataset record has been written', async () => {
+      await list();
+      await frames(1);
+      storage.calls = [];
+      datasets.get.mockResolvedValue({ ...V30, updatedAt: new Date('2026-11-13T09:00:00Z') });
+      expect((await list()).status).toBe(200);
+      expect((await frames(1)).status).toBe(200);
+      expect(storage.calls).toContain(`GET ${META}`);
+      expect(storage.calls).toContain(`GET ${DATA}`);
+    });
+
+    it('forgets a dataset that was deleted or re-imported, so its files are not served from memory', async () => {
+      await list();
+      await frames(1);
+      expect(datasetReadCacheUsage().episodeTables.entries).toBe(1);
+
+      invalidateDatasetReads('ds-bottle');
+      expect(Object.values(datasetReadCacheUsage()).map((u) => u.entries)).toEqual([0, 0, 0, 0]);
+      storage.buckets = { 'training-datasets': {} };
+      expect((await list()).status).toBe(422);
+      expect((await frames(1)).status).toBe(422);
+    });
+
+    it('keeps answering a list it remembers while storage is down, and says so for one it does not', async () => {
+      await list();
+      storage.initialized = false;
+      expect((await list()).status).toBe(200);
+      const cold = await frames(3);
+      expect(cold.status).toBe(503);
+      expect(cold.body.error).toMatch(/Object storage is unavailable/);
+    });
   });
 });

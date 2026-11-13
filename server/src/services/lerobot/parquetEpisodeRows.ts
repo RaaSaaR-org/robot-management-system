@@ -15,6 +15,14 @@
  * - stops reading a column once it is past the last matching row.
  *
  * Heap use is bounded by one page plus the rows returned, not by the file.
+ *
+ * Every `source.read` is a round trip to object storage, and a round trip costs
+ * far more than its bytes: the demo dataset's 828 KB `meta/episodes` file is 8
+ * row groups of 17 wanted columns, which this reader used to fetch as 136
+ * requests one after another — 2.8 s on the live instance for 200 KB. So the
+ * wanted column chunks of a row group are fetched as ONE range when the span
+ * between the first and the last is small ({@link MAX_SPAN_BYTES}); only a row
+ * group too large for that is still streamed a window at a time.
  */
 
 import { ParquetEnvelopeReader, ParquetReader } from '@dsnp/parquetjs';
@@ -63,6 +71,27 @@ const CODECS = ['UNCOMPRESSED', 'SNAPPY', 'GZIP', 'LZO', 'BROTLI', 'LZ4', 'ZSTD'
 const WINDOW_BYTES = 4 * 1024 * 1024;
 /** Upper bound for a page header (statistics included). */
 const MAX_HEADER_BYTES = 64 * 1024;
+/**
+ * The widest stretch of a row group fetched in one request. Row groups written
+ * per episode are a few hundred KB; the 63 MB single-row-group file TASK-355
+ * was about stays on the windowed path.
+ */
+export const MAX_SPAN_BYTES = 8 * 1024 * 1024;
+/** How long decoding may run before the event loop gets a turn. */
+const YIELD_AFTER_MS = 8;
+
+let lastYield = performance.now();
+
+/**
+ * Give the event loop a turn when decoding has held it for a while. Reads
+ * served from memory resolve as microtasks, so without this a whole file is
+ * decoded in one uninterrupted stretch and every other request waits for it.
+ */
+async function breathe(): Promise<void> {
+  if (performance.now() - lastYield < YIELD_AFTER_MS) return;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  lastYield = performance.now();
+}
 
 /** Thrift-decoded pieces of the footer this reader touches. */
 interface ColumnMeta {
@@ -120,6 +149,41 @@ function toNumber(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** The bytes of one column chunk — dictionary page first when it has one. */
+function chunkRange(column: ColumnMeta, sourceSize: number): { start: number; end: number } {
+  const dataOffset = Number(column.data_page_offset);
+  const dictOffset = toNumber(column.dictionary_page_offset);
+  const start = dictOffset !== undefined && dictOffset > 0 && dictOffset < dataOffset ? dictOffset : dataOffset;
+  return { start, end: Math.min(sourceSize, start + Number(column.total_compressed_size)) };
+}
+
+/**
+ * A source that answers reads inside the span of `columns` from one fetch.
+ * Returns `source` itself when the span is too wide to hold in memory.
+ */
+async function spanSource(source: ByteSource, columns: ColumnMeta[]): Promise<ByteSource> {
+  if (columns.length === 0) return source;
+  let start = Infinity;
+  let end = 0;
+  for (const column of columns) {
+    const range = chunkRange(column, source.size);
+    start = Math.min(start, range.start);
+    end = Math.max(end, range.end);
+  }
+  if (end <= start || end - start > MAX_SPAN_BYTES) return source;
+  const bytes = await source.read(start, end - start);
+  if (bytes.length < end - start) {
+    throw new Error(`short read at byte ${start}: wanted ${end - start}, got ${bytes.length}`);
+  }
+  return {
+    size: source.size,
+    async read(offset, length) {
+      if (offset < start || offset + length > end) return source.read(offset, length);
+      return bytes.subarray(offset - start, offset - start + length);
+    },
+  };
+}
+
 function columnOf(rowGroup: RowGroupMeta, name: string): ColumnMeta | undefined {
   return rowGroup.columns.find((c) => c.meta_data.path_in_schema[0] === name)?.meta_data;
 }
@@ -169,10 +233,7 @@ async function streamColumn(
   skip: { before: number; width?: number } = { before: 0 },
 ): Promise<boolean> {
   const field = reader.schema.findField(column.path_in_schema) as unknown as FieldMeta;
-  const dataOffset = Number(column.data_page_offset);
-  const dictOffset = toNumber(column.dictionary_page_offset);
-  const start = dictOffset !== undefined && dictOffset > 0 && dictOffset < dataOffset ? dictOffset : dataOffset;
-  const end = Math.min(source.size, start + Number(column.total_compressed_size));
+  const { start, end } = chunkRange(column, source.size);
   const totalValues = Number(column.num_values);
   const window = new ByteWindow(source, end);
   // decodePages keeps the dictionary on this object between calls.
@@ -208,6 +269,7 @@ async function streamColumn(
       opts as unknown as Parameters<ParquetReader['decodePages']>[1],
     )) as unknown as DecodedPages;
     pos += pageSize;
+    await breathe();
     if (realign && width) {
       // Rows 0..ceil(seen/width)-1 have started; the next starts here.
       const nextStart = (width - (seen % width)) % width;
@@ -247,6 +309,8 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
   const { filter } = options;
   const columns =
     typeof options.columns === 'function' ? options.columns(Object.keys(reader.schema.fields)) : options.columns;
+  const wanted = (rowGroup: RowGroupMeta): ColumnMeta[] =>
+    columns.map((name) => columnOf(rowGroup, name)).filter((c): c is ColumnMeta => c !== undefined);
   const rows: ParquetRow[] = [];
   let rowGroupsRead = 0;
   let rowGroupsSkipped = 0;
@@ -255,6 +319,10 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
     for (const rowGroup of rowGroups) {
       const numRows = Number(rowGroup.num_rows);
       if (numRows === 0) continue;
+
+      // Where this group's bytes come from: the object itself, or one fetch
+      // spanning every column chunk that will be decoded.
+      let groupSource = source;
 
       // Which rows of this group match, as a mask over [first, last].
       let first = 0;
@@ -267,8 +335,13 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
           rowGroupsSkipped++;
           continue;
         }
+        // Statistics that do not exclude the value mean the rows are very
+        // likely here, so the filter column comes with the rest in one fetch.
+        // Without statistics every row group gets this far, and fetching each
+        // one whole to find a single episode would read the entire file.
+        if (filterColumn.statistics) groupSource = await spanSource(source, [filterColumn, ...wanted(rowGroup)]);
         const hits: number[] = [];
-        await streamColumn(reader, source, filterColumn, (row, value) => {
+        await streamColumn(reader, groupSource, filterColumn, (row, value) => {
           if (Number(value) === filter.equals) hits.push(row);
         });
         rowGroupsRead++;
@@ -280,6 +353,7 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
       } else {
         rowGroupsRead++;
       }
+      if (groupSource === source) groupSource = await spanSource(source, wanted(rowGroup));
 
       // Slot of each kept row in `rows`, by row offset from `first`.
       const groupStart = rows.length;
@@ -319,7 +393,7 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
         // miscounted — read the column again from its first page.
         let consistent: boolean;
         try {
-          const skipped = await streamColumn(reader, source, column, visit, { before: first, width });
+          const skipped = await streamColumn(reader, groupSource, column, visit, { before: first, width });
           consistent =
             !skipped ||
             !repeated ||
@@ -330,7 +404,7 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
         }
         if (!consistent) {
           for (const r of groupRows) delete r[name];
-          await streamColumn(reader, source, column, visit);
+          await streamColumn(reader, groupSource, column, visit);
         }
       }
     }

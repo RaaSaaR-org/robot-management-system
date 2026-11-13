@@ -489,6 +489,30 @@ describe('delete', () => {
     unsub();
   });
 
+  it('forgets what the browser had read of a deleted dataset, and of one changed by another service (TASK-490)', async () => {
+    const { cachedEpisodeTable, episodeTableCache } = await import('../lerobot/DatasetReadCache.js');
+    const remember = (id: string) =>
+      cachedEpisodeTable(`${id}@1`, async () => ({
+        layout: 'v2' as const,
+        episodes: [{ index: 0, frameCount: 3, durationSeconds: 0.1, flagged: false }],
+      }));
+    await Promise.all(['ds1', 'imported', 'other'].map(remember));
+
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
+    expect(await datasetService.delete('ds1')).toBe(true);
+    expect(episodeTableCache.get('ds1@1#episodes')).toBeUndefined();
+
+    // The Hub importer and the upload service announce on the same emitter.
+    datasetService.emit('dataset:event', { type: 'dataset:import:progress', datasetId: 'imported' });
+    expect(episodeTableCache.get('imported@1#episodes')).toBeDefined();
+    datasetService.emit('dataset:event', { type: 'dataset:import:completed', datasetId: 'imported' });
+    expect(episodeTableCache.get('imported@1#episodes')).toBeUndefined();
+
+    expect(episodeTableCache.get('other@1#episodes')).toBeDefined();
+    episodeTableCache.clear();
+  });
+
   it('carries the tenant of the row it deleted on dataset:deleted (TASK-375)', async () => {
     vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
     vi.mocked(datasetRepository.tenantOf).mockResolvedValue('tenant-a');
