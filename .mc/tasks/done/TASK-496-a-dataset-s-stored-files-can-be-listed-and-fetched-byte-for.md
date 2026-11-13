@@ -103,6 +103,8 @@ SHA-256, when listed) match, `--resume` / `--force` for a non-empty directory,
 - `docs/dataset-download.md` (new — the contract), `docs/dataset-upload.md`,
   `docs/api.md`, `docs/deployment.md`, `docs/README.md`, `README.md`,
   `CLAUDE.md`, `server/AGENTS.md`
+- `app/src/components/docs/docsRegistry.ts` — the new page's category in the
+  in-app docs (`Training`); without it `docsRegistry.test.ts` fails
 
 ## Acceptance Criteria
 
@@ -144,6 +146,13 @@ SHA-256, when listed) match, `--resume` / `--force` for a non-empty directory,
     fetched from the Hub at the imported revision: identical.
   - server without RustFS (`DATASET_UPLOAD_DIR`): a 7-file, 43.9 MB tables-only
     dataset uploaded and downloaded, `diff -r` identical.
+- Review rerun (own server, RustFS container and rmsctl build): the round trip
+  and the SIGKILL + `--resume` run again identical; 110 file requests dropped
+  before, during and after the store's answer against a stream pool of 4
+  sockets (`RUSTFS_MAX_STREAM_SOCKETS=4`), then a full download at
+  `--parallel 8`: complete and identical, so no store socket was left checked
+  out; a download against `RATE_LIMIT_MEDIA_MAX=4` per 6 s is paced by
+  `Retry-After` and still ends identical.
 
 ## Notes
 
