@@ -9,6 +9,7 @@
 import { memo } from 'react';
 import { BatteryMedium, Cpu, ListChecks, Thermometer } from 'lucide-react';
 import { StatRow, StatTile, type Tone } from '@/shared/components/ui';
+import { ROBOT_PROVISIONING_LABELS, robotProvisioning } from '../types/robots.types';
 import type { Robot, RobotTelemetry } from '../types/robots.types';
 
 export interface RobotQuickStatsProps {
@@ -54,12 +55,14 @@ export const RobotQuickStats = memo(function RobotQuickStats({
   // An offline robot runs nothing: its task name is what it was doing when it
   // was last seen, not what it is doing now (TASK-388).
   const offline = robot.status === 'offline';
+  const provisioning = robotProvisioning(robot);
   const taskHint = robot.currentTaskName
     ? offline
       ? 'Last known — robot offline'
       : 'Running now'
     : offline
-      ? 'Robot offline'
+      ? // An expected robot was never online: "offline" would say it had been (TASK-485).
+        (provisioning ? ROBOT_PROVISIONING_LABELS[provisioning.state] : 'Robot offline')
       : 'Idle — no task assigned';
 
   return (

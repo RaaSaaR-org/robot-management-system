@@ -30,7 +30,12 @@ export interface DemoRobot {
   note?: string;
   capabilities: string[];
   metadata: Record<string, string | number | boolean>;
-  /** Name of the standard robot type (`seedStandardRobotTypes.ts`) this robot is one of. */
+  /**
+   * Name of the standard robot type (`seedStandardRobotTypes.ts`) this robot is
+   * one of. Also written as `metadata.robotTypeName`, the explicit link the
+   * server reads (`robotTypeLink.ts`, TASK-485) — the model string alone does
+   * not say it: "Pollen Robotics Microduck" is not the type name "Microduck".
+   */
   robotTypeName: string;
 }
 
@@ -46,6 +51,7 @@ export const DEMO_FLEET: readonly DemoRobot[] = [
       // The app's 3D viewer key: G1 body with Dex3-1 three-finger hands.
       robotType: 'g1_edu',
       degreesOfFreedom: 43,
+      robotTypeName: 'Unitree G1 EDU (Dex3-1)',
       seededBy: DEMO_FLEET_MARKER,
     },
     robotTypeName: 'Unitree G1 EDU (Dex3-1)',
@@ -60,6 +66,7 @@ export const DEMO_FLEET: readonly DemoRobot[] = [
       manufacturer: 'TheRobotStudio',
       robotType: 'so101',
       degreesOfFreedom: 6,
+      robotTypeName: 'SO-101 Follower',
       powerSource: 'ac_powered',
       seededBy: DEMO_FLEET_MARKER,
     },
@@ -78,6 +85,7 @@ export const DEMO_FLEET: readonly DemoRobot[] = [
     metadata: {
       manufacturer: 'Pollen Robotics',
       degreesOfFreedom: 15,
+      robotTypeName: 'Microduck',
       seededBy: DEMO_FLEET_MARKER,
     },
     robotTypeName: 'Microduck',

@@ -18,6 +18,7 @@
     "seed:synthetic": "tsx src/scripts/seed-synthetic-demo.ts",
     "seed:marketplace": "tsx src/scripts/seed-marketplace-demo.ts",
     "seed:demo-fleet": "tsx src/scripts/seed-demo-fleet.ts",
+    "remove:robot-type": "tsx src/scripts/remove-robot-type.ts",
     "seed:tour": "tsx src/database/seeds/tour-zema.seed.ts",
     "backfill:compliance-seq": "tsx src/scripts/backfill-compliance-seq.ts",
     "test": "vitest run",

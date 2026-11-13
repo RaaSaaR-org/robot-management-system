@@ -38,6 +38,7 @@ import { RustFSClient } from '../storage/rustfs-client.js';
 import { datasetRepository, robotTypeRepository } from '../repositories/index.js';
 import type { CreateDatasetInput } from '../types/vla.types.js';
 import type { FrameRow } from './LeRobotExportService.js';
+import { explicitRobotTypeLink, modelRobotTypeLink, parseRobotMetadata } from './robotTypeLink.js';
 import {
   agentRecordingService,
   AgentRecordingRefused,
@@ -2974,6 +2975,10 @@ export class TeleoperationService extends EventEmitter {
     const robotModel = robot?.model ?? 'unknown';
 
     const all = await robotTypeRepository.findAll();
+    const subject = { model: robotModel, metadata: parseRobotMetadata(robot?.metadata) };
+    // TASK-485: a robot that names its type outright is not guessed at.
+    const explicit = explicitRobotTypeLink(subject, all);
+    if (explicit) return explicit.robotType.id;
     const lower = robotModel.toLowerCase().replace(/[_\-\s]/g, '');
 
     const matchers: Array<{ pattern: RegExp; name: string }> = [
@@ -2992,6 +2997,11 @@ export class TeleoperationService extends EventEmitter {
 
     const exactMatch = all.find((rt) => rt.name.toLowerCase() === robotModel.toLowerCase());
     if (exactMatch) return exactMatch.id;
+
+    // TASK-485: "Pollen Robotics Microduck" is the registered "Microduck" —
+    // the type's name inside the model beats inventing a 0-wide duplicate.
+    const byModel = modelRobotTypeLink(subject, all);
+    if (byModel) return byModel.robotType.id;
 
     // No match — create a new RobotType on-the-fly
     const created = await robotTypeRepository.create({

@@ -11,7 +11,14 @@ import { UI_DATE_LOCALE, formatTimeAgo, CPU_THRESHOLDS, MEMORY_THRESHOLDS } from
 import { BatteryGauge } from '../BatteryGauge';
 import { SensorGrid } from '../SensorGrid';
 import { SimBadge } from '../SimBadge';
-import { ProvenanceTag, Readout, provenanceOf, type ReadoutTone } from '../common';
+import {
+  ProvenanceTag,
+  Readout,
+  awaitingAgentSentence,
+  awaitingAgentTitle,
+  provenanceOf,
+  type ReadoutTone,
+} from '../common';
 import {
   ImuCard,
   BatteryHealthCard,
@@ -19,7 +26,7 @@ import {
   TelemetryHistorySparklines,
 } from '../telemetry';
 import { JointStateGrid, HandTouchPads } from '../visualization';
-import { jointPositionUnit } from '../../types/robots.types';
+import { jointPositionUnit, robotProvisioning } from '../../types/robots.types';
 import type { TelemetryTabProps } from './types';
 
 /** Load tone for a percentage readout: warm at the warning threshold, hot at the error one. */
@@ -48,6 +55,8 @@ export function TelemetryTab({
   onTelemetryRetry,
 }: TelemetryTabProps) {
   const isOffline = robot.status === 'offline';
+  // Never connected: "last seen" would be the moment the row was created (TASK-485).
+  const provisioning = robotProvisioning(robot);
   // Telemetry never arrived and the stream is in an error state.
   const isTelemetryError = !telemetry && !isOffline && telemetryStatus === 'error';
   const source = provenanceOf(telemetry, isTelemetryConnected);
@@ -69,8 +78,12 @@ export function TelemetryTab({
               <EmptyState
                 size="sm"
                 icon={<Activity />}
-                title="No telemetry yet"
-                description={`${robot.name} is offline. Start its robot agent to see live telemetry. Last seen ${formatTimeAgo(robot.lastSeen)}.`}
+                title={provisioning ? awaitingAgentTitle(provisioning) : 'No telemetry yet'}
+                description={
+                  provisioning
+                    ? awaitingAgentSentence(robot.name, provisioning, 'Telemetry appears here')
+                    : `${robot.name} is offline. Start its robot agent to see live telemetry. Last seen ${formatTimeAgo(robot.lastSeen)}.`
+                }
               />
             ) : (
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4" aria-label="Loading telemetry">

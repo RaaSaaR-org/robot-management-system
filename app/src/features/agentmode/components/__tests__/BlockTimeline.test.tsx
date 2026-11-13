@@ -138,16 +138,17 @@ describe('BlockTimeline', () => {
     });
   });
 
-  it('gives STOPP an accessible name that contains the word on the button', () => {
-    // WCAG 2.5.3 (Label in Name): a voice-control user says what they can see.
-    // "click STOPP" must match, so the name is a SUPERSET of the visible text —
-    // the old `aria-label="Emergency stop"` replaced it and matched nothing.
+  it('names the stop the way the rest of the product does: "Emergency stop"', () => {
+    // TASK-485: the button read "STOPP", a word no other screen uses. WCAG
+    // 2.5.3 (Label in Name) still holds: the accessible name IS the visible
+    // text, so a voice-control user says what they can see.
     render(<BlockTimeline onStop={() => {}} />);
 
     const stop = screen.getByTestId('agent-stop-button');
-    expect(stop).toHaveTextContent('STOPP');
-    expect(stop.getAttribute('aria-label')).toContain('STOPP');
-    expect(screen.getByRole('button', { name: /STOPP/ })).toBe(stop);
+    expect(stop).toHaveTextContent(/^Emergency stop$/);
+    expect(stop).not.toHaveAttribute('aria-label');
+    expect(screen.getByRole('button', { name: 'Emergency stop' })).toBe(stop);
+    expect(screen.queryByText(/STOPP/)).not.toBeInTheDocument();
   });
   // =========================================================================
   // HOW LONG IT HAS BEEN PLANNING (TASK-202)

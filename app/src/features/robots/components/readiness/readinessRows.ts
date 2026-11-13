@@ -510,17 +510,31 @@ function questRow(r: RobotReadiness, port: number): ReadinessRowModel | null {
   };
 }
 
+export interface ReadinessRowOptions {
+  /**
+   * Whether the robot's embodiment carries hands (TASK-485, `robotTraits`).
+   * Default true. With false, the two hand rows are left out unless the agent
+   * reports hand health itself: an SO-101 arm has a gripper, and a list that
+   * asks after its "Left hand" reads as something being broken.
+   */
+  hands?: boolean;
+}
+
 /** The checklist, in display order. Supervisor rows are absent without a supervisor. */
-export function readinessRows(r: RobotReadiness, questPort = 1420): ReadinessRowModel[] {
+export function readinessRows(
+  r: RobotReadiness,
+  questPort = 1420,
+  options: ReadinessRowOptions = {},
+): ReadinessRowModel[] {
   const a = r.agent.readiness;
+  const showHands = options.hands !== false || a?.hands != null;
   const rows: Array<ReadinessRowModel | null> = [
     preflightRow(r),
     linkRow(r),
     ...[bridgeRow(r), sidecarRow(r, a), agentRow(r, a)].map((row) => (row ? markStale(row) : null)),
     modeRow(a),
     armsRow(a),
-    handRow(a, 'left'),
-    handRow(a, 'right'),
+    ...(showHands ? [handRow(a, 'left'), handRow(a, 'right')] : []),
     cameraRow(r, a),
     controlRow(a),
     questRow(r, questPort),
