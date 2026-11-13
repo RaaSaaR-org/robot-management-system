@@ -84,7 +84,13 @@ const STACKED_FROM_PX = 540;
 const SIDE_FROM_PX = 1280;
 /** Stacked in a narrow window: the group switch and the legend wrap, so the chart needs more. */
 const STACKED_NARROW_PX = 620;
-const STAGE_FILL = { min: 380, max: 900, gap: 16 } as const;
+/**
+ * The floor is what the side-by-side stage still reads at. It is well under
+ * what a 1280×720 window has left (400 px), so a title that wraps or a view's
+ * banner above the stage shrinks it instead of pushing the transport bar under
+ * the fold.
+ */
+const STAGE_FILL = { min: 320, max: 900, gap: 16 } as const;
 
 export function DatasetEpisodesPage() {
   const { datasetId } = useParams<{ datasetId: string }>();
@@ -121,6 +127,9 @@ export function DatasetEpisodesPage() {
   const [duplicateTarget, setDuplicateTarget] =
     useState<{ id: string; name: string; selection: DatasetSelection } | null>(null);
   const [parentDataset, setParentDataset] = useState<Dataset | null>(null);
+  // The parent id whose request has come back, found or not: a view waits for
+  // it before it says which cameras it has.
+  const [parentSettledId, setParentSettledId] = useState<string | null>(null);
   const [isPushOpen, setIsPushOpen] = useState(false);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -136,23 +145,37 @@ export function DatasetEpisodesPage() {
   const videoTicket = useDatasetVideoTicket(datasetId, selectedEpisode);
   const { submitJob } = useTrainingJobs();
 
+  // The feature table of info.json. A view owns no files and no info.json: its
+  // features are its parent's. `undefined` while that is not known yet (this
+  // dataset's row, or a view's parent, has not arrived), `null` when the
+  // dataset really carries none.
+  const features = useMemo((): Record<string, unknown> | null | undefined => {
+    if (!dataset || dataset.id !== datasetId) return undefined;
+    const own = dataset.infoJson?.features as Record<string, unknown> | undefined;
+    if (own) return own;
+    if (isDatasetView(dataset) && dataset.parentDatasetId) {
+      if (parentSettledId !== dataset.parentDatasetId) return undefined;
+      return (parentDataset?.infoJson?.features as Record<string, unknown> | undefined) ?? null;
+    }
+    return null;
+  }, [dataset, datasetId, parentDataset, parentSettledId]);
+
   // Camera feature keys (dtype video/image). State-only datasets have none; the
   // legacy wrist/top guess applies only to a dataset that has been read and
-  // carries no feature metadata at all. Null until this dataset's row is here:
+  // carries no feature metadata at all. Null until the features are known:
   // guessing before then asked for a `wrist` video the dataset does not have.
   const cameraNames = useMemo(() => {
-    if (!dataset || dataset.id !== datasetId) return null;
-    const features = dataset.infoJson?.features as Record<string, unknown> | undefined;
+    if (features === undefined) return null;
     return features ? cameraKeys(features) : LEGACY_CAMERAS;
-  }, [dataset, datasetId]);
+  }, [features]);
 
   // Channel names out of info.json, per vector.
   const infoNames = useMemo(() => {
-    const features = dataset?.infoJson?.features as Record<string, { names?: unknown }> | undefined;
+    const named = features as Record<string, { names?: unknown }> | null | undefined;
     // names is a flat array, a nested array (Unitree) or an object of arrays (pusht, xarm)
-    const of = (key: string) => featureNames(features?.[key]?.names).map((n) => n.replace('.pos', ''));
+    const of = (key: string) => featureNames(named?.[key]?.names).map((n) => n.replace('.pos', ''));
     return { state: of('observation.state'), action: of('action') };
-  }, [dataset]);
+  }, [features]);
 
   // GR00T-style datasets put one placeholder name on a 43-wide vector and keep
   // the real layout in meta/modality.json (TASK-476): label by group and index.
@@ -162,19 +185,18 @@ export function DatasetEpisodesPage() {
   );
   const jointNames = useMemo(() => {
     if (jointGroups.length > 0) {
-      const shape = (dataset?.infoJson?.features as Record<string, { shape?: unknown }> | undefined)?.['action']?.shape;
+      const shape = (features as Record<string, { shape?: unknown }> | null | undefined)?.['action']?.shape;
       const declared = Array.isArray(shape) && typeof shape[0] === 'number' ? shape[0] : 0;
       return channelLabels(jointGroups, Math.max(declared, ...jointGroups.map((g) => g.end)));
     }
     return infoNames.action.length ? infoNames.action : DEFAULT_JOINTS;
-  }, [dataset, jointGroups, infoNames]);
+  }, [features, jointGroups, infoNames]);
 
   // The codec each camera's video is stored in, so the player can say when
   // this browser cannot play it instead of showing a blank box (TASK-478).
   const codecFor = useCallback(
-    (cam: string) =>
-      featureVideoCodec((dataset?.infoJson?.features as Record<string, unknown> | undefined)?.[cam]),
-    [dataset]
+    (cam: string) => featureVideoCodec(features?.[cam]),
+    [features]
   );
 
   const primaryCamera = cameraNames?.[0];
@@ -249,8 +271,8 @@ export function DatasetEpisodesPage() {
     if (!parentId) { setParentDataset(null); return; }
     let cancelled = false;
     trainingApi.getDataset(parentId)
-      .then((p) => { if (!cancelled) setParentDataset(p); })
-      .catch(() => { if (!cancelled) setParentDataset(null); });
+      .then((p) => { if (!cancelled) { setParentDataset(p); setParentSettledId(parentId); } })
+      .catch(() => { if (!cancelled) { setParentDataset(null); setParentSettledId(parentId); } });
     return () => { cancelled = true; };
   }, [dataset?.parentDatasetId]);
 

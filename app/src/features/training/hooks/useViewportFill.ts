@@ -26,6 +26,11 @@ export interface ViewportFill<T extends HTMLElement> {
   viewportWidth: number;
 }
 
+/** The height for a window and the element's top in page coordinates. */
+export function fillHeight(innerHeight: number, topInPage: number, { min, max, gap }: ViewportFillOptions): number {
+  return Math.round(Math.min(max, Math.max(min, innerHeight - topInPage - gap)));
+}
+
 /**
  * Measure, and keep measuring: the window resizes, and whatever is above the
  * element (a title that arrives and wraps, a banner) changes where it starts.
@@ -41,14 +46,19 @@ export function useViewportFill<T extends HTMLElement>({ min, max, gap }: Viewpo
     if (!el) return;
     const measure = () => {
       const top = el.getBoundingClientRect().top + window.scrollY;
-      setHeight(Math.round(Math.min(max, Math.max(min, window.innerHeight - top - gap))));
+      setHeight(fillHeight(window.innerHeight, top, { min, max, gap }));
       setViewportWidth(window.innerWidth);
     };
     measure();
     window.addEventListener('resize', measure);
-    // The page column: it changes size whenever anything above the element does.
-    const observer = typeof ResizeObserver === 'undefined' || !el.parentElement ? null : new ResizeObserver(measure);
-    if (observer && el.parentElement) observer.observe(el.parentElement);
+    // Every ancestor: the page column changes size when something above the
+    // element in it does, and the ones further out when the shell puts a
+    // banner above the page — which moves the element without resizing the column.
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    if (observer) {
+      observer.observe(document.body);
+      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) observer.observe(p);
+    }
     return () => {
       window.removeEventListener('resize', measure);
       observer?.disconnect();

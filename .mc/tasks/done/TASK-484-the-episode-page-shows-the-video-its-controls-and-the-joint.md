@@ -57,7 +57,9 @@ had arrived — and got a 404; the Curate "End frame" placeholder and the chart'
   *ended* waits for Play. Another dataset starts paused.
 - **One screen, measured, not guessed.** From `lg` up the stage (episode list, video
   with the transport bar, joint chart) is exactly as tall as the window has left
-  under the page header, with a 380 px floor and a 900 px cap. Under 540 px of
+  under the page header, with a 320 px floor and a 900 px cap. The floor is well
+  under the 400 px a 1280×720 window has left, so a view's banner or a wrapped
+  title shrinks the stage instead of pushing the transport bar under the fold. Under 540 px of
   stage the chart sits beside the video; from 540 px it sits under it. Beside
   needs width: a window narrower than 1280 px always stacks, and the stage is
   then at least 620 px tall — a short scroll at 1024×768 rather than a chart
@@ -109,4 +111,10 @@ had arrived — and got a 404; the Curate "End frame" placeholder and the chart'
   keeps the viewer's own pick across episodes. That was already the meaningful
   group; nothing changed there.
 - `DatasetExpectationsPanel` moved from above the stage to directly under it.
+- Review: a view stores no `info.json` of its own, so its page guessed the legacy
+  `wrist`/`top` cameras whatever its parent recorded. A view now takes its
+  feature table (cameras, codecs, channel names) from its parent and requests no
+  video before the parent has answered.
+- Review: the stage is re-measured when any ancestor changes size, so a banner
+  the shell puts above the page moves the stage's bottom edge with it.
 - The social e2e specs open the page with `?tab=discussion`.

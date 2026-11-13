@@ -169,6 +169,53 @@ describe('the episode stage', () => {
   });
 });
 
+describe('the stage of a view', () => {
+  // A view owns no files and no info.json of its own (the server stores `{}`).
+  const VIEW: Dataset = {
+    ...APPLE,
+    name: 'First episode only',
+    kind: 'view',
+    parentDatasetId: 'parent',
+    storagePath: '',
+    infoJson: {} as unknown as Dataset['infoJson'],
+    selection: { episodes: [{ episodeIndex: 0 }], origin: { kind: 'manual' } },
+  };
+  const PARENT: Dataset = { ...APPLE, id: 'parent' };
+  const requestedCameras = () =>
+    [...new Set(trainingApiMock.getEpisodeVideoUrl.mock.calls.map((call) => call[2]))];
+
+  it('takes its cameras from its parent and requests no video before the parent has answered', async () => {
+    const parent = deferred<Dataset>();
+    trainingApiMock.getDataset.mockImplementation((id: string) =>
+      id === 'parent' ? parent.promise : Promise.resolve(VIEW));
+    const { container } = renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('episode-check-0')).toBeInTheDocument());
+    // Used to guess `wrist` and `top` for every view, whatever its parent recorded.
+    expect(container.querySelector('video')).toBeNull();
+    expect(trainingApiMock.getEpisodeVideoUrl).not.toHaveBeenCalled();
+    expect(screen.queryByText(/2 cameras/)).not.toBeInTheDocument();
+
+    await act(async () => { parent.resolve(PARENT); });
+    await waitFor(() => expect(container.querySelector('video')).not.toBeNull());
+    expect(requestedCameras()).toEqual([EGO]);
+    expect(screen.getByText(/1 camera$/)).toBeInTheDocument();
+    // The channel names are the parent's as well.
+    const legend = within(await screen.findByTestId('joint-chart-legend'));
+    expect(legend.getByText('a')).toBeInTheDocument();
+    expect(legend.getByText('b')).toBeInTheDocument();
+  });
+
+  it('still shows a player when the parent cannot be read', async () => {
+    trainingApiMock.getDataset.mockImplementation((id: string) =>
+      id === 'parent' ? Promise.reject(new Error('404')) : Promise.resolve(VIEW));
+    const { container } = renderPage();
+
+    await waitFor(() => expect(container.querySelector('video')).not.toBeNull());
+    expect(requestedCameras()).toEqual(['observation.images.wrist', 'observation.images.top']);
+  });
+});
+
 describe('the panels under the stage', () => {
   const tab = (name: string) => screen.getByRole('tab', { name });
 
