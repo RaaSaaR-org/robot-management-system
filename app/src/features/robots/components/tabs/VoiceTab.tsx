@@ -6,12 +6,14 @@
  *              control the voice pipeline (mic pause, session, volume). Backed
  *              by the TASK-181 voice service, relayed through the server; the
  *              tab degrades to a calm offline hint when the service is down.
+ *              A simulated robot without a voice service gets one plain
+ *              sentence instead of the hint for starting it (TASK-499).
  * @feature robots
  */
 
 import { memo, useCallback, useEffect } from 'react';
 import { MicOff } from 'lucide-react';
-import { Button, Panel } from '@/shared/components/ui';
+import { Button, EmptyState, Panel } from '@/shared/components/ui';
 import { voiceApi } from '../../api/voiceApi';
 import { useVoiceChannel } from '../../hooks/useVoiceChannel';
 import { useVoiceStore } from '../../store/voiceStore';
@@ -20,6 +22,7 @@ import { VoiceConversation } from '../voice/VoiceConversation';
 import { VoicePipelinePanel } from '../voice/VoicePipelinePanel';
 import type { VoiceLanguage } from '../../types/voice.types';
 import { robotProvisioning } from '../../types/robots.types';
+import { isSimRobot } from '../../utils/simRobot';
 import { AwaitingAgentState } from '../common';
 import type { VoiceTabProps } from './types';
 
@@ -49,7 +52,11 @@ export function VoiceTab(props: VoiceTabProps) {
 }
 
 const ConnectedVoiceTab = memo(function ConnectedVoiceTab({ robot, robotId }: VoiceTabProps) {
-  const { voice, health, status, refreshHealth } = useVoiceChannel(robotId);
+  // A simulated robot has a voice service only when someone runs one next to
+  // it (the rehearsal robot does): ask health first, and say plainly when
+  // there is none, instead of a start command no viewer of a demo can run.
+  const simulated = isSimRobot(robot);
+  const { voice, health, status, refreshHealth } = useVoiceChannel(robotId, { whenAvailable: simulated });
   const addTypedEntry = useVoiceStore((s) => s.addTypedEntry);
   const setPaused = useVoiceStore((s) => s.setPaused);
   const voiceListing = useVoiceStore((s) => s.voices[robotId] ?? null);
@@ -118,6 +125,25 @@ const ConnectedVoiceTab = memo(function ConnectedVoiceTab({ robot, robotId }: Vo
     },
     [robotId]
   );
+
+  if (simulated && available !== true) {
+    // Still asking: an empty panel beats a composer that flashes and goes.
+    return (
+      <Panel data-testid="voice-simulated">
+        <Panel.Header title="Voice" />
+        <Panel.Body>
+          {available === false && (
+            <EmptyState
+              size="sm"
+              icon={<MicOff />}
+              title="Voice is not available on a simulated robot"
+              description={`${robot.name} is simulated: it has no speaker and no microphone, so there is nothing to say or hear here. Voice opens on a robot that runs the voice service.`}
+            />
+          )}
+        </Panel.Body>
+      </Panel>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6" data-testid="voice-tab">

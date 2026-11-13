@@ -179,6 +179,26 @@ describe('initialize', () => {
 // ===========================================================================
 
 describe('registerRobot', () => {
+  it('clears the stored task when the agent registers with no task (TASK-499)', async () => {
+    const mgr = new RobotManager();
+    // What a current agent sends while idle: the fields present, and null.
+    const idle = { ...makeRobot({ id: 'r1' }), currentTaskId: null, currentTaskName: null };
+    httpGet.mockResolvedValue(makeRegistrationInfo({ robot: idle as never }));
+    agentCardResolver.fetchAgentCard.mockResolvedValue(makeAgentCard());
+    robotRepository.upsertWithRegistration.mockResolvedValue(undefined as never);
+    conversationManager.registerAgent.mockResolvedValue(undefined);
+
+    const result = await mgr.registerRobot('http://robot.local');
+
+    expect(robotRepository.upsertWithRegistration.mock.calls[0][4]).toEqual({
+      currentTaskId: null,
+      currentTaskName: null,
+    });
+    // The cached robot carries no task at all, rather than a null the API would relay.
+    expect(result.robot.currentTaskName).toBeUndefined();
+    expect(result.robot.currentTaskId).toBeUndefined();
+  });
+
   it('fetches registration info + agent card, persists, caches and emits an event', async () => {
     const mgr = new RobotManager();
     const info = makeRegistrationInfo({ robot: makeRobot({ id: 'r1', name: 'Robot One' }) });
@@ -208,7 +228,9 @@ describe('registerRobot', () => {
       expect.objectContaining({ id: 'r1', a2aEnabled: true }),
       expect.objectContaining({ command: 'http://robot.local/api/v1/command' }),
       card,
-      'http://robot.local'
+      'http://robot.local',
+      // No task field reported as null: nothing to clear on the row.
+      {}
     );
     expect(conversationManager.registerAgent).toHaveBeenCalledWith(card);
     expect(events).toEqual([

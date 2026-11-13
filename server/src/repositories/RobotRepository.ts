@@ -12,6 +12,7 @@ import {
 } from '../database/types.js';
 import type {
   Robot,
+  RobotTaskUpdate,
   RobotStatus,
   RobotLocation,
   RegisteredRobot,
@@ -94,7 +95,10 @@ export class RobotRepository {
   /**
    * Update a robot
    */
-  async update(id: string, data: Partial<Robot>): Promise<Robot | null> {
+  async update(
+    id: string,
+    data: Partial<Omit<Robot, keyof RobotTaskUpdate>> & RobotTaskUpdate
+  ): Promise<Robot | null> {
     try {
       const updateData: Record<string, unknown> = {};
 
@@ -105,6 +109,8 @@ export class RobotRepository {
       if (data.batteryLevel !== undefined) updateData.batteryLevel = data.batteryLevel;
       if (data.location !== undefined) updateData.location = JSON.stringify(data.location);
       if (data.lastSeen !== undefined) updateData.lastSeen = new Date(data.lastSeen);
+      // The task fields take `null`: "no task" is a value to store, where an
+      // absent field leaves the row as it is (TASK-499).
       if (data.currentTaskId !== undefined) updateData.currentTaskId = data.currentTaskId;
       if (data.currentTaskName !== undefined) updateData.currentTaskName = data.currentTaskName;
       if (data.capabilities !== undefined)
@@ -273,7 +279,8 @@ export class RobotRepository {
     robot: Robot,
     endpoints: RobotEndpoints,
     agentCard: A2AAgentCard,
-    baseUrl: string
+    baseUrl: string,
+    clearedTask: RobotTaskUpdate = {}
   ): Promise<Robot> {
     const robotData = domainRobotToDb(robot);
     const agentCardData = domainAgentCardToDb(agentCard, robot.id);
@@ -310,6 +317,9 @@ export class RobotRepository {
         },
         update: {
           ...robotData,
+          // `robotData` leaves an absent task field out and Prisma then keeps
+          // the stored one; a field the agent reported as null is cleared.
+          ...clearedTask,
           ...claim,
           isConnected: true,
           lastHealthCheck: new Date(),

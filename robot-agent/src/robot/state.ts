@@ -1413,8 +1413,10 @@ export class RobotStateManager {
       batteryLevel,
       location: { ...this.state.location },
       lastSeen: this.state.lastSeen,
-      currentTaskId: this.state.currentTaskId,
-      currentTaskName: this.state.currentTaskName,
+      // null, not undefined: "no task" has to reach the server as a value
+      // (see Robot.currentTaskName) or a finished task never clears there.
+      currentTaskId: this.state.currentTaskId ?? null,
+      currentTaskName: this.state.currentTaskName ?? null,
       capabilities: [...this.state.capabilities],
       firmware: hardwareConnected ? 'unknown' : this.state.firmware,
       ipAddress: hardwareConnected ? 'unknown' : this.state.ipAddress,

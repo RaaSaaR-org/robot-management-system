@@ -579,6 +579,23 @@ export function robotSideActions(r: RobotReadiness | null): RobotSideActions {
   };
 }
 
+/**
+ * A snapshot that says the robot has no robot side at all (TASK-499): no
+ * supervisor is configured for it, so nothing here could start one, and its
+ * agent reaches no sidecar. For a real robot that is still a fault to fix by
+ * hand; for a simulated one it is simply what a simulation is — the caller
+ * decides which, this only reads the snapshot.
+ */
+export function hasNoRobotSide(r: RobotReadiness | null): boolean {
+  return (
+    r !== null &&
+    r.supervisor === null &&
+    r.bringup === null &&
+    r.agent.reachable &&
+    r.agent.readiness?.sidecar.reachable === false
+  );
+}
+
 const STEP_ROW: Record<BringupStepId, RowId> = {
   preflight: 'preflight',
   link: 'link',

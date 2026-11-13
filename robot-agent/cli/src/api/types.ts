@@ -58,8 +58,8 @@ export interface Robot {
   batteryLevel: number;
   location: RobotLocation;
   lastSeen: string;
-  currentTaskId?: string;
-  currentTaskName?: string;
+  currentTaskId?: string | null;
+  currentTaskName?: string | null;
   capabilities: string[];
   firmware?: string;
   ipAddress?: string;

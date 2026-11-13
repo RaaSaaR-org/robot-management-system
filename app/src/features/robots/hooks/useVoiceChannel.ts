@@ -4,6 +4,9 @@
  *              SSE event stream (with reconnect), plus periodic health/status
  *              polling as the graceful-degradation signal. Events land in the
  *              voiceStore; this hook returns the store slices the tab needs.
+ *              TASK-499: a caller may ask for health first (`whenAvailable`),
+ *              so a robot with no voice service gets one request that answers
+ *              200 instead of a status call and an event stream that answer 502.
  * @feature robots
  */
 
@@ -15,7 +18,18 @@ import type { VoiceEvent } from '../types/voice.types';
 const RECONNECT_DELAY_MS = 4000;
 const HEALTH_POLL_MS = 10000;
 
-export function useVoiceChannel(robotId: string) {
+export interface UseVoiceChannelOptions {
+  /**
+   * Ask `/voice/health` first — it always answers 200 — and read the status
+   * and open the event stream only once it says the service is up. For a
+   * simulated robot, whose voice service usually does not exist: the status
+   * call and the stream could only answer 502, every few seconds.
+   */
+  whenAvailable?: boolean;
+}
+
+export function useVoiceChannel(robotId: string, options: UseVoiceChannelOptions = {}) {
+  const whenAvailable = options.whenAvailable ?? false;
   const applyEvent = useVoiceStore((s) => s.applyEvent);
   const setConnection = useVoiceStore((s) => s.setConnection);
   const setHealth = useVoiceStore((s) => s.setHealth);
@@ -31,6 +45,17 @@ export function useVoiceChannel(robotId: string) {
 
   const refreshHealth = useCallback(async () => {
     if (!robotId) return;
+    if (whenAvailable) {
+      try {
+        const nextHealth = await voiceApi.getHealth(robotId);
+        setHealth(robotId, nextHealth);
+        setStatus(robotId, nextHealth.available ? await voiceApi.getStatus(robotId).catch(() => null) : null);
+      } catch {
+        setHealth(robotId, null);
+        setStatus(robotId, null);
+      }
+      return;
+    }
     try {
       const [nextHealth, nextStatus] = await Promise.all([
         voiceApi.getHealth(robotId),
@@ -42,14 +67,17 @@ export function useVoiceChannel(robotId: string) {
       setHealth(robotId, null);
       setStatus(robotId, null);
     }
-  }, [robotId, setHealth, setStatus]);
+  }, [robotId, whenAvailable, setHealth, setStatus]);
+
+  // The stream opens at once, or — `whenAvailable` — once health says so.
+  const streamOpen = !whenAvailable || health?.available === true;
 
   useEffect(() => {
     // A caller that renders before its robot is bound (the Agent Mode voice bar
     // does, for one frame) would otherwise open an SSE stream and poll
     // `/api/robots//voice/health` — a URL that addresses no robot and answers
     // 404 forever, with a managed reconnect keeping it up.
-    if (!robotId) return;
+    if (!robotId || !streamOpen) return;
 
     let disposed = false;
 
@@ -82,16 +110,20 @@ export function useVoiceChannel(robotId: string) {
     };
 
     connect();
-    void refreshHealth();
-    const healthTimer = setInterval(() => void refreshHealth(), HEALTH_POLL_MS);
 
     return () => {
       disposed = true;
       sourceRef.current?.close();
       if (retryRef.current) clearTimeout(retryRef.current);
-      clearInterval(healthTimer);
     };
-  }, [robotId, applyEvent, setConnection, refreshHealth]);
+  }, [robotId, streamOpen, applyEvent, setConnection]);
+
+  useEffect(() => {
+    if (!robotId) return;
+    void refreshHealth();
+    const healthTimer = setInterval(() => void refreshHealth(), HEALTH_POLL_MS);
+    return () => clearInterval(healthTimer);
+  }, [robotId, refreshHealth]);
 
   return {
     /** Conversation + pipeline state for this robot (never undefined) */

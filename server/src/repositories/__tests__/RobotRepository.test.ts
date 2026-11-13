@@ -314,6 +314,18 @@ describe('update', () => {
     expect(result?.name).toBe('Renamed');
   });
 
+  it('writes null for a cleared task and leaves an absent one out (TASK-499)', async () => {
+    prismaMock.robot.update.mockResolvedValue(makeDbRobot({ currentTaskName: null }));
+
+    const result = await repo.update('robot-1', { currentTaskName: null });
+
+    const arg = prismaMock.robot.update.mock.calls[0][0] as { data: Record<string, unknown> };
+    // The name is cleared; the id was not mentioned, so the row keeps it.
+    expect(arg.data).toEqual({ currentTaskName: null });
+    expect(result).not.toBeNull();
+    expect(result?.currentTaskName).toBeUndefined();
+  });
+
   it('returns null when prisma.update throws', async () => {
     prismaMock.robot.update.mockRejectedValue(new Error('not found'));
 
@@ -568,6 +580,32 @@ describe('upsertWithRegistration', () => {
     expect(cardArg.update).toMatchObject({ robotId: 'robot-1' });
 
     expect(result.id).toBe('robot-1');
+  });
+
+  it('clears a task the re-registering agent reports as null (TASK-499)', async () => {
+    const tx = {
+      robot: {
+        findUnique: vi.fn().mockResolvedValue({ registeredAt: FIXED_DATE, metadata: null }),
+        upsert: vi.fn().mockResolvedValue(makeDbRobot({ currentTaskName: null })),
+      },
+      robotEndpoints: { upsert: vi.fn().mockResolvedValue(makeDbEndpoints()) },
+      agentCard: { upsert: vi.fn().mockResolvedValue(makeDbAgentCard()) },
+    };
+    prismaMock.$transaction.mockImplementation(
+      async (cb: (client: typeof tx) => unknown) => cb(tx)
+    );
+
+    await repo.upsertWithRegistration(
+      makeDomainRobot({ currentTaskName: undefined }),
+      makeDomainEndpoints(),
+      makeAgentCard(),
+      'http://robot',
+      { currentTaskName: null }
+    );
+
+    const robotArg = tx.robot.upsert.mock.calls[0][0] as { update: Record<string, unknown> };
+    // `undefined` would be skipped by Prisma and the old task would stay.
+    expect(robotArg.update.currentTaskName).toBeNull();
   });
 });
 
