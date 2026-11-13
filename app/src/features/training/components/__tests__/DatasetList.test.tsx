@@ -244,4 +244,28 @@ describe('the table fits its panel (TASK-493)', () => {
     expect(line).toHaveAttribute('title', line.textContent);
     useDatasetUploadStore.setState({ job: null });
   });
+
+  it('keeps a failed import’s reason inside the status cell, however long it is', () => {
+    render(
+      <DatasetList
+        datasets={[dataset({
+          id: 'f',
+          status: 'failed',
+          huggingFaceRepoId: 'some-org/broken',
+          importError: {
+            phase: 'downloading',
+            error: 'Hub answered 404 for meta/episodes/chunk-000/file-000.parquet at revision 37cb1d6e',
+            repoId: 'some-org/broken',
+            failedAt: '2026-10-12T00:00:00Z',
+          },
+        })]}
+      />,
+    );
+    const box = screen.getByTestId('dataset-import-error');
+    // The tooltip's wrappers shrink to fit, so `w-full` there is the text's own
+    // width: the box carries the cell's width itself and the line truncates in it.
+    expect(box).toHaveClass('w-28', 'sm:w-36', 'min-w-0');
+    expect(box).not.toHaveClass('w-full');
+    expect(within(box).getByText(/Hub answered 404/)).toHaveClass('truncate', 'max-w-full');
+  });
 });

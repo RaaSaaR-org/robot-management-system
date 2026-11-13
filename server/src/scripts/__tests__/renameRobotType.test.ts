@@ -81,6 +81,13 @@ describe('renameRobotType', () => {
     expect(result.reason).toContain('Unitree G1 arms + Dex3-1 hands');
   });
 
+  it('says on a dry run that a standard type cannot be renamed, as the server would', async () => {
+    const fetchImpl = vi.fn(async () => json(200, LIST));
+    const result = await renameRobotType({ baseUrl: 'http://x', name: 'Unitree G1 arms + Dex3-1 hands', to: 'Anything', dryRun: true, fetchImpl: fetchImpl as typeof fetch });
+    expect(result).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('standard robot type') });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a 409 as refused with the server’s sentence', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) =>
       init?.method === 'PATCH' ? json(409, { error: 'A robot type named "X" already exists; pick another name' }) : json(200, LIST));

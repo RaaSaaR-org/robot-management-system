@@ -341,7 +341,11 @@ function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
     const failure = describeImportFailure(err.error, err.phase);
     return (
       <Tooltip content={`Import failed during ${err.phase}: ${failure.detail}`}>
-        <span data-testid="dataset-import-error" className="inline-flex w-full min-w-0 flex-col items-start gap-1">
+        {/* The cell's width spelled out, not `w-full`: the tooltip wraps this in
+            shrink-to-fit spans, where a percentage resolves to the text's own
+            width — a long headline then ran over "Updated" and the row actions
+            and scrolled the table sideways. */}
+        <span data-testid="dataset-import-error" className="inline-flex w-28 min-w-0 flex-col items-start gap-1 sm:w-36">
           <StatusTag status="failed" dot />
           <span className="max-w-full truncate text-[11px] text-ink-tertiary">{failure.headline}</span>
         </span>

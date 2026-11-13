@@ -29,6 +29,7 @@
 
 import { pathToFileURL } from 'node:url';
 import { apiRoot } from './demoFleet.js';
+import { STANDARD_ROBOT_TYPES } from '../database/standardRobotTypes.js';
 
 export interface RenameRobotTypeArgs {
   baseUrl: string;
@@ -146,7 +147,13 @@ export async function renameRobotType(options: RenameRobotTypeOptions): Promise<
   const robotType = pick(found);
   if (found.name === to) return { outcome: 'unchanged', robotType, to };
   if (options.dryRun) {
-    // The one refusal that can be read off the list; the server decides the rest.
+    // The refusals a dry run can foresee, so that it does not promise a rename
+    // the server then refuses: a name another type has (read off the list), and
+    // a standard type — the list does not mark those, so this build's own set
+    // of names stands in for the server's.
+    if (STANDARD_ROBOT_TYPES.some((t) => t.name === found.name)) {
+      return { outcome: 'refused', robotType, to, reason: `"${found.name}" is a standard robot type and cannot be renamed` };
+    }
     const clash = all.find((t) => t.id !== found.id && t.name.trim().toLowerCase() === to.toLowerCase());
     return clash
       ? { outcome: 'refused', robotType, to, reason: `A robot type named "${clash.name}" already exists; pick another name` }
