@@ -95,7 +95,7 @@ import { serviceAccountRoutes } from './routes/service-accounts.routes.js';
 import { researchRoutes } from './routes/research.routes.js';
 
 // Import middleware
-import { authMiddleware, cameraStreamTicket, writeRoleGuard } from './middleware/auth.middleware.js';
+import { authMiddleware, cameraStreamTicket, datasetVideoTicket, writeRoleGuard } from './middleware/auth.middleware.js';
 
 // Import services
 import { robotManager } from './services/RobotManager.js';
@@ -379,7 +379,13 @@ export function createApp(): Express {
   // under the same prefix; declared ahead of the main dataset router so that
   // nothing in it can shadow `/views/:id`, and anything these do not match
   // falls straight through.
-  app.use('/api/datasets', ...protect, datasetViewRoutes);
+  //
+  // `datasetVideoTicket` runs ahead of the FIRST `...protect` on this prefix
+  // (TASK-478): that `authMiddleware` sees every `/api/datasets` request, the
+  // episode video included, before the main router is reached. It only ever
+  // authenticates a GET on `/:id/episodes/:index/video/:camera` from a
+  // `?ticket=` naming that dataset — the header a `<video>` cannot set.
+  app.use('/api/datasets', datasetVideoTicket, ...protect, datasetViewRoutes);
   app.use('/api/datasets', ...protect, datasetRoutes);
 
   // Deployment routes (protected) - VLA model fleet deployment
