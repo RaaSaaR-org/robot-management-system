@@ -297,6 +297,7 @@ measured, estimated or unknown rather than guessing, and it labels anything simu
 | **LeRobot 0.6.0** — reward models, annotation jobs, rollout strategies, GR00T N1.7 support. | Live | [#182](https://github.com/RaaSaaR-org/robot-management-system/pull/182) |
 | **Dataset revisions and curation** — video-aware trim/delete producing a new revision with lineage, stats recompute, v3 LeRobot backend, AI suggestions. | Live | [#189](https://github.com/RaaSaaR-org/robot-management-system/pull/189) |
 | **Direct dataset upload** — a LeRobot v2.1 or v3.0 directory goes from your machine straight into the instance's storage, no Hugging Face repository in between: file by file in bounded, resumable parts through the API server, streamed into RustFS (or the local dataset directory in development), then validated exactly like an import. In the app: **Datasets → New dataset → Upload a folder** picks or takes a dropped dataset folder, shows what it holds before anything is sent, and uploads it with progress, resume and cancel. Contract: [`docs/dataset-upload.md`](docs/dataset-upload.md). | Live (API and app) | TASK-480, TASK-481 |
+| **Direct model upload** — a trained checkpoint directory (config, safetensors shards of any size, processor files) goes from a local disk straight into the instance's model store and appears in the model registry, no Hugging Face repository or external URL in between: the dataset upload's resumable part protocol, a model version registered only once every file is stored and verified, with its base model, training dataset, metrics and notes. The registry shows it as "Uploaded directly" with its size and stored files; `rmsctl models download` brings it back. Contract: [`docs/model-upload.md`](docs/model-upload.md). | Live (API, CLI; the app shows uploaded models but has no upload dialog) | TASK-498 |
 
 Two more honesty mechanics worth calling out:
 
@@ -596,6 +597,7 @@ Full contributor guide: [CONTRIBUTING.md](CONTRIBUTING.md).
 | [`docs/vla-integration-guide.md`](docs/vla-integration-guide.md) | VLA models, cameras, inference pipeline |
 | [`docs/dataset-upload.md`](docs/dataset-upload.md) | Uploading a LeRobot dataset directory directly, without Hugging Face: the HTTP contract, resume, limits |
 | [`docs/dataset-download.md`](docs/dataset-download.md) | Taking a stored dataset back out as its LeRobot directory: the file list and raw files with Range |
+| [`docs/model-upload.md`](docs/model-upload.md) | Uploading a trained model checkpoint directory directly into the model store and registry, and fetching it back: the HTTP contract, resume, limits |
 | [`docs/g1-edu-lab-bringup.md`](docs/g1-edu-lab-bringup.md) | Real G1 EDU lab bringup — status and log |
 | [`docs/real-g1-apple-runbook.md`](docs/real-g1-apple-runbook.md) | Robot-day runbook for the apple-to-plate use case |
 | [`docs/vr-teleop-data-collection.md`](docs/vr-teleop-data-collection.md) | VR teleoperation data collection with G1 EDU + Dex3-1 |

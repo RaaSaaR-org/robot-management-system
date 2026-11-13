@@ -39,6 +39,7 @@ import {
 import { storageCleanupJob } from './jobs/storage-cleanup.js';
 import { multipartUploadSweep } from './jobs/multipart-upload-sweep.js';
 import { datasetUploadService } from './services/datasetUpload/DatasetUploadService.js';
+import { modelUploadService } from './services/modelUpload/ModelUploadService.js';
 import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
 import { experimentService } from './services/ExperimentService.js';
 import { digitalTwinService } from './services/DigitalTwinService.js';
@@ -78,6 +79,13 @@ async function resumeInterruptedUploads(): Promise<void> {
     if (resumed.length > 0) logger.info({ datasetIds: resumed }, '[Datasets] Interrupted uploads being finished');
   } catch (error) {
     logger.warn({ err: error instanceof Error ? error.message : error }, '[Datasets] Could not resume interrupted uploads');
+  }
+  // Model checkpoint uploads cut off between `finish` and the registry (TASK-498).
+  try {
+    const resumed = await modelUploadService.resumeInterrupted();
+    if (resumed.length > 0) logger.info({ uploadIds: resumed }, '[Models] Interrupted uploads being finished');
+  } catch (error) {
+    logger.warn({ err: error instanceof Error ? error.message : error }, '[Models] Could not resume interrupted uploads');
   }
 }
 
@@ -233,6 +241,8 @@ async function main() {
   await recoverInterruptedDatasetWork();
   // Uploads nobody has sent to for DATASET_UPLOAD_IDLE_MINUTES are removed (TASK-480).
   datasetUploadService.startReaper();
+  // The same for model uploads, by MODEL_UPLOAD_IDLE_MINUTES (TASK-498).
+  modelUploadService.startReaper();
 
   // Create Express app
   const app = createApp();
@@ -266,6 +276,7 @@ async function main() {
     storageCleanupJob.stopSchedule();
     multipartUploadSweep.stop();
     datasetUploadService.stopReaper();
+    modelUploadService.stopReaper();
     digitalTwinService.stopReaper();
     trainingJobService.stopAllWatchers();
     await syntheticDataWorker.stop();

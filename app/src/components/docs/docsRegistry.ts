@@ -79,6 +79,7 @@ const CATEGORY_MAP: Record<string, string> = {
   'huggingface-publish': 'Training',
   'dataset-upload': 'Training',
   'dataset-download': 'Training',
+  'model-upload': 'Training',
   'research-publications': 'Research',
   'deployment': 'Operations',
   'dev-workflow': 'Operations',

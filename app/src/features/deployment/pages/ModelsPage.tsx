@@ -18,7 +18,9 @@ import { ModelBrowser } from '../components/ModelBrowser';
 import { EditModelModal } from '../components/models/EditModelModal';
 import { RegisterModelModal } from '../components/models/RegisterModelModal';
 import { ModelDetailsModal } from '../components/models/ModelDetailsModal';
-import { getModelDisplayName, resolveSkillName } from '../components/models/modelDisplay';
+import { ModelUploadsPanel } from '../components/models/ModelUploadsPanel';
+import { formatArtifactSize, getModelDisplayName, resolveSkillName } from '../components/models/modelDisplay';
+import { storesFiles } from '../hooks/useModelStorage';
 import type { ModelVersion } from '../types';
 
 export function ModelsPage() {
@@ -56,19 +58,27 @@ export function ModelsPage() {
 
   const archive = async (v: ModelVersion) => {
     const name = getModelDisplayName(v);
+    // A model uploaded to this instance gives its storage back when it is
+    // archived (TASK-498): that is not undoable, so the question says so.
+    const stored = storesFiles(v);
     const ok = await confirm({
-      title: `Archive ${name}?`,
-      description:
-        'It leaves the deploy list, so no new rollout can use it. Models are archived, never deleted: the artifact, its deployments, evaluations and lineage are kept.',
-      confirmLabel: 'Archive',
+      title: stored ? `Archive ${name} and delete its files?` : `Archive ${name}?`,
+      description: stored
+        ? `It leaves the deploy list, and the ${formatArtifactSize(v.artifactSizeBytes ?? 0)} this instance stores for it are deleted for good — keep a copy if you still need the weights. The registry entry, its deployments, evaluations and lineage are kept.`
+        : 'It leaves the deploy list, so no new rollout can use it. Models are archived, never deleted: the artifact, its deployments, evaluations and lineage are kept.',
+      confirmLabel: stored ? 'Archive and delete files' : 'Archive',
       tone: 'danger',
     });
     if (!ok) return;
     try {
       // The registry's delete route (TASK-272): it refuses a model a live
       // deployment or a skill still holds, and records the act.
-      await deploymentApi.archiveModelVersion(v.id);
-      toast.success('Model archived', { description: name });
+      const result = await deploymentApi.archiveModelVersion(v.id);
+      toast.success('Model archived', {
+        description: result.storedFilesRemoved
+          ? `${name} — ${formatArtifactSize(result.freedBytes)} of stored files removed`
+          : name,
+      });
       await fetchModelVersions();
     } catch (err) {
       toast.error("Couldn't archive the model", { description: getErrorMessage(err) });
@@ -86,9 +96,11 @@ export function ModelsPage() {
       <PageHeader
         eyebrow="Build"
         title="Models"
-        description="Every model version this system knows — trained here, imported, or derived from another."
+        description="Every model version this system knows — trained here, uploaded directly, imported, or derived from another."
         actions={registerButton}
       />
+
+      <ModelUploadsPanel onSettled={() => void fetchModelVersions()} />
 
       <ModelBrowser
         modelVersions={modelVersions}

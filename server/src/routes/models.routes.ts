@@ -10,6 +10,8 @@
 import { Router, type Request, type Response } from 'express';
 import { modelVersionRepository } from '../repositories/index.js';
 import { modelRegistryService } from '../services/ModelRegistryService.js';
+import { modelUploadService } from '../services/modelUpload/ModelUploadService.js';
+import { datasetRepository } from '../repositories/index.js';
 import {
   ModelDeploymentStatuses,
   type CreateModelVersionInput,
@@ -202,6 +204,21 @@ modelsRoutes.patch('/versions/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Model version not found' });
     }
 
+    // Deleting an uploaded model removed its files (TASK-498). Its row stays
+    // archived for the record; back on the deployment ladder it would be a
+    // model a rollout can pick with nothing behind its artifactUri.
+    if (input.deploymentStatus !== undefined && input.deploymentStatus !== 'archived') {
+      const storage = await modelUploadService.storageOf(id);
+      if (storage?.filesRemovedAt) {
+        return res.status(409).json({
+          error: `The stored files of this model were removed on ${storage.filesRemovedAt} when it was deleted; `
+            + 'it stays archived. Upload the checkpoint again to use it.',
+          code: 'ARTIFACT_REMOVED',
+          filesRemovedAt: storage.filesRemovedAt,
+        });
+      }
+    }
+
     const modelVersion = await modelRegistryService.update(id, input);
     if (!modelVersion) {
       return res.status(400).json({ error: 'Update rejected — check skillId' });
@@ -219,6 +236,11 @@ modelsRoutes.patch('/versions/:id', async (req: Request, res: Response) => {
  * 'archived' and the row stays, because deployments, evaluations, checkpoints
  * and lineage point at it. 409 while a deployment of it is unfinished or a
  * skill runs it. Answers { id, outcome: 'archived' }.
+ *
+ * A model whose files were uploaded to this instance (TASK-498) gives its
+ * storage back: the files are removed, the answer adds
+ * `storedFilesRemoved: true` and `freedBytes`, and the archived row says when.
+ * Deleting an already archived one still removes files that are left.
  */
 modelsRoutes.delete('/versions/:id', async (req: Request, res: Response) => {
   try {
@@ -238,7 +260,23 @@ modelsRoutes.delete('/versions/:id', async (req: Request, res: Response) => {
         },
       });
     }
-    res.json({ id, outcome: 'archived' });
+    // After the archive, so a model that may not be archived (a deployment
+    // still runs it) keeps its files.
+    const files = await modelUploadService.removeStoredFiles(id);
+    if (files.removed) {
+      await auditBuildAct({
+        resourceType: 'model_version',
+        resourceId: id,
+        action: 'delete',
+        actorId: actorOf(req),
+        metadata: { what: 'stored files', artifactUri: before.artifactUri, freedBytes: files.freedBytes },
+      });
+    }
+    res.json({
+      id,
+      outcome: 'archived',
+      ...(files.removed ? { storedFilesRemoved: true, freedBytes: files.freedBytes } : {}),
+    });
   } catch (err) {
     sendFailure(res, err, 'Failed to archive model version', 500);
   }
@@ -275,7 +313,19 @@ modelsRoutes.get('/versions/:id', async (req: Request, res: Response) => {
     }
 
     const evaluation = await modelVersionRepository.getEvaluationSummary(modelVersion.id);
-    res.json({ modelVersion, evaluation });
+    // Two facts the row only points at (TASK-498): the dataset it names as its
+    // training data, when that still exists, and whether this server stores
+    // the model's files. Both null for a model that says neither.
+    const [dataset, storage] = await Promise.all([
+      modelVersion.datasetId ? datasetRepository.findById(modelVersion.datasetId) : null,
+      modelUploadService.storageOf(modelVersion.id),
+    ]);
+    res.json({
+      modelVersion,
+      evaluation,
+      trainedOnDataset: dataset ? { id: dataset.id, name: dataset.name } : null,
+      storage,
+    });
   } catch (err) {
     sendFailure(res, err, 'Failed to load model version', 500);
   }

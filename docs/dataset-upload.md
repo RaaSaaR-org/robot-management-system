@@ -11,6 +11,8 @@ all work on it unchanged.
 This page is the contract. It is complete: a client can be written from it
 without reading the server. The way back — listing a stored dataset's files
 and fetching them byte for byte — is [Downloading a dataset's files](dataset-download.md).
+A trained model checkpoint goes in by the same part protocol:
+[Uploading a model checkpoint directly](model-upload.md).
 
 - [At a glance](#at-a-glance)
 - [What may be uploaded](#what-may-be-uploaded)

@@ -28,9 +28,12 @@ import type {
   SkillChainsListResponse,
   ExecuteChainRequest,
   ChainExecutionResult,
+  ModelFileManifest,
+  ModelUploadSummary,
   ModelVersion,
   ModelVersionDetail,
   ModelVersionLineage,
+  ModelVersionOrigin,
   RegisterModelVersionInput,
   UpdateModelVersionInput,
 } from '../types';
@@ -73,6 +76,8 @@ const ENDPOINTS = {
   modelVersions: '/models/versions',
   modelVersion: (id: string) => `/models/versions/${id}`,
   modelVersionLineage: (id: string) => `/models/versions/${id}/lineage`,
+  modelVersionFiles: (id: string) => `/models/versions/${id}/files`,
+  modelUploads: '/models/uploads',
 } as const;
 
 /**
@@ -563,9 +568,44 @@ export const deploymentApi = {
   /**
    * Archive a model version — the registry's delete. The row is kept, because
    * deployments, evaluations and lineage point at it. The server answers 409
-   * while a deployment of it is unfinished or a skill runs it.
+   * while a deployment of it is unfinished or a skill runs it. A model that
+   * was uploaded to the instance also has its stored files removed; the
+   * answer then says how many bytes that freed.
    */
-  async archiveModelVersion(id: string): Promise<void> {
-    await apiClient.delete(ENDPOINTS.modelVersion(id));
+  async archiveModelVersion(id: string): Promise<{ storedFilesRemoved: boolean; freedBytes: number }> {
+    const response = await apiClient.delete<{ storedFilesRemoved?: boolean; freedBytes?: number }>(
+      ENDPOINTS.modelVersion(id)
+    );
+    return {
+      storedFilesRemoved: response.data?.storedFilesRemoved === true,
+      freedBytes: response.data?.freedBytes ?? 0,
+    };
+  },
+
+  /**
+   * What the detail route resolves beside the row: the dataset the model
+   * names as its training data, and whether this instance stores its files.
+   */
+  async getModelVersionOrigin(id: string): Promise<ModelVersionOrigin> {
+    const response = await apiClient.get<Partial<ModelVersionOrigin>>(ENDPOINTS.modelVersion(id));
+    return {
+      trainedOnDataset: response.data?.trainedOnDataset ?? null,
+      storage: response.data?.storage ?? null,
+    };
+  },
+
+  /**
+   * The files this instance stores for an uploaded model (first page — a
+   * checkpoint is a dozen files; `nextCursor` says when there are more).
+   */
+  async listModelFiles(id: string): Promise<ModelFileManifest> {
+    const response = await apiClient.get<ModelFileManifest>(ENDPOINTS.modelVersionFiles(id));
+    return response.data;
+  },
+
+  /** Model uploads that are not registered models yet: running, being finished, failed. */
+  async listModelUploads(): Promise<ModelUploadSummary[]> {
+    const response = await apiClient.get<{ uploads?: ModelUploadSummary[] }>(ENDPOINTS.modelUploads);
+    return response.data?.uploads ?? [];
   },
 };

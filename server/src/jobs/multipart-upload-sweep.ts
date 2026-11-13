@@ -26,6 +26,7 @@ import {
   type MultipartUploadInfo,
 } from '../storage/index.js';
 import { datasetUploadService } from '../services/datasetUpload/DatasetUploadService.js';
+import { modelUploadService } from '../services/modelUpload/ModelUploadService.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_AGE_HOURS = 24;
@@ -55,8 +56,9 @@ export interface MultipartSweepOptions {
   now?: () => number;
   /**
    * Key prefixes whose multipart uploads are open on purpose, whatever their
-   * age: a direct dataset upload (TASK-480) opens one per large file at start
-   * and may be resumed for days. Defaults to the uploads still running.
+   * age: a direct dataset upload (TASK-480) or model upload (TASK-498) opens
+   * one per large file at start and may be resumed for days. Defaults to the
+   * uploads still running.
    */
   keepPrefixes?: () => Promise<string[]>;
 }
@@ -106,7 +108,10 @@ export class MultipartUploadSweep {
     this.maxAgeMs = options.maxAgeMs ?? multipartMaxAgeMs;
     this.intervalMs = options.intervalMs ?? multipartSweepIntervalMs;
     this.now = options.now ?? Date.now;
-    this.keepPrefixes = options.keepPrefixes ?? (() => datasetUploadService.openPrefixes());
+    this.keepPrefixes = options.keepPrefixes ?? (async () => [
+      ...await datasetUploadService.openPrefixes(),
+      ...await modelUploadService.openPrefixes(),
+    ]);
   }
 
   /** One sweep over every bucket. Never throws; overlapping calls do nothing. */

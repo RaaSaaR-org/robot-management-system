@@ -664,6 +664,9 @@ export const handlers = [
   http.get('/api/digital-twins', () => HttpResponse.json([])),
   http.get('/api/updates', () => HttpResponse.json([])),
   http.get('/api/models/versions', () => HttpResponse.json({ modelVersions: [] })),
+  // The Models page asks which checkpoint uploads are still on their way
+  // (TASK-498). The demo has none; without this the GET catch-all answers 404.
+  http.get('/api/models/uploads', () => HttpResponse.json({ uploads: [] })),
   http.get('/api/skills', () => HttpResponse.json({
     skills: [],
     pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },

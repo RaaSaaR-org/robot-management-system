@@ -63,6 +63,7 @@ import { datasetFileRoutes } from './routes/dataset-files.routes.js';
 import { datasetViewRoutes } from './routes/dataset-views.routes.js';
 import { deploymentsRoutes } from './routes/deployments.routes.js';
 import { modelsRoutes } from './routes/models.routes.js';
+import { modelUploadRoutes, isModelUploadPart } from './routes/model-uploads.routes.js';
 import { skillsRoutes } from './routes/skills.routes.js';
 import { embodimentsRoutes } from './routes/embodiments.routes.js';
 import { teleoperationRoutes } from './routes/teleoperation.routes.js';
@@ -156,10 +157,13 @@ export const UNGUARDED_WRITE_MOUNTS = [
 // size them; RATE_LIMIT_DISABLED=true turns all of it off for dev and tests.
 const rateLimitConfig = readRateLimitConfig();
 
-// A dataset is hundreds to thousands of upload parts (TASK-480); they are
-// counted by no budget and bounded by the upload service's own concurrency
-// limit instead.
-const rateLimitOptions = { exempt: isDatasetUploadPart };
+// A dataset is hundreds to thousands of upload parts (TASK-480), a model
+// checkpoint hundreds (TASK-498); they are counted by no budget and bounded by
+// the upload services' own concurrency limits instead.
+const rateLimitOptions = {
+  exempt: (method: string, path: string): boolean =>
+    isDatasetUploadPart(method, path) || isModelUploadPart(method, path),
+};
 
 // Strict rate limit for credential endpoints (login, register, password reset):
 // 5 req/min per IP. Session upkeep (/me, /refresh, /logout) is not counted —
@@ -401,6 +405,10 @@ export function createApp(): Express {
   // Deployment routes (protected) - VLA model fleet deployment
   app.use('/api/deployments', ...protect, deploymentsRoutes);
 
+  // Direct model upload and the stored files of a model (TASK-498): its own
+  // router, ahead of the registry. `/uploads…` and `/versions/:id/files…` are
+  // paths the registry router does not have.
+  app.use('/api/models', ...protect, modelUploadRoutes);
   // Model versions (listing for the deployment UI)
   app.use('/api/models', ...protect, modelsRoutes);
 
