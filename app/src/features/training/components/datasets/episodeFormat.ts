@@ -64,11 +64,42 @@ export function featureNames(names: unknown): string[] {
 }
 
 /**
- * One label per channel of a `width`-wide vector from its joint groups: the
- * group name and the index inside it (`left_arm[3]`). A channel no group covers
- * is labelled by its position in the vector (`ch[40]`).
+ * A name that says nothing about the joint: a bare number, or a generic stem
+ * with a number (`motor_0`, `dim_3`, `joint 4`, `q7`, `action[2]`). pusht and
+ * most converted datasets carry these; a G1 recording carries
+ * `left_shoulder_pitch_joint`.
  */
-export function channelLabels(groups: ChannelGroup[], width: number): string[] {
+const PLACEHOLDER_NAME =
+  /^(?:motors?|dims?|ch|chan|channels?|joints?|axis|axes|state|action|obs|observation|features?|values?|idx|index|dof|[a-z])?[\s_.\-[(]*\d+[\])]?$/i;
+
+export function isPlaceholderName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed === '' || PLACEHOLDER_NAME.test(trimmed);
+}
+
+/**
+ * The names of a `width`-wide vector when they really name its channels: one
+ * per channel, all different, none a placeholder. Null otherwise — GR00T
+ * exports put the single name `observation_to_policy` on 43 channels, and
+ * `motor_0`…`motor_5` is no better than an index.
+ */
+export function realChannelNames(names: readonly string[] | undefined, width: number): string[] | null {
+  if (!names || width <= 0 || names.length !== width) return null;
+  if (names.some(isPlaceholderName)) return null;
+  if (new Set(names).size !== names.length) return null;
+  return [...names];
+}
+
+/**
+ * One label per channel of a `width`-wide vector that has joint groups. The
+ * joint's own name when `names` (out of info.json) really names every channel
+ * — "arms[5]" says nothing where the vector alternates left and right — and
+ * otherwise the group name and the index inside it (`left_arm[3]`), a channel
+ * no group covers by its position in the vector (`ch[40]`).
+ */
+export function channelLabels(groups: ChannelGroup[], width: number, names?: readonly string[]): string[] {
+  const real = realChannelNames(names, Math.max(0, width));
+  if (real) return real;
   const labels = Array.from({ length: Math.max(0, width) }, (_, i) => `ch[${i}]`);
   for (const group of groups) {
     for (let i = Math.max(0, group.start); i < Math.min(group.end, labels.length); i += 1) {
@@ -76,6 +107,41 @@ export function channelLabels(groups: ChannelGroup[], width: number): string[] {
     }
   }
   return labels;
+}
+
+/**
+ * The same names without a suffix they all share (`_joint`), for a legend that
+ * has to fit fourteen of them. Dropped only when every name ends in it and
+ * something is left of each, so two channels can never end up with one label.
+ */
+export function shortChannelNames(names: readonly string[]): string[] {
+  const suffix = '_joint';
+  if (names.length < 2 || !names.every((n) => n.length > suffix.length && n.endsWith(suffix))) return [...names];
+  return names.map((n) => n.slice(0, -suffix.length));
+}
+
+/** Which side of the body a channel belongs to, and the joint it is there. */
+export interface ChannelSide {
+  side: 'left' | 'right';
+  /** The name without its side: `left_elbow` and `right_elbow` are both `elbow`. */
+  joint: string;
+}
+
+const SIDE_PREFIX = /^k?(left|right)[\s_.\-]*(.+)$/i;
+
+/**
+ * Left/right pairs among these channels: an entry per channel, or null when
+ * the set is not two-sided (a name without `left_`/`right_`, or only one side
+ * present — `left_arm[0]`…`left_arm[6]` is one arm, not a pair).
+ */
+export function channelSides(names: readonly string[]): ChannelSide[] | null {
+  const sides: ChannelSide[] = [];
+  for (const name of names) {
+    const match = SIDE_PREFIX.exec(name);
+    if (!match) return null;
+    sides.push({ side: match[1]!.toLowerCase() as ChannelSide['side'], joint: match[2]! });
+  }
+  return sides.some((s) => s.side === 'left') && sides.some((s) => s.side === 'right') ? sides : null;
 }
 
 /** `left_arm` → `left arm`, for a button. */

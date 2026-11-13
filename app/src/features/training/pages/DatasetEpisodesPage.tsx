@@ -47,7 +47,8 @@ import { CuratePanel } from '../components/datasets/CuratePanel';
 import { JointChartPanel, RewardCurvePanel } from '../components/datasets/TrajectoryPanels';
 import { AnnotationsPanel } from '../components/datasets/AnnotationsPanel';
 import { formatDuration } from '../components/datasets/datasetFormat';
-import { formatLerobotVersion, formatRepoAtRevision } from '../components/datasets/importFormat';
+import { formatLerobotVersion } from '../components/datasets/importFormat';
+import { DatasetProvenance } from '../components/datasets/DatasetProvenance';
 import { DatasetStatsPanel } from '../components/datasets/DatasetStatsPanel';
 import { cameraKeys, channelLabels, featureNames } from '../components/datasets/episodeFormat';
 import { useDatasetViews } from '../hooks/useDatasetViews';
@@ -187,18 +188,18 @@ export function DatasetEpisodesPage() {
 
   // GR00T-style datasets put one placeholder name on a 43-wide vector and keep
   // the real layout in meta/modality.json (TASK-476): label by group and index.
-  const jointGroups = useMemo(
-    () => (modality?.action.length ? modality.action : modality?.state) ?? [],
-    [modality],
-  );
+  // A dataset that has both groups and a real name per channel keeps the names.
+  const groupedVector = modality?.action.length ? 'action' : 'state';
+  const jointGroups = useMemo(() => modality?.[groupedVector] ?? [], [modality, groupedVector]);
   const jointNames = useMemo(() => {
     if (jointGroups.length > 0) {
-      const shape = (features as Record<string, { shape?: unknown }> | null | undefined)?.['action']?.shape;
+      const key = groupedVector === 'action' ? 'action' : 'observation.state';
+      const shape = (features as Record<string, { shape?: unknown }> | null | undefined)?.[key]?.shape;
       const declared = Array.isArray(shape) && typeof shape[0] === 'number' ? shape[0] : 0;
-      return channelLabels(jointGroups, Math.max(declared, ...jointGroups.map((g) => g.end)));
+      return channelLabels(jointGroups, Math.max(declared, ...jointGroups.map((g) => g.end)), infoNames[groupedVector]);
     }
     return infoNames.action.length ? infoNames.action : DEFAULT_JOINTS;
-  }, [features, jointGroups, infoNames]);
+  }, [features, jointGroups, groupedVector, infoNames]);
 
   // The codec each camera's video is stored in, so the player can say when
   // this browser cannot play it instead of showing a blank box (TASK-478).
@@ -573,15 +574,8 @@ export function DatasetEpisodesPage() {
               {formatLerobotVersion(dataset.lerobotVersion) && (
                 <StatusTag tone="neutral" data-testid="dataset-lerobot-version">{formatLerobotVersion(dataset.lerobotVersion)}</StatusTag>
               )}
-              {dataset.huggingFaceRepoId && (
-                <span
-                  className="break-all font-mono text-xs text-ink-tertiary"
-                  title={dataset.sourceRevision ? `${dataset.huggingFaceRepoId}@${dataset.sourceRevision}` : dataset.huggingFaceRepoId}
-                  data-testid="dataset-source"
-                >
-                  {formatRepoAtRevision(dataset.huggingFaceRepoId, dataset.sourceRevision)}
-                </span>
-              )}
+              {/* Said as provenance, the repo linked at its commit (TASK-494) */}
+              <DatasetProvenance dataset={dataset} />
             </>
           )
         }
