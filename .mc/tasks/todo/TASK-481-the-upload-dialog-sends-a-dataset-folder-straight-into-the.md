@@ -185,9 +185,19 @@ Also looked at: the dialog at 390 px and in the light theme.
 
 ### Gates
 
-`npx tsc`, `npx vitest run` (299 files, 3,915 tests), `npm run build`, and
+`npx tsc`, `npx vitest run` (299 files, 3,917 tests), `npm run build`, and
 `npx playwright test` — which builds with `VITE_DEMO_MODE=true` and runs the demo gate —
 275 passed. No server change.
+
+The first CI run failed three dialog tests that passed locally: CI runs the app's tests
+on Node 20, where `crypto.subtle.digest` rejects a buffer from the test realm, and the
+engine treated that as a network failure and went into backoff. Reproduced with Node 20
+and fixed in the engine rather than the test, since both halves were wrong in a browser
+too: a checksum that cannot be computed now sends the part without `X-Chunk-Sha256`
+(the header is optional), and a failure that happened in the browser — a file moved or
+deleted after it was picked — stops the upload at once and names the file instead of
+being retried six times. The real run above was repeated on the final code (Firefox and
+Chromium, same numbers); the parts carry `X-Chunk-Sha256` there.
 
 ### Left for later
 
