@@ -3,7 +3,7 @@ id: "TASK-499"
 aliases: []
 title: "A simulated robot's finished task clears on the fleet, its robot type reads Unitree G1, and its Voice and Teleop tabs say what a simulation lacks"
 slug: "a-simulated-robot-s-finished-task-clears-on-the-fleet-its"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
