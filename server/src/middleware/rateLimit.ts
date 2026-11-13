@@ -7,7 +7,8 @@
  *     an interactive SPA, where one page view is a dozen requests.
  *   - **dataset browsing** — the reads the episode browser makes on every
  *     click: episode list, frames, statistics, the video (three or four Range
- *     requests per play) and its ticket. They have their own, larger budget so
+ *     requests per play) and its ticket — and the reads a dataset download
+ *     makes: the file manifest and each stored file. They have their own, larger budget so
  *     that watching episodes can never starve the rest of the API, and the
  *     rest of the API can never blank a video.
  *   - **writes** — every non-read request, counted a second time against a
@@ -123,10 +124,11 @@ export function parseTrustProxy(raw: string | undefined): TrustProxySetting {
 const READ_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
- * `/api/datasets/:id/` followed by what the episode browser reads: the episode
- * list, one episode's frames and videos, statistics, joint groups.
+ * `/api/datasets/:id/` followed by what the episode browser reads — the episode
+ * list, one episode's frames and videos, statistics, joint groups — or what a
+ * download reads: the file manifest and each stored file (TASK-496).
  */
-const DATASET_READ_PATH = /^\/api\/datasets\/[^/]+\/(?:episodes(?:\/.*)?|stats|modality)\/?$/;
+const DATASET_READ_PATH = /^\/api\/datasets\/[^/]+\/(?:episodes(?:\/.*)?|files(?:\/content)?|stats|modality)\/?$/;
 /** The ticket a `<video>` plays with: a POST, but it changes nothing. */
 const DATASET_TICKET_PATH = /^\/api\/datasets\/[^/]+\/video-ticket\/?$/;
 

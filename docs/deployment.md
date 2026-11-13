@@ -458,7 +458,7 @@ window (`RATE_LIMIT_WINDOW_MS`, one minute by default):
 | Budget | Variable | Production default | Counts |
 |--------|----------|--------------------|--------|
 | General | `RATE_LIMIT_MAX` | 1200 | Everything under `/api` that is not dataset browsing |
-| Dataset browsing | `RATE_LIMIT_MEDIA_MAX` | 3000 | `GET /api/datasets/:id/episodes…` (list, frames, video with Range), `/stats`, `/modality`, and `POST …/video-ticket` |
+| Dataset browsing | `RATE_LIMIT_MEDIA_MAX` | 3000 | `GET /api/datasets/:id/episodes…` (list, frames, video with Range), `/stats`, `/modality`, `POST …/video-ticket`, and what a dataset download reads: `GET /api/datasets/:id/files` and `…/files/content` |
 | Writes | `RATE_LIMIT_WRITE_MAX` | 300 | Every non-GET request, in addition to the general budget |
 
 The parts of a direct dataset upload (`PUT …/upload/files/:n/parts/:n`) are
@@ -526,7 +526,7 @@ each network counts down from its own budget.
 | `CORS_ORIGINS` | No | localhost ports | Comma-separated allowed origins |
 | `RATE_LIMIT_DISABLED` | No | `false` | Disable rate limiting (dev only) |
 | `RATE_LIMIT_MAX` | No | `1200` in production, else `5000` | General API requests per client address per window — everything under `/api` except dataset browsing. See [Rate limiting](#rate-limiting) |
-| `RATE_LIMIT_MEDIA_MAX` | No | `3000` in production, else `5000` | Dataset-browsing requests per client per window: episode list, frames, statistics, episode video (incl. Range requests) and the video ticket |
+| `RATE_LIMIT_MEDIA_MAX` | No | `3000` in production, else `5000` | Dataset-browsing requests per client per window: episode list, frames, statistics, episode video (incl. Range requests), the video ticket, and a dataset download's file list and files |
 | `RATE_LIMIT_WRITE_MAX` | No | `300` in production, else `5000` | Non-GET requests per client per window, counted in addition to the general budget |
 | `RATE_LIMIT_WINDOW_MS` | No | `60000` | Length of the counting window for the three budgets above |
 | `TRUST_PROXY` | No | `1` | Reverse proxies between clients and the server: a hop count (`1` one ingress, `2` Cloudflare + one ingress, `0`/`false` none) or a list of proxy addresses/CIDRs. Decides which address rate limits and audit logs see. `true` is refused |

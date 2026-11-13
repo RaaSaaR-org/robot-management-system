@@ -59,6 +59,7 @@ import { storageRoutes } from './routes/storage.routes.js';
 import { getRustFSStatus, probeRustFS } from './storage/index.js';
 import { datasetRoutes } from './routes/datasets.routes.js';
 import { datasetUploadRoutes, isDatasetUploadPart } from './routes/dataset-uploads.routes.js';
+import { datasetFileRoutes } from './routes/dataset-files.routes.js';
 import { datasetViewRoutes } from './routes/dataset-views.routes.js';
 import { deploymentsRoutes } from './routes/deployments.routes.js';
 import { modelsRoutes } from './routes/models.routes.js';
@@ -392,6 +393,9 @@ export function createApp(): Express {
   // same reason as the views. `/uploads` and `/:id/upload` do not collide with
   // the presigned-archive routes `/:id/upload/initiate|complete` further down.
   app.use('/api/datasets', ...protect, datasetUploadRoutes);
+  // The stored files of a dataset, for taking it back out (TASK-496): `/:id/files`
+  // and `/:id/files/content`, which nothing in the main router matches.
+  app.use('/api/datasets', ...protect, datasetFileRoutes);
   app.use('/api/datasets', ...protect, datasetRoutes);
 
   // Deployment routes (protected) - VLA model fleet deployment

@@ -52,6 +52,7 @@ and curating it creates a new version while the original stays intact.
 | Record demonstrations on a robot | [Recording sessions](/data-collection) | [Two-person data collection](data-collection-two-person.md), [VR teleoperation](vr-teleop-data-collection.md) |
 | Import a dataset from Hugging Face | [Datasets](/datasets) | [Demo fleet → Datasets to go with them](demo-fleet.md#datasets-to-go-with-them) |
 | Upload a dataset directory from your own machine, with no Hugging Face repository in between | [Datasets](/datasets) | [Uploading a dataset directly](dataset-upload.md) — the complete API contract, resumable, file by file |
+| Take a stored dataset back out as its LeRobot directory, byte for byte | `rmsctl datasets download <id>` | [Downloading a dataset's files](dataset-download.md) — file list and raw files with Range |
 | Browse episodes, watch the camera video and read the joint chart | [Datasets](/datasets) → a dataset → Episodes | [The data engine → The pipeline](platform.md#the-pipeline) |
 | Trim takes and drop failures without losing the original | [Datasets](/datasets) | [Curation keeps the original](platform.md#curation-keeps-the-original) |
 | Publish a recorded dataset to the Hugging Face Hub | [Datasets](/datasets) | [Publishing to Hugging Face](huggingface-publish.md) |

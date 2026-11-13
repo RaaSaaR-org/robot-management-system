@@ -254,6 +254,8 @@ logout.
 | GET | `/:id` | Get dataset |
 | PUT | `/:id` | Update metadata |
 | DELETE | `/:id` | Delete dataset |
+| GET | `/:id/files` | The dataset's stored files, paginated (`limit` 1–1000, `after` = previous `nextCursor`) → `{datasetId, storage, limit, files: [{path, size, etag?, sha256?}], nextCursor}`. Contract: `docs/dataset-download.md` |
+| GET | `/:id/files/content?path=` | One stored file as raw bytes (`application/octet-stream`), `Range` supported (`206`, `416 RANGE_NOT_SATISFIABLE`); streamed from RustFS or the local dataset directory, never redirected |
 | POST | `/:id/upload/initiate` | Get presigned upload URL |
 | POST | `/:id/upload/complete` | Mark upload done, start validation |
 | GET | `/:id/stats` | Normalization stats per feature (`stats.json`, or aggregated from a v2.1 `episodes_stats.jsonl`) |
