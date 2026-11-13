@@ -402,6 +402,12 @@ archived keeps them. Afterwards `storage.filesRemovedAt` is set, the file list
 and the files answer `410 ARTIFACT_REMOVED`, and the archived row still says
 what was once stored. Deleting it again is harmless.
 
+Such a model stays archived: `PATCH /api/models/versions/:id` with a
+`deploymentStatus` other than `archived` answers `409 ARTIFACT_REMOVED`,
+because a rollout could otherwise pick a model with nothing behind its
+`artifactUri`. Upload the checkpoint again to use it — the name and version
+of an archived model are free.
+
 ## Errors
 
 Every refusal is JSON:

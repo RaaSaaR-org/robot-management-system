@@ -195,10 +195,11 @@ the upload's base path, `dataset_download.rs` a `Kind`).
 
 ## Notes
 
-- The demo instance's object store is 5 Gi (deployments repo: `rustfs.storage.size`,
-  `datasetUploadStoreCapacityBytes`) and already holds 1.7 GB. The g11 checkpoint is
-  6.9 GB: until that volume is grown, the instance refuses its upload at start with
-  `507 INSUFFICIENT_STORAGE` — as designed, and before a byte is sent.
+- The demo instance's object store was 5 Gi when this was built; the deployments repo
+  has since grown it to 20 Gi with `datasetUploadStoreCapacityBytes` at 19 Gi
+  (deployments #28, #30). With 1.8 GB held, the 6.9 GB g11 checkpoint fits once that
+  is rolled out; a store that is too small still refuses at start with
+  `507 INSUFFICIENT_STORAGE`, before a byte is sent.
 - Not done: an "Upload model" dialog in the app (see Decisions).
 - Measured on 2026-11-13 against a local server, RustFS and Postgres, with the real g11
   checkpoint read from a hard disk: upload 173 s in all — 88 s hashing the 15 files on
@@ -210,3 +211,12 @@ the upload's base path, `dataset_download.rs` a `Kind`).
   (`409 UPLOAD_IN_PROGRESS`, with the open upload's id), so a retried start cannot store
   a checkpoint twice.
 - The rmsctl half is RaaSaaR-org/rmsctl `feat/models-upload`.
+- Review on 2026-11-13 (second pass, same PR): an uploaded model whose files were
+  removed by its deletion can no longer be moved off `archived`
+  (`PATCH /api/models/versions/:id` answers `409 ARTIFACT_REMOVED`) — it would have been
+  a deployable model with nothing behind its `artifactUri`. On the Models table the
+  "Derived from" column now gives way below 1440 px, so the new Size column and the row
+  menu both fit at 1280. Re-run against a local server, RustFS and Postgres: the
+  synthetic round trips, 300 aborted downloads of a 1.1 GB file (the store's sockets
+  were all given back, the server's memory stayed flat at about 0.4 GB), a dataset
+  upload and download for regression, and g11 again — 178 s up, 9 s down, identical.

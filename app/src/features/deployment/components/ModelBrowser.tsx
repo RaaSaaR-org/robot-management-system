@@ -144,7 +144,9 @@ export function ModelBrowser({
       cell: (v) => <StatusTag status={v.deploymentStatus} dot />,
     },
     {
-      key: 'parent', header: 'Derived from', hideBelow: 'lg',
+      // The first to go when the Size column needs its room: at 1280 both do
+      // not fit beside the row menu, and most models are derived from nothing.
+      key: 'parent', header: 'Derived from', hideBelow: 'wide',
       cell: (v) => {
         const name = parentName(v);
         return name ? <span className="text-ink-secondary">{name}</span> : null;

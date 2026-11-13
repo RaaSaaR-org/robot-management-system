@@ -204,6 +204,21 @@ modelsRoutes.patch('/versions/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Model version not found' });
     }
 
+    // Deleting an uploaded model removed its files (TASK-498). Its row stays
+    // archived for the record; back on the deployment ladder it would be a
+    // model a rollout can pick with nothing behind its artifactUri.
+    if (input.deploymentStatus !== undefined && input.deploymentStatus !== 'archived') {
+      const storage = await modelUploadService.storageOf(id);
+      if (storage?.filesRemovedAt) {
+        return res.status(409).json({
+          error: `The stored files of this model were removed on ${storage.filesRemovedAt} when it was deleted; `
+            + 'it stays archived. Upload the checkpoint again to use it.',
+          code: 'ARTIFACT_REMOVED',
+          filesRemovedAt: storage.filesRemovedAt,
+        });
+      }
+    }
+
     const modelVersion = await modelRegistryService.update(id, input);
     if (!modelVersion) {
       return res.status(400).json({ error: 'Update rejected — check skillId' });
