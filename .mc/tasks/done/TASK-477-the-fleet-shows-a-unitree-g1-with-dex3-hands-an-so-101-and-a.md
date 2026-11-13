@@ -3,7 +3,7 @@ id: "TASK-477"
 aliases: []
 title: "The fleet shows a Unitree G1 with Dex3 hands, an SO-101 and a MicroDuck before their agents connect"
 slug: "the-fleet-shows-a-unitree-g1-with-dex3-hands-an-so-101-and-a"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
