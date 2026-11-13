@@ -913,6 +913,36 @@ export interface EpisodeMeta {
   videoWindows?: Record<string, EpisodeVideoWindow>;
 }
 
+/** A named slice `[start, end)` of a state or action vector (`meta/modality.json`). */
+export interface ChannelGroup {
+  name: string;
+  start: number;
+  end: number;
+}
+
+/** The joint groups of a dataset's `observation.state` and `action` vectors. */
+export interface DatasetModality {
+  state: ChannelGroup[];
+  action: ChannelGroup[];
+}
+
+/** One feature's statistics as `meta/stats.json` stores them; vectors are per channel. */
+export interface FeatureStats {
+  min?: unknown;
+  max?: unknown;
+  mean?: unknown;
+  std?: unknown;
+  count?: unknown;
+}
+
+/** `GET /datasets/:id/stats`. `stats` is keyed by feature (`observation.state`, `action`, …). */
+export interface DatasetStatsResponse {
+  datasetId: string;
+  hasStats: boolean;
+  stats?: Record<string, FeatureStats>;
+  computedAt?: string;
+}
+
 export interface FrameData {
   frameIndex: number;
   timestamp: number;

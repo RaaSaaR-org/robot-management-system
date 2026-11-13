@@ -171,7 +171,7 @@ vi.mock('uuid', () => ({
   v4: vi.fn(() => 'generated-uuid'),
 }));
 
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { datasetService, DatasetService, datasetStorageRoot, objectStoragePrefixOf } from '../DatasetService.js';
 import {
   datasetRepository,
@@ -1232,6 +1232,147 @@ describe('getStats', () => {
     expect(result.hasStats).toBe(true);
     expect(result.stats).toEqual({ mean: [1] });
     expect(result.computedAt).toBe('2026-01-02T00:00:00.000Z');
+  });
+});
+
+// ===========================================================================
+// GR00T-style v2.1 metadata (TASK-476): episodes_stats.jsonl and modality.json
+// ===========================================================================
+
+describe('a GR00T v2.1 dataset: aggregated stats and joint groups', () => {
+  const FIXTURES = join(__dirname, '..', 'lerobot', '__tests__', 'fixtures', 'gr00t-apple-to-plate');
+  const fixtureFile = (name: string) => readFileSync(join(FIXTURES, name));
+  const info = JSON.parse(fixtureFile('info.json').toString());
+  let localRoot: string;
+
+  beforeAll(async () => {
+    localRoot = await mkdtemp(join(tmpdir(), 'gr00t-meta-'));
+    await mkdir(join(localRoot, 'meta'), { recursive: true });
+    for (const name of ['info.json', 'modality.json', 'episodes_stats.jsonl']) {
+      await writeFile(join(localRoot, 'meta', name), fixtureFile(name));
+    }
+  });
+  afterAll(async () => {
+    await rm(localRoot, { recursive: true, force: true });
+  });
+
+  /** The same three meta files, served from the fake RustFS under `ds1/`. */
+  function serveFromRustFs(present: string[]) {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    const keys = new Set(present.map((name) => `ds1/meta/${name}`));
+    rustfsExists.mockImplementation(async (_bucket: string, key: string) => keys.has(key));
+    rustfsDownload.mockImplementation(async (_bucket: string, key: string) => {
+      if (!keys.has(key)) throw Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' });
+      return fixtureFile(key.replace('ds1/meta/', ''));
+    });
+  }
+
+  it('aggregates episodes_stats.jsonl for a dataset on local disk and keeps the result', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ storagePath: `${localRoot}/`, statsJson: {}, infoJson: info }),
+    );
+    const result = await datasetService.getStats('ds1');
+    expect(result.hasStats).toBe(true);
+    const state = (result.stats as Record<string, { mean: number[]; count: number[] }>)['observation.state']!;
+    expect(state.mean).toHaveLength(43);
+    expect(state.count).toEqual([1603]);
+    expect(result.computedAt).toBeDefined();
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { statsJson: result.stats });
+  });
+
+  it('aggregates episodes_stats.jsonl for a dataset stored in RustFS', async () => {
+    serveFromRustFs(['episodes_stats.jsonl']);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset({ statsJson: {} }));
+    const result = await datasetService.getStats('ds1');
+    expect(result.hasStats).toBe(true);
+    expect(Object.keys(result.stats!)).toEqual(
+      expect.arrayContaining(['observation.state', 'action']),
+    );
+  });
+
+  it('does not re-read the files when the row already has stats', async () => {
+    serveFromRustFs(['episodes_stats.jsonl']);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset({ statsJson: { action: { mean: [1] } } }));
+    const result = await datasetService.getStats('ds1');
+    expect(result.stats).toEqual({ action: { mean: [1] } });
+    expect(rustfsDownload).not.toHaveBeenCalled();
+    expect(datasetRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('answers hasStats=false, not an error, when the store fails mid-read', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    rustfsExists.mockRejectedValue(Object.assign(new Error('connection reset'), { name: 'TimeoutError' }));
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset({ statsJson: {} }));
+    const result = await datasetService.getStats('ds1');
+    expect(result.hasStats).toBe(false);
+    expect(datasetRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('reads the joint groups from modality.json on local disk', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ storagePath: `${localRoot}/`, infoJson: info }),
+    );
+    const { modality } = await datasetService.getModality('ds1');
+    expect(modality!.state.map((g) => g.name)).toEqual(
+      ['left_leg', 'right_leg', 'waist', 'left_arm', 'right_arm', 'left_hand', 'right_hand'],
+    );
+    expect(modality!.action).toEqual(modality!.state);
+  });
+
+  it('reads the joint groups from modality.json in RustFS', async () => {
+    serveFromRustFs(['modality.json']);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset({ infoJson: info }));
+    const { modality } = await datasetService.getModality('ds1');
+    expect(modality!.state.find((g) => g.name === 'left_arm')).toEqual({ name: 'left_arm', start: 15, end: 22 });
+  });
+
+  it('answers a view with the joint groups of the dataset that holds its bytes', async () => {
+    // A view's own storagePath is empty; the files are its root's.
+    const { datasetViewService } = await import('../DatasetViewService.js');
+    const resolve = vi.spyOn(datasetViewService, 'resolve').mockResolvedValue(
+      { rootDatasetId: 'root1', episodes: [], isView: true, depth: 1, viewChain: ['view1'] },
+    );
+    vi.mocked(datasetRepository.findById).mockImplementation(async (id: string) =>
+      (id === 'view1'
+        ? makeDataset({ id: 'view1', storagePath: '', infoJson: info })
+        : makeDataset({ id: 'root1', storagePath: `${localRoot}/`, infoJson: info })) as never,
+    );
+    try {
+      const answer = await datasetService.getModality('view1');
+      expect(answer.datasetId).toBe('view1');
+      expect(answer.modality!.action.find((g) => g.name === 'right_hand')).toEqual({ name: 'right_hand', start: 36, end: 43 });
+    } finally {
+      resolve.mockRestore();
+    }
+  });
+
+  it('answers modality=null for a view whose chain cannot be resolved', async () => {
+    const { datasetViewService } = await import('../DatasetViewService.js');
+    const resolve = vi.spyOn(datasetViewService, 'resolve').mockRejectedValue(new Error('View selects no episodes'));
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset({ id: 'view1', storagePath: '' }));
+    try {
+      expect(await datasetService.getModality('view1')).toEqual({ datasetId: 'view1', modality: null });
+    } finally {
+      resolve.mockRestore();
+    }
+  });
+
+  it('answers modality=null for a dataset without modality.json', async () => {
+    serveFromRustFs([]);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    expect(await datasetService.getModality('ds1')).toEqual({ datasetId: 'ds1', modality: null });
+  });
+
+  it('answers modality=null when modality.json is not JSON', async () => {
+    serveFromRustFs(['modality.json']);
+    rustfsDownload.mockResolvedValue(Buffer.from('<html>not json</html>'));
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    expect((await datasetService.getModality('ds1')).modality).toBeNull();
+  });
+
+  it('throws for an unknown dataset', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(null as never);
+    await expect(datasetService.getModality('nope')).rejects.toThrow('Dataset not found: nope');
   });
 });
 

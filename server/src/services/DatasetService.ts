@@ -25,6 +25,7 @@ import { modelStorage, BUCKETS } from '../storage/model-storage.js';
 import { getRustFSClient, isRustFSConfigured, isRustFSInitialized } from '../storage/rustfs-client.js';
 import { refuseWhileObjectStorageDown } from '../storage/availability.js';
 import { DatasetStoreError, openDatasetTree } from './lerobot/DatasetTree.js';
+import { EPISODE_STATS_PATH, MODALITY_PATH, aggregateEpisodeStats, parseModality } from './lerobot/datasetMeta.js';
 
 /**
  * What a validation run concluded (TASK-217 review).
@@ -146,6 +147,7 @@ import type {
   DatasetValidationProgress,
   InitiateUploadResponse,
   DatasetStatsResponse,
+  DatasetModalityResponse,
   DatasetEvent,
   DatasetEventCallback,
   DatasetExpectationChange,
@@ -2136,14 +2138,78 @@ export class DatasetService extends EventEmitter {
       throw new Error(`Dataset not found: ${id}`);
     }
 
-    const hasStats = dataset.statsJson && Object.keys(dataset.statsJson).length > 0;
+    let stats = dataset.statsJson as Record<string, unknown> | undefined;
+    let computedAt = dataset.updatedAt;
+    if (!stats || Object.keys(stats).length === 0) {
+      // A v2.1 dataset validated before TASK-476 has an empty `statsJson` and a
+      // `meta/episodes_stats.jsonl` nobody read. Aggregate it once and keep it.
+      stats = await this.statsFromEpisodeStats(dataset.storagePath);
+      if (stats) {
+        computedAt = new Date();
+        await datasetRepository.update(id, { statsJson: stats as LeRobotStats });
+      }
+    }
+    const hasStats = Boolean(stats && Object.keys(stats).length > 0);
 
     return {
       datasetId: id,
       hasStats,
-      stats: hasStats ? dataset.statsJson as LeRobotStatsV3 : undefined,
-      computedAt: hasStats ? dataset.updatedAt.toISOString() : undefined,
+      stats: hasStats ? stats : undefined,
+      computedAt: hasStats ? computedAt.toISOString() : undefined,
     };
+  }
+
+  /**
+   * Dataset-wide statistics aggregated from `meta/episodes_stats.jsonl`, or
+   * undefined when the file is absent, unusable or the store cannot be reached.
+   * Never throws: statistics are optional and their absence is an answer.
+   */
+  private async statsFromEpisodeStats(storagePath: string): Promise<Record<string, unknown> | undefined> {
+    try {
+      const tree = storagePath ? openDatasetTree(storagePath) : null;
+      if (!tree || !(await tree.stat(EPISODE_STATS_PATH))) return undefined;
+      const { stats } = aggregateEpisodeStats((await tree.read(EPISODE_STATS_PATH)).toString());
+      return Object.keys(stats).length > 0 ? stats : undefined;
+    } catch (error) {
+      console.warn(`[DatasetService] could not aggregate ${EPISODE_STATS_PATH} for ${storagePath}:`, error);
+      return undefined;
+    }
+  }
+
+  /**
+   * The joint groups of the dataset's state and action vectors, read from its
+   * `meta/modality.json` (GR00T-style datasets). `modality` is null when the
+   * dataset has no such file — most do not, and the caller falls back to the
+   * feature `names` in `info.json`. A view answers with its root's groups.
+   *
+   * @throws DatasetStoreError when the object store did not answer
+   */
+  async getModality(id: string): Promise<DatasetModalityResponse> {
+    const dataset = await datasetRepository.findById(id);
+    if (!dataset) {
+      throw new Error(`Dataset not found: ${id}`);
+    }
+    // A view owns no bytes (`storagePath: ''`): its vectors are laid out as
+    // those of the dataset that holds the files, so that is where to read.
+    let source = dataset;
+    if (!dataset.storagePath) {
+      try {
+        const resolved = await datasetViewService.resolve(id);
+        if (resolved.isView) source = (await datasetRepository.findById(resolved.rootDatasetId)) ?? dataset;
+      } catch {
+        // A view whose chain does not resolve has no files to read groups from.
+      }
+    }
+    const tree = source.storagePath ? openDatasetTree(source.storagePath) : null;
+    if (!tree || !(await tree.stat(MODALITY_PATH))) return { datasetId: id, modality: null };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse((await tree.read(MODALITY_PATH)).toString());
+    } catch (error) {
+      if (error instanceof DatasetStoreError) throw error;
+      return { datasetId: id, modality: null };
+    }
+    return { datasetId: id, modality: parseModality(parsed, source.infoJson) };
   }
 
   /**

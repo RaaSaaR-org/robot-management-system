@@ -391,6 +391,51 @@ describe('a sound dataset', () => {
   });
 });
 
+describe('statistics', () => {
+  const episodeStats = (mean: number, count: number) => ({
+    min: [mean - 1], max: [mean + 1], mean: [mean], std: [0.5], count: [count],
+  });
+
+  it('warns MISSING_STATS when a dataset carries neither stats file', async () => {
+    const report = await validate(await fixture('stats-none', { version: 'v2.1' }));
+    expect(codes(report.warnings)).toContain('MISSING_STATS');
+    expect(report.stats).toBeUndefined();
+  });
+
+  it('aggregates meta/episodes_stats.jsonl of a v2.1 dataset instead of warning (TASK-476)', async () => {
+    const dir = await fixture('stats-per-episode', { version: 'v2.1' });
+    const lines = [
+      { episode_index: 0, stats: { action: episodeStats(1, 10) } },
+      { episode_index: 1, stats: { action: episodeStats(4, 30) } },
+    ];
+    await writeFile(join(dir, 'meta', 'episodes_stats.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n'));
+
+    const report = await validate(dir);
+    expect(report.errors).toEqual([]);
+    expect(codes(report.warnings)).not.toContain('MISSING_STATS');
+    expect(report.stats!.action).toMatchObject({ min: [0], max: [5], mean: [3.25], count: [40] });
+    expect(report.files.map((f) => f.path)).toContain('meta/episodes_stats.jsonl');
+  });
+
+  it('prefers stats.json when a dataset carries both', async () => {
+    const dir = await fixture('stats-both', { version: 'v2.1' });
+    await writeFile(join(dir, 'meta', 'stats.json'), JSON.stringify({ action: { mean: [7] } }));
+    await writeFile(
+      join(dir, 'meta', 'episodes_stats.jsonl'),
+      JSON.stringify({ episode_index: 0, stats: { action: episodeStats(1, 10) } }),
+    );
+    expect((await validate(dir)).stats).toEqual({ action: { mean: [7] } });
+  });
+
+  it('warns BAD_STATS when episodes_stats.jsonl holds nothing usable', async () => {
+    const dir = await fixture('stats-garbage', { version: 'v2.1' });
+    await writeFile(join(dir, 'meta', 'episodes_stats.jsonl'), 'not json\n');
+    const report = await validate(dir);
+    expect(codes(report.warnings)).toContain('BAD_STATS');
+    expect(report.errors).toEqual([]);
+  });
+});
+
 describe('the failures that used to pass', () => {
   it('fails when info.json names a parquet that is not there', async () => {
     // The headline case. The previous validator confirmed `meta/info.json`

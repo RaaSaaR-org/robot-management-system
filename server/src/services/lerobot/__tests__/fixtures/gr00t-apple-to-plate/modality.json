@@ -1,0 +1,117 @@
+{
+    "state": {
+        "left_leg": {
+            "start": 0,
+            "end": 6
+        },
+        "right_leg": {
+            "start": 6,
+            "end": 12
+        },
+        "waist": {
+            "start": 12,
+            "end": 15
+        },
+        "left_arm": {
+            "start": 15,
+            "end": 22
+        },
+        "right_arm": {
+            "start": 22,
+            "end": 29
+        },
+        "left_hand": {
+            "start": 29,
+            "end": 36
+        },
+        "right_hand": {
+            "start": 36,
+            "end": 43
+        }
+    },
+    "action": {
+        "left_leg": {
+            "start": 0,
+            "end": 6
+        },
+        "right_leg": {
+            "start": 6,
+            "end": 12
+        },
+        "waist": {
+            "start": 12,
+            "end": 15
+        },
+        "left_arm": {
+            "start": 15,
+            "end": 22
+        },
+        "right_arm": {
+            "start": 22,
+            "end": 29
+        },
+        "left_hand": {
+            "start": 29,
+            "end": 36
+        },
+        "right_hand": {
+            "start": 36,
+            "end": 43
+        },
+        "effort_left_leg": {
+            "original_key": "action.effort_left_leg",
+            "start": 0,
+            "end": 6
+        },
+        "effort_right_leg": {
+            "original_key": "action.effort_right_leg",
+            "start": 0,
+            "end": 6
+        },
+        "effort_waist": {
+            "original_key": "action.effort_waist",
+            "start": 0,
+            "end": 3
+        },
+        "effort_left_arm": {
+            "original_key": "action.effort_left_arm",
+            "start": 0,
+            "end": 7
+        },
+        "effort_right_arm": {
+            "original_key": "action.effort_right_arm",
+            "start": 0,
+            "end": 7
+        },
+        "effort_left_hand": {
+            "original_key": "action.effort_left_hand",
+            "start": 0,
+            "end": 7
+        },
+        "effort_right_hand": {
+            "original_key": "action.effort_right_hand",
+            "start": 0,
+            "end": 7
+        },
+        "navigate_command": {
+            "original_key": "action.navigate_command",
+            "start": 0,
+            "end": 3
+        },
+        "base_height_command": {
+            "original_key": "action.base_height_command",
+            "start": 0,
+            "end": 1
+        }
+    },
+    "video": {
+        "ego_view": {
+            "original_key": "observation.images.ego_view"
+        }
+    },
+    "annotation": {
+        "human.task_description": {
+            "original_key": "task_index"
+        }
+    }
+}

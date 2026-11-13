@@ -39,6 +39,7 @@ import { createReadStream, existsSync, statSync } from 'fs';
 import { readFile } from 'fs/promises';
 import type { Readable } from 'stream';
 import { DatasetViewError, resolveLocalView } from '../services/lerobot/LocalDatasetView.js';
+import { DatasetStoreError } from '../services/lerobot/DatasetTree.js';
 import {
   DatasetReadError,
   episodeFramesCache,
@@ -1004,6 +1005,25 @@ datasetRoutes.get('/:id/stats', async (req: Request, res: Response) => {
     }
 
     sendFailure(res, error, 'Failed to get dataset stats', 500);
+  }
+});
+
+// ============================================================================
+// GET /api/datasets/:id/modality - Joint groups of the state/action vectors
+// ============================================================================
+
+datasetRoutes.get('/:id/modality', async (req: Request, res: Response) => {
+  try {
+    res.json(await datasetService.getModality(req.params.id));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('not found')) {
+      return res.status(404).json({ error: error.message });
+    }
+    if (error instanceof DatasetStoreError) {
+      return res.status(503).json({ error: 'Object storage is unavailable, so the joint groups cannot be read' });
+    }
+    console.error('[DatasetRoutes] Error getting modality:', error);
+    sendFailure(res, error, 'Failed to get dataset modality', 500);
   }
 });
 
