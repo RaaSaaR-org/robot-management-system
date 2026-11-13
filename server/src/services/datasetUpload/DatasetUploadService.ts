@@ -564,12 +564,20 @@ export class DatasetUploadService {
       // A cancel that began after the check above has already cleared the
       // prefix; a part that lands now would be an object nothing owns.
       const current = await this.deps.sessions.find(datasetId);
-      if (!current || current.state !== 'uploading') {
+      // `processing` is not a reason to discard: finish is only accepted once
+      // the store holds every part, so a part still in flight then is a second
+      // copy of one it has counted — the first request of a part the client
+      // re-sent after a timeout. Rolling that back would blank the part (or
+      // delete the object) finish is about to assemble, and fail a complete
+      // upload. `process` waits for this request before it reads the parts.
+      if (!current || (current.state !== 'uploading' && current.state !== 'processing')) {
         await pending.rollback().catch(() => undefined);
         throw this.notAccepting(current?.state ?? 'cancelling');
       }
       await pending.commit();
-      const fileComplete = this.recordPart(session, file, partNumber, expected);
+      const fileComplete = current.state === 'uploading'
+        ? this.recordPart(session, file, partNumber, expected)
+        : true;
       return { datasetId, fileId: file.id, partNumber, size: expected, sha256: digest, fileComplete };
     } finally {
       source.off('error', stop);

@@ -267,7 +267,10 @@ with its declared length.
 { "datasetId": "2efecc18-…", "state": "processing", "status": "uploading", "message": "…" }
 ```
 
-From here the server works in the background and no more parts are accepted:
+From here the server works in the background and no more parts are accepted.
+A part request that was already arriving when finish was accepted — the first
+copy of a part you re-sent after a timeout — is still stored and answered 200;
+the server waits for it before assembling:
 
 1. multi-part files are assembled into single files (S3
    `CompleteMultipartUpload`);

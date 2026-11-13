@@ -13,7 +13,7 @@ import { existsSync } from 'fs';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import type { Readable } from 'stream';
+import { Readable } from 'stream';
 
 const mocks = vi.hoisted(() => {
   const rows = new Map<string, Record<string, unknown>>();
@@ -552,6 +552,38 @@ describe('finish', () => {
     await service.finish(upload.datasetId);
 
     await expect(sendPart(upload, 'meta/info.json', 1)).rejects.toMatchObject({ code: 'UPLOAD_NOT_ACCEPTING', statusCode: 409 });
+  });
+
+  it('keeps a re-sent part that is still arriving when finish is accepted', async () => {
+    // A client times out on a part, sends it again, and finishes while its
+    // first request is still being stored. That first copy must not be
+    // discarded: discarding it blanks the part finish has just counted.
+    service = rustfsService();
+    const upload = await service.start(startBody());
+    await sendAll(upload);
+    const slow = (data: Buffer) => {
+      const stream = new Readable({ read() {} });
+      return { stream, release: () => { stream.push(data); stream.push(null); } };
+    };
+    const video = slow(partOf(TREE[VIDEO], 2));
+    const small = slow(TREE['meta/info.json']);
+    const lateVideo = sendPart(upload, VIDEO, 2, { source: video.stream });
+    const lateSmall = sendPart(upload, 'meta/info.json', 1, { source: small.stream });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await expect(service.finish(upload.datasetId)).resolves.toMatchObject({ state: 'processing' });
+    await new Promise((resolve) => setImmediate(resolve));
+    video.release();
+    small.release();
+
+    await expect(lateVideo).resolves.toMatchObject({ partNumber: 2, size: CHUNK, fileComplete: true });
+    await expect(lateSmall).resolves.toMatchObject({ partNumber: 1, fileComplete: true });
+    await until(() => ['ready', 'failed'].includes(String(row(upload.datasetId)?.status)));
+    expect(row(upload.datasetId)).toMatchObject({ status: 'ready' });
+    const prefix = String(row(upload.datasetId)?.storagePath);
+    expect(store.objects.get(`${BUCKET}/${prefix}${VIDEO}`)?.equals(TREE[VIDEO])).toBe(true);
+    expect(store.objects.get(`${BUCKET}/${prefix}meta/info.json`)?.equals(TREE['meta/info.json'])).toBe(true);
+    expect(store.uploads.size).toBe(0);
   });
 
   it('verifies a declared sha256 and passes a tree that matches', async () => {
