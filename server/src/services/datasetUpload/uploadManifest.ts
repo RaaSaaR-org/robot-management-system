@@ -417,6 +417,10 @@ export function checkManifest(
     accepted, new Set(all.map((f) => f.path)), chunkSize, limits, DATASET_NOUNS,
   );
 
-  const importMode = has((p) => p.startsWith('videos/') || p.startsWith('images/')) ? 'full' : 'metadata';
+  // Camera files as the readers know them — `videos/**/*.mp4`, `images/**` —
+  // not any path under `videos/`: a note stored beside the videos is not one.
+  const importMode = has((p) => (p.startsWith('videos/') && p.endsWith('.mp4')) || p.startsWith('images/'))
+    ? 'full'
+    : 'metadata';
   return { files, ignored, totalBytes, importMode };
 }

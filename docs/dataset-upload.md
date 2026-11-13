@@ -70,9 +70,14 @@ deleted locally and fetched again whole.
 Validation, the episode browser, the video player, statistics and publishing
 to the Hub ask for the first four by name and never list the dataset root, so
 a file beside the tree changes nothing about how the dataset behaves — it only
-counts against the size and file caps. Leave out what is not dataset content
-(`.git/`, `.DS_Store`, `__pycache__/`, a Hub `.cache/`) on the client: the
-server stores what it is told to.
+counts against the size and file caps. Curation (trim, delete episodes) fetches
+only those four trees as well, so a revision it writes is a new dataset
+**without** the extra files; they stay with the dataset they were uploaded to.
+Whether an upload counts as having cameras (`importMode: "full"`) is decided
+by `videos/**/*.mp4` and `images/**` alone, not by any other file under
+`videos/`. Leave out what is not dataset content (`.git/`, `.DS_Store`,
+`__pycache__/`, a Hub `.cache/`) on the client: the server stores what it is
+told to.
 
 **`ignored` and older servers.** A server from before TASK-500 stored only the
 four trees and listed every other declared file under `ignored` in the start

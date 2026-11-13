@@ -241,6 +241,11 @@ describe('checkManifest', () => {
     expect(checkManifest(tables, INFO_V3, 32 * MIB, LIMITS).importMode).toBe('metadata');
   });
 
+  it('does not call a note under videos/ a camera file', () => {
+    const tables = [...V3_TREE.filter((f) => !f.path.startsWith('videos/')), { path: 'videos/cam/notes.txt', size: 9 }];
+    expect(checkManifest(tables, INFO_V3, 32 * MIB, LIMITS).importMode).toBe('metadata');
+  });
+
   it('calls a manifest without camera files a metadata upload', () => {
     const tables = V3_TREE.filter((f) => !f.path.startsWith('videos/'));
     expect(checkManifest(tables, INFO_V3, 32 * MIB, LIMITS).importMode).toBe('metadata');
