@@ -26,6 +26,23 @@ export const chartColors = {
     'var(--color-accent)',
     'var(--signal-stopped)',
   ],
+  /**
+   * Ten categorical colours for a chart that draws many channels at once (the
+   * joints of one arm): hues a full step apart, no meaning attached. `series`
+   * stays the choice for a handful of named categories.
+   */
+  channels: [
+    'var(--chart-channel-1)',
+    'var(--chart-channel-2)',
+    'var(--chart-channel-3)',
+    'var(--chart-channel-4)',
+    'var(--chart-channel-5)',
+    'var(--chart-channel-6)',
+    'var(--chart-channel-7)',
+    'var(--chart-channel-8)',
+    'var(--chart-channel-9)',
+    'var(--chart-channel-10)',
+  ],
   grid: 'var(--border-subtle)',
   axis: 'var(--border-color)',
   tick: 'var(--text-tertiary)',
@@ -40,6 +57,12 @@ export const chartColors = {
 /** The n-th categorical series colour (wraps). */
 export function chartSeriesColor(index: number): string {
   return chartColors.series[((index % chartColors.series.length) + chartColors.series.length) % chartColors.series.length];
+}
+
+/** The n-th channel colour (wraps after ten). */
+export function chartChannelColor(index: number): string {
+  const n = chartColors.channels.length;
+  return chartColors.channels[((index % n) + n) % n];
 }
 
 const tick = { fill: chartColors.tick, fontSize: 11 } as const;

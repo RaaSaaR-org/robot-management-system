@@ -319,7 +319,8 @@ Content      Panel(s) · DataTable · card grid of Panel interactive
     `ToastProvider`, `Toaster`, `ConfirmHost`) are mounted once in
     `App.tsx`; pages never mount them.
   - Status: `StatusTag`, `statusTone`, `humanizeStatus`, `normalizeStatus`,
-    `Badge`, `chartColors`, `chartTheme`, `chartSeriesColor`, `cssColor` /
+    `Badge`, `chartColors`, `chartTheme`, `chartSeriesColor`,
+    `chartChannelColor`, `cssColor` /
     `useCssColor` (token values for three.js, canvas and SVG attributes).
   - Data: `DataTable` (inside `<Panel padding="none">`; `pagination` for
     server paging, `rowProps` for test ids), `Pager`.

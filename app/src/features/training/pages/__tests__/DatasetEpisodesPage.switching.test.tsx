@@ -177,16 +177,50 @@ describe('switching episodes while the next one is still loading', () => {
     expect(startFrame().value).toBe('0');
   });
 
-  it('shows Play, not a stuck Pause, on the episode just opened', async () => {
+  it('shows Play on the episode just opened when nothing was playing', async () => {
     renderPage();
     await waitFor(() => expect(document.querySelector('video')).not.toBeNull());
+    // Played, then stopped: the element reports both itself.
     fireEvent.play(document.querySelector('video')!);
     expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+    expect(screen.getByRole('button', { name: 'Play' })).toBeInTheDocument();
 
     openEpisode(1);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeInTheDocument());
+    await waitFor(() =>
+      expect(document.querySelector('video')).toHaveAttribute('src', expect.stringContaining('/episodes/1/')),
+    );
+    expect(screen.getByRole('button', { name: 'Play' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Pause' })).not.toBeInTheDocument();
-    expect(document.querySelector('video')).toHaveAttribute('src', expect.stringContaining('/episodes/1/'));
+  });
+
+  // What was a stuck Pause over a paused video (TASK-482) is, since TASK-484, a
+  // Pause that is true: playback carries over and the new video is started.
+  it('shows Pause on the episode just opened only because that episode is played', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    try {
+      renderPage();
+      await waitFor(() => expect(document.querySelector('video')).not.toBeNull());
+      fireEvent.play(document.querySelector('video')!);
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
+      expect(play).not.toHaveBeenCalled();
+
+      openEpisode(1);
+
+      await waitFor(() =>
+        expect(document.querySelector('video')).toHaveAttribute('src', expect.stringContaining('/episodes/1/')),
+      );
+      // The new video starts paused; the page starts it the moment it can play.
+      fireEvent.loadedMetadata(document.querySelector('video')!);
+      expect(play).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
+
+      // And the button still stops it.
+      fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+      expect(screen.getByRole('button', { name: 'Play' })).toBeInTheDocument();
+    } finally {
+      play.mockRestore();
+    }
   });
 });

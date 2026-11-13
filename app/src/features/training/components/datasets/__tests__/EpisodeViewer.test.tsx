@@ -225,6 +225,66 @@ describe('EpisodeViewer', () => {
     });
   });
 
+  describe('controls that tell the truth (TASK-484)', () => {
+    it('shows the playhead and the total in tenths, and never past the end', () => {
+      render(<EpisodeViewer {...props({ currentTime: 19.9, duration: 19.67 })} />);
+      expect(screen.getByTestId('transport-clock')).toHaveTextContent('0:19.7 / 0:19.7');
+      expect(screen.getByLabelText('Seek')).toHaveValue('19.67');
+    });
+
+    it('reports every camera that has loaded, by name', () => {
+      const onLoadedMetadata = vi.fn();
+      const WRIST = 'observation.images.wrist';
+      const { container } = render(
+        <EpisodeViewer {...props({ cameras: [EGO, WRIST], onLoadedMetadata })} />,
+      );
+      const [first, second] = Array.from(container.querySelectorAll('video'));
+      fireEvent.loadedMetadata(second!);
+      fireEvent.loadedMetadata(first!);
+      expect(onLoadedMetadata.mock.calls).toEqual([[WRIST], [EGO]]);
+    });
+
+    it('passes on a pause of the primary video only', () => {
+      const onPlayingChange = vi.fn();
+      const { container } = render(
+        <EpisodeViewer {...props({ cameras: [EGO, 'observation.images.wrist'], onPlayingChange })} />,
+      );
+      const [first, second] = Array.from(container.querySelectorAll('video'));
+      fireEvent.pause(second!);
+      expect(onPlayingChange).not.toHaveBeenCalled();
+      fireEvent.pause(first!);
+      expect(onPlayingChange).toHaveBeenCalledTimes(1);
+      expect(onPlayingChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it('says when a camera ends in a notice instead of a video', () => {
+      const onFailure = vi.fn();
+      const { container } = render(<EpisodeViewer {...props({ onFailure })} />);
+      expect(onFailure).not.toHaveBeenCalled();
+      failVideo(video(container)!, 4);
+      expect(screen.getByTestId('video-load-failed')).toBeInTheDocument();
+      expect(onFailure).toHaveBeenCalledWith(EGO);
+    });
+
+    it('does not offer Play when the browser can play none of the cameras', () => {
+      browserPlays('');
+      render(<EpisodeViewer {...props({ codecFor: () => 'av1' })} />);
+      expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+      expect(screen.getByLabelText('Seek')).toBeDisabled();
+    });
+
+    it('offers Play while one camera can still play', () => {
+      browserPlays('');
+      const WRIST = 'observation.images.wrist';
+      render(
+        <EpisodeViewer
+          {...props({ cameras: [EGO, WRIST], codecFor: (cam) => (cam === EGO ? 'av1' : undefined) })}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+    });
+  });
+
   it('still says a dataset has no cameras', () => {
     render(<EpisodeViewer {...props({ cameras: [] })} />);
     expect(screen.getByTestId('no-cameras')).toBeInTheDocument();

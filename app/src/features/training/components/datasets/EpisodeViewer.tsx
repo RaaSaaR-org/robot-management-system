@@ -1,6 +1,7 @@
 /**
  * @file EpisodeViewer.tsx
- * @description Camera grid and playback controls (play, seek, speed) for one episode
+ * @description Camera grid and playback controls (play, seek, speed) for one episode. On a wide
+ *              screen it fills the height its parent gives it, so the controls stay in view.
  * @feature training
  */
 
@@ -10,10 +11,13 @@ import { Pause, Play, VideoOff } from 'lucide-react';
 import { Button, EmptyState, Panel, SegmentedControl } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { beginRateLimitWait, useRateLimitHint } from '@/api/rateLimitStatus';
-import { cameraLabel, formatClock } from './episodeFormat';
+import { cameraLabel, formatPlayhead } from './episodeFormat';
 import { canPlayVideoCodec, describeVideoCodec } from './videoCodec';
 
 export type PlaybackSpeed = '0.5' | '1' | '2';
+
+/** `side`: a column beside the chart. `stacked`: across the width, above the chart. */
+export type ViewerLayout = 'side' | 'stacked';
 
 export interface EpisodeViewerProps {
   cameras: string[];
@@ -43,13 +47,30 @@ export interface EpisodeViewerProps {
    * instead of ending in "Couldn't load this video" (TASK-482).
    */
   probeThrottle?: (src: string) => Promise<number | null>;
-  /** The primary camera started or stopped playing, whoever caused it. */
+  /**
+   * The primary video itself started or stopped — the button, the end, the
+   * browser, a media key. The one way an element's own state reaches the page.
+   */
   onPlayingChange?: (playing: boolean) => void;
   primaryCamera: string | undefined;
   videoRefs: MutableRefObject<Record<string, HTMLVideoElement | null>>;
   onTimeUpdate: () => void;
-  onLoadedMetadata: () => void;
+  /**
+   * A camera's video is ready to be played or sought. Every camera reports,
+   * not only the primary one: a newly loaded video starts paused at 1×, and the
+   * page puts the chosen speed and the play state back on each of them.
+   */
+  onLoadedMetadata: (camera: string) => void;
   onEnded: () => void;
+  /** A camera ended in a notice instead of a video: nothing is playing there. */
+  onFailure?: (camera: string) => void;
+  /**
+   * How the cameras tile on a wide screen: two cameras stack in `side` and sit
+   * next to each other in `stacked`. Default `stacked`.
+   */
+  layout?: ViewerLayout;
+  className?: string;
+  /** What the viewer asked for: true from Play until Pause, the end, or a failure. */
   isPlaying: boolean;
   onPlayPause: () => void;
   currentTime: number;
@@ -95,7 +116,7 @@ function PlayerNotice({
     <div
       role="status"
       data-testid={testId}
-      className="flex aspect-video w-full flex-col items-center justify-center gap-2 px-6 pt-8 text-center"
+      className="flex aspect-video w-full flex-col items-center justify-center gap-2 px-6 pt-8 text-center lg:aspect-auto lg:h-full lg:min-h-[11rem] lg:pb-3"
     >
       <VideoOff className="h-6 w-6 text-ink-muted" strokeWidth={1.75} aria-hidden />
       <p className="text-sm font-medium text-ink-primary">{title}</p>
@@ -118,9 +139,10 @@ interface CameraCellProps {
   probeThrottle?: (src: string) => Promise<number | null>;
   onPlayingChange?: (playing: boolean) => void;
   videoRefs: EpisodeViewerProps['videoRefs'];
+  onLoadedMetadata: (camera: string) => void;
+  onFailure?: (camera: string) => void;
   /** Playback events, wired on the primary camera only. */
   onTimeUpdate?: () => void;
-  onLoadedMetadata?: () => void;
   onEnded?: () => void;
 }
 
@@ -140,7 +162,7 @@ interface CameraCellProps {
  *   only once the wait has lasted more than a moment (TASK-482).
  */
 function CameraCell(p: CameraCellProps) {
-  const { camera, src, codec, onReload } = p;
+  const { camera, src, codec, onReload, onFailure } = p;
   // Bumped by Retry, and part of the <video> key: a new element is the only
   // reliable way to make a browser request an unchanged URL again.
   const [attempt, setAttempt] = useState(0);
@@ -169,6 +191,14 @@ function CameraCell(p: CameraCellProps) {
     const timer = setTimeout(() => setFailure({ src, attempt, kind: 'load' }), RELOAD_GRACE_MS);
     return () => clearTimeout(timer);
   }, [reloading, src, attempt]);
+
+  // A notice in place of the video means nothing plays here. The page hears
+  // it, so the play button never claims otherwise (TASK-484). A rate-limit
+  // wait is not one: the video loads by itself and then does what was asked.
+  const broken = playable === false || failed !== null;
+  useEffect(() => {
+    if (broken) onFailure?.(camera);
+  }, [broken, camera, src, onFailure]);
 
   const throttled = throttle !== null && throttle.src === src && throttle.attempt === attempt;
   const throttleWaitMs = throttled ? throttle.waitMs : null;
@@ -258,10 +288,10 @@ function CameraCell(p: CameraCellProps) {
         Too many requests at once, so the server asked us to slow down. This video loads by itself in a moment.
       </PlayerNotice>
     ) : (
-      <div className="aspect-video w-full" data-testid="video-pending" />
+      <div className="aspect-video w-full lg:aspect-auto lg:h-full" data-testid="video-pending" />
     );
   } else if (!p.ready) {
-    body = <div className="aspect-video w-full" data-testid="video-pending" />;
+    body = <div className="aspect-video w-full lg:aspect-auto lg:h-full" data-testid="video-pending" />;
   } else {
     body = (
       <video
@@ -269,19 +299,20 @@ function CameraCell(p: CameraCellProps) {
         ref={(el) => { p.videoRefs.current[camera] = el; }}
         src={src}
         onTimeUpdate={p.onTimeUpdate}
-        onLoadedMetadata={p.onLoadedMetadata}
+        onLoadedMetadata={() => p.onLoadedMetadata(camera)}
         onEnded={p.onEnded}
         onPlay={p.onPlayingChange && (() => p.onPlayingChange?.(true))}
         onPause={p.onPlayingChange && (() => p.onPlayingChange?.(false))}
         onError={handleError}
-        className="aspect-video w-full"
+        // Wide screens: the cell's height is the layout's and the picture fits inside it.
+        className="aspect-video w-full lg:absolute lg:inset-0 lg:aspect-auto lg:h-full lg:object-contain"
         playsInline
       />
     );
   }
 
   return (
-    <div className="relative bg-canvas">
+    <div className="relative bg-canvas lg:min-h-0">
       <span className="absolute left-2 top-2 z-10 rounded-tag bg-canvas/80 px-1.5 py-0.5 text-xs font-medium text-ink-secondary">
         {cameraLabel(camera)}
       </span>
@@ -290,62 +321,90 @@ function CameraCell(p: CameraCellProps) {
   );
 }
 
+/** Column classes of the camera grid (written out, so Tailwind sees each one). */
+function gridColumns(count: number, layout: ViewerLayout): string {
+  if (count <= 1) return '';
+  // Two cameras stack in the narrow side column; three or four make a 2×2 block.
+  if (count === 2 && layout === 'side') return 'sm:grid-cols-2 lg:grid-cols-1';
+  return 'sm:grid-cols-2';
+}
+
 export function EpisodeViewer(p: EpisodeViewerProps) {
-  if (p.cameras.length === 0) {
+  const { cameras, codecFor, layout = 'stacked' } = p;
+  // With every camera in a codec this browser refuses there is nothing to
+  // play, and a Play button that does nothing would be a small lie.
+  const nothingPlayable = useMemo(
+    () => cameras.length > 0 && cameras.every((cam) => canPlayVideoCodec(codecFor?.(cam)) === false),
+    [cameras, codecFor],
+  );
+
+  if (cameras.length === 0) {
     return (
-      <Panel data-testid="no-cameras">
+      <Panel data-testid="no-cameras" className={cn('lg:flex lg:flex-col lg:justify-center', p.className)}>
         <EmptyState
           size="sm"
           icon={<VideoOff />}
           title="No camera streams in this dataset"
-          description="It holds joint states and actions only — inspect the trajectory chart below."
+          description="It holds joint states and actions only — inspect the joint trajectories chart."
         />
       </Panel>
     );
   }
 
+  const duration = p.duration > 0 ? p.duration : 0;
+  // Never past the end: the clock and the slider stop where the total is.
+  const position = duration > 0 ? Math.min(Math.max(0, p.currentTime), duration) : 0;
+
   return (
-    <Panel padding="none">
-      <div className={cn('grid gap-px bg-line-subtle', p.cameras.length > 1 && 'lg:grid-cols-2')}>
-        {p.cameras.map((cam) => (
+    <Panel padding="none" data-testid="episode-viewer" className={cn('flex flex-col overflow-hidden lg:min-h-0', p.className)}>
+      <div
+        className={cn(
+          'grid gap-px bg-line-subtle lg:min-h-0 lg:flex-1 lg:auto-rows-fr',
+          gridColumns(cameras.length, layout),
+        )}
+      >
+        {cameras.map((cam) => (
           <CameraCell
             key={cam}
             camera={cam}
             src={p.srcFor(cam)}
-            codec={p.codecFor?.(cam)}
+            codec={codecFor?.(cam)}
             ready={p.ready ?? true}
             onReload={p.onReload}
             probeThrottle={p.probeThrottle}
             onPlayingChange={cam === p.primaryCamera ? p.onPlayingChange : undefined}
             videoRefs={p.videoRefs}
+            onLoadedMetadata={p.onLoadedMetadata}
+            onFailure={p.onFailure}
             onTimeUpdate={cam === p.primaryCamera ? p.onTimeUpdate : undefined}
-            onLoadedMetadata={cam === p.primaryCamera ? p.onLoadedMetadata : undefined}
             onEnded={cam === p.primaryCamera ? p.onEnded : undefined}
           />
         ))}
       </div>
-      <div className="flex flex-wrap items-center gap-3 border-t border-line px-4 py-2.5">
+      <div data-testid="transport" className="flex shrink-0 flex-wrap items-center gap-2 border-t border-line px-3 py-2">
         <Button
           variant="ghost"
           size="sm"
           iconOnly
           aria-label={p.isPlaying ? 'Pause' : 'Play'}
+          disabled={nothingPlayable}
           onClick={p.onPlayPause}
         >
           {p.isPlaying ? <Pause className="h-4 w-4" strokeWidth={1.75} /> : <Play className="h-4 w-4" strokeWidth={1.75} />}
         </Button>
-        <span className="w-24 text-xs tabular-nums text-ink-tertiary">
-          {formatClock(p.currentTime)} / {formatClock(p.duration)}
+        <span data-testid="transport-clock" className="whitespace-nowrap text-xs tabular-nums text-ink-tertiary">
+          {formatPlayhead(position)} / {formatPlayhead(duration)}
         </span>
         <input
           type="range"
           aria-label="Seek"
           min={0}
-          max={p.duration || 1}
-          step={0.05}
-          value={p.currentTime}
+          max={duration || 1}
+          step={0.01}
+          value={position}
+          disabled={nothingPlayable}
           onChange={p.onSeek}
-          className="min-w-24 flex-1 cursor-pointer accent-primary"
+          className="mx-1 min-w-16 flex-1 cursor-pointer accent-primary"
         />
         <SegmentedControl label="Playback speed" size="sm" options={SPEEDS} value={p.speed} onChange={p.onSpeedChange} />
       </div>
