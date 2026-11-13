@@ -33,8 +33,7 @@
  * assembling, checksumming and validating run detached from `finish`.
  */
 
-import { createHash } from 'crypto';
-import { Transform, type Readable } from 'stream';
+import type { Readable } from 'stream';
 import { v4 as uuidv4 } from 'uuid';
 import { datasetRepository } from '../../repositories/index.js';
 import {
@@ -59,7 +58,6 @@ import {
   checkInfo,
   checkManifest,
   DatasetUploadError,
-  HARD_MAX_CHUNK_BYTES,
   partSizeOf,
   resolveChunkSize,
   uploadLimits,
@@ -70,20 +68,29 @@ import {
 import {
   createUploadSink,
   openUploadSink,
-  UploadAbortedError,
   type ReceivedFile,
   type UploadSink,
 } from './UploadSink.js';
+import {
+  assembleAndVerify,
+  assertNothingMissing,
+  fileView,
+  notAcceptingError,
+  PartReceiver,
+  progressOf,
+  totalBytesOf,
+  type UploadFileStatus,
+  type UploadFileView,
+} from './uploadSession.js';
+
+export { MAX_MISSING_LISTED } from './uploadSession.js';
+export type { UploadFileStatus, UploadFileView } from './uploadSession.js';
 
 /** How often a running upload says where it is on the wire. */
 export const UPLOAD_PROGRESS_INTERVAL_MS = 500;
 /** How often an active upload's `lastActivityAt` is written; far under any idle limit. */
 export const UPLOAD_TOUCH_INTERVAL_MS = 15_000;
 export const UPLOAD_REAP_INTERVAL_MS = 5 * 60_000;
-/** Missing files listed in a refused `finish`; the count says how many there are in all. */
-export const MAX_MISSING_LISTED = 50;
-
-const SHA256_RE = /^[0-9a-f]{64}$/;
 
 // ============================================================================
 // CONTRACT TYPES
@@ -100,13 +107,6 @@ export interface StartUploadRequest {
   chunkSize?: unknown;
 }
 
-export interface UploadFileView {
-  id: number;
-  path: string;
-  size: number;
-  partCount: number;
-}
-
 export interface StartUploadResponse {
   datasetId: string;
   status: 'uploading';
@@ -119,11 +119,6 @@ export interface StartUploadResponse {
   ignored: IgnoredFile[];
   idleTimeoutSeconds: number;
   expiresAt: string;
-}
-
-export interface UploadFileStatus extends UploadFileView {
-  complete: boolean;
-  receivedParts: number[];
 }
 
 export interface UploadStatusResponse {
@@ -181,12 +176,6 @@ export interface DatasetUploadDeps {
   now: () => number;
 }
 
-/** One part request that is being streamed right now. */
-interface ActivePart {
-  abort(): void;
-  done: Promise<void>;
-}
-
 /** What this process knows about a running upload, for progress — never for truth. */
 interface LiveUpload {
   seeded: boolean;
@@ -197,29 +186,14 @@ interface LiveUpload {
   lastTouchAt: number;
 }
 
-function view(file: UploadFileEntry): UploadFileView {
-  return { id: file.id, path: file.path, size: file.size, partCount: file.partCount };
-}
-
-function totalBytesOf(files: UploadFileEntry[]): number {
-  return files.reduce((sum, f) => sum + f.size, 0);
-}
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function sha256Of(stream: Readable): Promise<string> {
-  const hash = createHash('sha256');
-  for await (const chunk of stream) hash.update(chunk as Buffer);
-  return hash.digest('hex');
-}
-
 export class DatasetUploadService {
   private readonly deps: DatasetUploadDeps;
-  private readonly active = new Map<string, Set<ActivePart>>();
+  private readonly receiver = new PartReceiver();
   private readonly live = new Map<string, LiveUpload>();
-  private activeParts = 0;
   private reaper: NodeJS.Timeout | null = null;
 
   constructor(deps: Partial<DatasetUploadDeps> = {}) {
@@ -366,7 +340,7 @@ export class DatasetUploadService {
       storage: sink.kind,
       chunkSize,
       totalBytes: manifest.totalBytes,
-      files: files.map(view),
+      files: files.map(fileView),
       ignored: manifest.ignored,
       idleTimeoutSeconds: Math.round(limits.idleMs / 1000),
       expiresAt: new Date(now + limits.idleMs).toISOString(),
@@ -411,22 +385,7 @@ export class DatasetUploadService {
         .received(session.files, session.chunkSize);
       this.seedLive(session, received);
     }
-    const files: UploadFileStatus[] = session.files.map((file) => {
-      // Past `uploading` every file was verified present by `finish`.
-      const got = received ? received.get(file.id) : { complete: session.state !== 'cancelling', parts: [] };
-      const complete = got?.complete ?? false;
-      return {
-        ...view(file),
-        complete,
-        receivedParts: complete
-          ? Array.from({ length: file.partCount }, (_, i) => i + 1)
-          : [...(got?.parts ?? [])].sort((a, b) => a - b),
-      };
-    });
-    const receivedBytes = files.reduce((sum, file, index) => sum + file.receivedParts.reduce(
-      (bytes, partNumber) => bytes + partSizeOf(session.files[index], partNumber, session.chunkSize), 0,
-    ), 0);
-    const readyToFinish = files.every((f) => f.receivedParts.length === f.partCount);
+    const progress = progressOf(session.files, session.chunkSize, received, session.state);
     return {
       datasetId,
       state: session.state,
@@ -434,11 +393,11 @@ export class DatasetUploadService {
       storage: session.sink,
       chunkSize: session.chunkSize,
       totalBytes: totalBytesOf(session.files),
-      receivedBytes,
-      totalFiles: files.length,
-      completedFiles: files.filter((f) => f.receivedParts.length === f.partCount).length,
-      readyToFinish,
-      files,
+      receivedBytes: progress.receivedBytes,
+      totalFiles: progress.files.length,
+      completedFiles: progress.completedFiles,
+      readyToFinish: progress.readyToFinish,
+      files: progress.files,
       lastActivityAt: session.lastActivityAt.toISOString(),
       expiresAt: session.state === 'uploading'
         ? new Date(session.lastActivityAt.getTime() + limits.idleMs).toISOString()
@@ -466,151 +425,27 @@ export class DatasetUploadService {
     options: { contentLength: number | null; sha256?: string | null },
   ): Promise<PartReceipt> {
     const { session } = await this.load(datasetId);
-    if (session.state !== 'uploading') throw this.notAccepting(session.state);
-    const file = Number.isInteger(fileId) ? session.files[fileId] : undefined;
-    if (!file) {
-      throw new DatasetUploadError('UNKNOWN_FILE', `This upload has no file ${fileId}; ids run from 0 to ${session.files.length - 1}`, 404);
-    }
-    if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > file.partCount) {
-      throw new DatasetUploadError(
-        'UNKNOWN_PART',
-        `${file.path} has parts 1 to ${file.partCount}; got ${partNumber}`,
-        404,
-        { fileId, partCount: file.partCount },
-      );
-    }
-    const expected = partSizeOf(file, partNumber, session.chunkSize);
-    if (options.contentLength === null) {
-      throw new DatasetUploadError('LENGTH_REQUIRED', 'Content-Length is required: send each part with its exact length', 411, { expectedSize: expected });
-    }
-    if (options.contentLength !== expected) {
-      throw new DatasetUploadError(
-        'PART_SIZE_MISMATCH',
-        `Part ${partNumber} of ${file.path} must be exactly ${expected} bytes; the request declares ${options.contentLength}.`,
-        options.contentLength > HARD_MAX_CHUNK_BYTES ? 413 : 400,
-        { fileId, partNumber, expectedSize: expected },
-      );
-    }
-    const declared = options.sha256 ? options.sha256.trim().toLowerCase() : null;
-    if (declared !== null && !SHA256_RE.test(declared)) {
-      throw new DatasetUploadError('INVALID_CHECKSUM', 'X-Chunk-Sha256 must be 64 hex characters');
-    }
-    const limits = this.deps.limits();
-    if (this.activeParts >= limits.maxConcurrentParts) {
-      throw new DatasetUploadError(
-        'UPLOAD_BUSY',
-        `The server is already receiving ${this.activeParts} parts; send this one again shortly.`,
-        503,
-        { retryAfterSeconds: 2 },
-      );
-    }
-
+    if (session.state !== 'uploading') throw notAcceptingError(session.state);
     const sink = this.deps.openSink(session.sink, session.storagePath);
-    const controller = new AbortController();
-    const hash = createHash('sha256');
-    let bytes = 0;
-    // The store's client does not listen for `error` on its body, so this
-    // stream never emits one: a source that dies aborts the request instead.
-    const body = new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
-        hash.update(chunk);
-        bytes += chunk.length;
-        callback(null, chunk);
-      },
+    const part = await this.receiver.receive({
+      uploadId: datasetId,
+      files: session.files,
+      chunkSize: session.chunkSize,
+      sink,
+      fileId,
+      partNumber,
+      source,
+      contentLength: options.contentLength,
+      sha256: options.sha256,
+      maxConcurrentParts: this.deps.limits().maxConcurrentParts,
+      storeName: 'dataset store',
+      logTag: '[DatasetUpload]',
+      currentState: async () => (await this.deps.sessions.find(datasetId))?.state ?? null,
     });
-    const stop = () => {
-      if (controller.signal.aborted) return;
-      controller.abort();
-      source.unpipe(body);
-      body.destroy();
-    };
-    const onClose = () => {
-      if (!source.readableEnded) stop();
-    };
-    source.once('error', stop);
-    source.once('close', onClose);
-
-    let settle!: () => void;
-    const entry: ActivePart = { abort: stop, done: new Promise<void>((resolve) => { settle = resolve; }) };
-    const set = this.active.get(datasetId) ?? new Set<ActivePart>();
-    set.add(entry);
-    this.active.set(datasetId, set);
-    this.activeParts++;
-
-    try {
-      source.pipe(body);
-      const pending = await sink.writePart(file, partNumber, body, expected, session.chunkSize, controller.signal)
-        .catch((error: unknown) => {
-          if (error instanceof UploadAbortedError || controller.signal.aborted) throw this.interrupted();
-          console.error(`[DatasetUpload] ${datasetId}: storing part ${partNumber} of ${file.path} failed:`, error);
-          throw new DatasetUploadError('STORE_ERROR', 'The dataset store did not accept this part; send it again.', 502);
-        });
-      const digest = hash.digest('hex');
-      if (bytes !== expected) {
-        await pending.rollback().catch(() => undefined);
-        throw new DatasetUploadError('PART_SIZE_MISMATCH', `Part ${partNumber} of ${file.path} arrived as ${bytes} bytes; expected ${expected}.`, 400);
-      }
-      if (declared !== null && declared !== digest) {
-        await pending.rollback().catch((error: unknown) => {
-          console.error(`[DatasetUpload] ${datasetId}: could not discard a corrupt part ${partNumber} of ${file.path}:`, error);
-        });
-        throw new DatasetUploadError(
-          'CHECKSUM_MISMATCH',
-          `Part ${partNumber} of ${file.path} does not match X-Chunk-Sha256; it was not kept. Send it again.`,
-          422,
-          { fileId, partNumber, expected: declared, actual: digest },
-        );
-      }
-      // A cancel that began after the check above has already cleared the
-      // prefix; a part that lands now would be an object nothing owns.
-      const current = await this.deps.sessions.find(datasetId);
-      // `processing` is not a reason to discard: finish is only accepted once
-      // the store holds every part, so a part still in flight then is a second
-      // copy of one it has counted — the first request of a part the client
-      // re-sent after a timeout. Rolling that back would blank the part (or
-      // delete the object) finish is about to assemble, and fail a complete
-      // upload. `process` waits for this request before it reads the parts.
-      if (!current || (current.state !== 'uploading' && current.state !== 'processing')) {
-        await pending.rollback().catch(() => undefined);
-        throw this.notAccepting(current?.state ?? 'cancelling');
-      }
-      await pending.commit();
-      const fileComplete = current.state === 'uploading'
-        ? this.recordPart(session, file, partNumber, expected)
-        : true;
-      return { datasetId, fileId: file.id, partNumber, size: expected, sha256: digest, fileComplete };
-    } finally {
-      source.off('error', stop);
-      source.off('close', onClose);
-      // Nothing reads `body` any more; left piped, a refused part would stall
-      // the request instead of letting the route drain it.
-      source.unpipe(body);
-      body.destroy();
-      this.activeParts--;
-      set.delete(entry);
-      if (set.size === 0) this.active.delete(datasetId);
-      settle();
-    }
-  }
-
-  private interrupted(): DatasetUploadError {
-    return new DatasetUploadError('PART_INTERRUPTED', 'The request ended before the part was complete; it was not kept.', 400);
-  }
-
-  private notAccepting(state: DatasetUploadState): DatasetUploadError {
-    const why = state === 'processing' ? 'it is being finished'
-      : state === 'completed' ? 'it is finished'
-        : state === 'failed' ? 'it failed' : 'it was cancelled';
-    return new DatasetUploadError('UPLOAD_NOT_ACCEPTING', `This upload takes no more parts: ${why}.`, 409, { state });
-  }
-
-  /** Wait for every part of `datasetId` that is being streamed right now. */
-  private async settleActive(datasetId: string, abort: boolean): Promise<void> {
-    const set = this.active.get(datasetId);
-    if (!set || set.size === 0) return;
-    const entries = [...set];
-    if (abort) for (const entry of entries) entry.abort();
-    await Promise.all(entries.map((entry) => entry.done));
+    const fileComplete = part.state === 'uploading'
+      ? this.recordPart(session, part.file, partNumber, part.size)
+      : true;
+    return { datasetId, fileId: part.file.id, partNumber, size: part.size, sha256: part.sha256, fileComplete };
   }
 
   // --------------------------------------------------------------------------
@@ -728,37 +563,16 @@ export class DatasetUploadService {
         message: session.state === 'processing' ? 'The upload is already being finished' : 'The upload is already finished',
       };
     }
-    if (session.state !== 'uploading') throw this.notAccepting(session.state);
+    if (session.state !== 'uploading') throw notAcceptingError(session.state);
 
     const sink = this.deps.openSink(session.sink, session.storagePath);
     const received = await sink.received(session.files, session.chunkSize);
-    const missing = session.files
-      .map((file) => {
-        const got = received.get(file.id);
-        const held = new Set(got?.complete ? [] : got?.parts ?? []);
-        const missingParts = got?.complete
-          ? []
-          : Array.from({ length: file.partCount }, (_, i) => i + 1).filter((n) => !held.has(n));
-        return { fileId: file.id, path: file.path, missingParts };
-      })
-      .filter((entry) => entry.missingParts.length > 0);
-    if (missing.length > 0) {
-      const missingBytes = missing.reduce((sum, entry) => sum + entry.missingParts.reduce(
-        (bytes, n) => bytes + partSizeOf(session.files[entry.fileId], n, session.chunkSize), 0,
-      ), 0);
-      throw new DatasetUploadError(
-        'UPLOAD_INCOMPLETE',
-        `${missing.length} of ${session.files.length} files are not fully uploaded (${formatBytes(missingBytes)} missing). `
-          + 'Send the missing parts, then finish again.',
-        409,
-        { missingFiles: missing.length, missingBytes, missing: missing.slice(0, MAX_MISSING_LISTED) },
-      );
-    }
+    assertNothingMissing(session.files, session.chunkSize, received, formatBytes);
 
     if (!await this.deps.sessions.transition(datasetId, ['uploading'], 'processing')) {
       // Another finish (or a cancel) won; report where it stands now.
       const current = await this.deps.sessions.find(datasetId);
-      if (!current || current.state === 'cancelling') throw this.notAccepting('cancelling');
+      if (!current || current.state === 'cancelling') throw notAcceptingError('cancelling');
       return { datasetId, state: current.state, status, message: 'The upload is already being finished' };
     }
     this.log(datasetId, 'info', `All ${session.files.length} files received; assembling and verifying`);
@@ -785,32 +599,15 @@ export class DatasetUploadService {
     let phase: 'storing' | 'validating' = 'storing';
     try {
       // A re-sent part still in flight would change an ETag under the assembly.
-      await this.settleActive(datasetId, false);
+      await this.receiver.settle(datasetId, false);
       this.emitProgress(datasetId, { datasetId, status: 'uploading', phase, progress: 86, ...totals });
 
-      const sink = this.deps.openSink(session.sink, session.storagePath);
-      const before = await sink.received(session.files, session.chunkSize);
-      for (const file of session.files) {
-        if (before.get(file.id)?.complete) continue;
-        if (file.partCount === 1) throw new Error(`${file.path} is no longer in the dataset store`);
-        await sink.assemble(file, session.chunkSize);
-        this.log(datasetId, 'info', `Assembled ${file.path} from ${file.partCount} parts`);
-      }
-
-      const after = await sink.received(session.files, session.chunkSize);
-      const short = session.files.find((file) => !after.get(file.id)?.complete);
-      if (short) throw new Error(`${short.path} is not in the dataset store with its declared size of ${short.size} bytes`);
-
-      const checksummed = session.files.filter((file) => file.sha256);
-      for (const file of checksummed) {
-        const actual = await sha256Of(await sink.open(file));
-        if (actual !== file.sha256) {
-          throw new Error(`Checksum mismatch for ${file.path}: the manifest declares sha256 ${file.sha256}, the stored file is ${actual}`);
-        }
-      }
-      if (checksummed.length > 0) this.log(datasetId, 'info', `Verified the sha256 of ${checksummed.length} file(s)`);
-
-      await sink.finalize();
+      await assembleAndVerify(
+        this.deps.openSink(session.sink, session.storagePath),
+        session.files,
+        session.chunkSize,
+        { storeName: 'dataset store', log: (message) => this.log(datasetId, 'info', message) },
+      );
       await this.deps.sessions.transition(datasetId, ['processing'], 'completed');
       this.live.delete(datasetId);
 
@@ -926,7 +723,7 @@ export class DatasetUploadService {
         );
       }
     }
-    await this.settleActive(datasetId, true);
+    await this.receiver.settle(datasetId, true);
     await this.deps.openSink(session.sink, session.storagePath).discard(session.files);
     this.live.delete(datasetId);
   }
@@ -954,7 +751,7 @@ export class DatasetUploadService {
     for (const session of stale) {
       // A part is being streamed this moment: the upload is not idle, only its
       // activity mark is behind.
-      if (session.state === 'uploading' && (this.active.get(session.datasetId)?.size ?? 0) > 0) continue;
+      if (session.state === 'uploading' && this.receiver.activeCount(session.datasetId) > 0) continue;
       try {
         const reason = session.state === 'cancelling'
           ? 'an interrupted cancel was completed'

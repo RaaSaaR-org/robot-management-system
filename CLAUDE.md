@@ -442,6 +442,7 @@ Guidelines:
 | `docs/vr-teleop-data-collection.md` | Quest 3 teleop on the G1 through NeoDEM, single operator; Unitree `xr_teleoperate` path and LeRobot import |
 | `docs/huggingface-publish.md`    | Publishing a recorded dataset to the Hugging Face Hub |
 | `docs/dataset-download.md`       | Listing a stored dataset's files and fetching them byte for byte (the API behind `rmsctl datasets download`) |
+| `docs/model-upload.md`           | Uploading a trained checkpoint directory straight into the model store and registry, and fetching it back (the API behind `rmsctl models upload` / `download`) |
 | `docs/regulatory-compliance.md`  | EU AI Act, GDPR compliance        |
 
 ## Current Limitations

@@ -47,6 +47,17 @@ vi.mock('../repositories/index.js', () => ({
   modelVersionRepository: mockModelVersionRepository,
   skillDefinitionRepository: mockSkillDefinitionRepository,
   deploymentRepository: mockDeploymentRepository,
+  datasetRepository: { findById: vi.fn(async () => null) },
+}));
+
+// None of the models in this suite was uploaded to the instance (TASK-498):
+// nothing is stored for them, so nothing is removed and no storage is named.
+// What an uploaded one does is in routes/__tests__/model-uploads-routes.test.ts.
+vi.mock('../services/modelUpload/ModelUploadService.js', () => ({
+  modelUploadService: {
+    removeStoredFiles: vi.fn(async () => ({ removed: false, freedBytes: 0 })),
+    storageOf: vi.fn(async () => null),
+  },
 }));
 
 vi.mock('../services/buildAudit.js', () => ({ auditBuildAct: mockAudit }));
@@ -350,6 +361,36 @@ describe('PATCH /api/models/versions/:id', () => {
 
     expect(res.status).toBe(404);
     expect(mockModelVersionRepository.update).not.toHaveBeenCalled();
+  });
+
+  describe('an uploaded model whose stored files were removed (TASK-498)', () => {
+    const removed = { uploadId: 'mv-1', storage: 'rustfs' as const, filesRemovedAt: '2026-11-13T12:00:00.000Z' };
+
+    it('refuses to leave archived: nothing is behind its artifactUri any more', async () => {
+      const { modelUploadService } = await import('../services/modelUpload/ModelUploadService.js');
+      vi.mocked(modelUploadService.storageOf).mockResolvedValueOnce(removed);
+
+      const res = await request(createApp())
+        .patch('/api/models/versions/mv-1')
+        .send({ deploymentStatus: 'staging' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('ARTIFACT_REMOVED');
+      expect(res.body.filesRemovedAt).toBe(removed.filesRemovedAt);
+      expect(mockModelVersionRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('can still be renamed, and archived again', async () => {
+      const { modelUploadService } = await import('../services/modelUpload/ModelUploadService.js');
+      vi.mocked(modelUploadService.storageOf).mockResolvedValue(removed);
+
+      const renamed = await request(createApp()).patch('/api/models/versions/mv-1').send({ name: 'old g11' });
+      const archived = await request(createApp()).patch('/api/models/versions/mv-1').send({ deploymentStatus: 'archived' });
+
+      expect(renamed.status).toBe(200);
+      expect(archived.status).toBe(200);
+      vi.mocked(modelUploadService.storageOf).mockResolvedValue(null);
+    });
   });
 });
 

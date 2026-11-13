@@ -452,9 +452,33 @@ the entity's state forbids it. Each act, and each create of these entities, writ
 | POST | `/api/federated/rounds/:id/cancel` | Cancel an unfinished round → the round (`status: 'cancelled'`); in-flight participants become `excluded`; finished → 409 |
 | DELETE | `/api/federated/rounds/:id` | Finished round (completed / failed / cancelled) → `deleted` with its participants; running → 409 |
 | DELETE | `/api/deployments/:id` | pending / failed / rolled back / cancelled → `deleted`; live → 409 |
-| DELETE | `/api/models/versions/:id` | Always `archived`, never removed; 409 while a deployment of it is unfinished or a skill runs it |
+| DELETE | `/api/models/versions/:id` | Always `archived`, never removed; 409 while a deployment of it is unfinished or a skill runs it. A model uploaded to the instance (TASK-498) also has its stored files removed → `{id, outcome: 'archived', storedFilesRemoved: true, freedBytes}` |
 | POST | `/api/marketplace/listings/:id/unpublish` \| `/publish` | Seller or super-admin → `{listing}` as `draft` / `published`; a `pending_review` / `suspended` listing → 409 unless super-admin |
 | DELETE | `/api/marketplace/listings/:id` | Seller or super-admin; nobody bought it → `deleted`; a buyer holds a licence → 409 |
+
+### Direct model upload (`/api/models`, TASK-498)
+
+A checkpoint directory is sent file by file, in bounded parts, through the API
+server into the model store, and registered as a model version when it is
+whole. The complete contract — bodies, refusals, limits, resume — is
+[`docs/model-upload.md`](model-upload.md); the part protocol is the dataset
+upload's.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/models/uploads` | Declare the model (`name`, `version`, `modelType?`, `baseModel?`, `datasetId?`, `trainingMetrics?`, `validationMetrics?`, `notes?`, `chunkSize?`) and its `files: [{path, size, sha256?}]` → `201 {uploadId, chunkSize, files: [{id, path, size, partCount}], …}`. `507 INSUFFICIENT_STORAGE` when the store cannot hold it, `409 MODEL_VERSION_EXISTS` for a name + version already registered |
+| GET | `/api/models/uploads` | Uploads that are not models yet (`uploading`, `processing`, `failed`) → `{uploads}` |
+| GET | `/api/models/uploads/:id` | What the server holds: `state`, `receivedBytes`, `files[].receivedParts`, `modelVersionId` once `completed`, `error` when `failed` |
+| PUT | `/api/models/uploads/:id/files/:fileId/parts/:partNumber` | One part as a raw `application/octet-stream` body with its exact `Content-Length`; optional `X-Chunk-Sha256`. Exempt from the rate limits; `503 UPLOAD_BUSY` + `Retry-After` beyond the concurrency limit |
+| POST | `/api/models/uploads/:id/finish` | `202` → the server assembles, verifies and registers the model version (id = the upload's id, `sourceKind: 'uploaded'`); `409 UPLOAD_INCOMPLETE` lists what is missing |
+| POST | `/api/models/uploads/:id/cancel` | Stop and remove everything stored; `409 UPLOAD_COMPLETED` once it is a model |
+| GET | `/api/models/versions/:id/files` | The stored files of an uploaded model, paginated (`limit` 1–1000, `after`) → `{modelVersionId, artifactUri, storage, totalBytes, fileCount, files: [{path, size, sha256}], nextCursor}`; `404 NO_STORED_FILES` for a model that only points elsewhere, `410 ARTIFACT_REMOVED` after it was deleted |
+| GET | `/api/models/versions/:id/files/content?path=` | One stored file as raw bytes, `Range` supported (`206`, `416 RANGE_NOT_SATISFIABLE`), `X-Content-Sha256` when known; streamed from RustFS or the local model directory, never redirected |
+
+`GET /api/models/versions/:id` additionally answers `trainedOnDataset: {id, name} | null`
+and `storage: {uploadId, storage, filesRemovedAt} | null`; every model version carries
+`baseModel`, `datasetId`, `notes`, `artifactSizeBytes` and `artifactFileCount` (null
+where they do not apply).
 
 ### Social — comments and ratings (`/api/social`, TASK-241)
 

@@ -2526,6 +2526,45 @@ model DatasetUpload {
   @@index([state, lastActivityAt])
 }
 
+// ModelUpload - a direct model checkpoint upload (TASK-498)
+//
+// The session of an upload of a checkpoint directory through the API server,
+// the model-side twin of DatasetUpload. `id` is the id the ModelVersion gets
+// when the upload completes: until then no ModelVersion row exists, so an
+// unfinished upload is never in the registry. The row stays after completion
+// as the record of what was stored (the file manifest a download reads).
+model ModelUpload {
+  id             String    @id
+  // 'uploading' | 'processing' | 'completed' | 'failed' | 'cancelling' — as
+  // DatasetUpload.state.
+  state          String    @default("uploading")
+  // 'rustfs' | 'local' — decided once at start.
+  sink           String
+  storagePath    String
+  chunkSize      Int
+  // JSON: UploadFileEntry[] — { id, path, size, sha256?, partCount, uploadId? }.
+  filesJson      String
+  totalBytes     BigInt
+  // JSON: what the ModelVersion is registered with — { name, version,
+  // modelType, baseModel, datasetId, trainingMetrics, validationMetrics, notes }.
+  metadataJson   String
+  // Why assembling or verifying failed.
+  error          String?
+  // Set when the upload completed and the ModelVersion was registered.
+  modelVersionId String?   @unique
+  // Set when the model was deleted and its stored files were removed.
+  filesRemovedAt DateTime?
+  lastActivityAt DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
+  @@index([state, lastActivityAt])
+  @@index([tenantId, createdAt])
+}
+
 // TrainingJob - Training job queue entries
 model TrainingJob {
   id                 String    @id @default(uuid())
@@ -2606,7 +2645,8 @@ model ModelVersion {
   // `version`, which is a timestamp for everything this server trains.
   name                 String?
   // 'training' (produced here) | 'imported' (registered from outside) |
-  // 'derived' (fine-tuned from another ModelVersion).
+  // 'derived' (fine-tuned from another ModelVersion) | 'uploaded' (its files
+  // were sent straight into this instance's storage, TASK-498).
   sourceKind           String   @default("training")
   // Lineage: the model this one was fine-tuned from, if any.
   parentModelVersionId String?
@@ -2621,6 +2661,19 @@ model ModelVersion {
   deploymentStatus     String   @default("staging") // 'staging' | 'canary' | 'production' | 'archived'
   mlflowModelName      String?
   mlflowModelVersion   String?
+  // What a model that has no TrainingJob row here can still say about itself
+  // (TASK-498). A model this server trained reads these off its job instead.
+  // `baseModel` is one of BaseModels ('groot_n1_7', 'pi0', …); `datasetId` is
+  // the dataset it was trained on — a plain id, not a relation, so deleting
+  // the dataset never touches the model.
+  baseModel            String?
+  datasetId            String?
+  notes                String?
+  // Size and file count of the stored artifact, for a model whose files this
+  // server holds itself (a direct upload). Null for a model that only points
+  // somewhere else.
+  artifactSizeBytes    BigInt?
+  artifactFileCount    Int?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -3228,6 +3281,7 @@ model Tenant {
 
   // Relations (Wave 3c — VLA lifecycle)
   modelVersions  ModelVersion[]
+  modelUploads   ModelUpload[]
   deployments    Deployment[]
   simulationJobs SimulationJob[]
   syntheticJobs  SyntheticJob[]

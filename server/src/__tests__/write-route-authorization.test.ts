@@ -75,7 +75,10 @@ const app = createApp();
 // /:id/upload/finish and /cancel.
 // TASK-485 adds one on the same mount: DELETE /robot-types/:id (ownerOnly).
 // TASK-493 adds one more there: PATCH /robot-types/:id (ownerOnly) — a rename.
-const EXPECTED_WRITE_ROUTES = 393;
+// TASK-498 adds four on the guarded /api/models mount, the direct model upload:
+// POST /uploads, PUT /uploads/:id/files/:fileId/parts/:partNumber, and POST
+// /uploads/:id/finish and /cancel.
+const EXPECTED_WRITE_ROUTES = 397;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;

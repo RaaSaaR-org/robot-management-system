@@ -217,13 +217,16 @@ export interface ModelVersionMetrics {
   successRate?: number;
 }
 
-export const ModelSourceKinds = ['training', 'imported', 'derived'] as const;
+// 'uploaded' is a model whose files were sent straight into this instance's
+// storage (TASK-498); the other three only point at an artifact somewhere else.
+export const ModelSourceKinds = ['training', 'imported', 'derived', 'uploaded'] as const;
 export type ModelSourceKind = (typeof ModelSourceKinds)[number];
 
 export const MODEL_SOURCE_KIND_LABELS: Record<ModelSourceKind, string> = {
   training: 'Trained here',
   imported: 'Imported',
   derived: 'Derived',
+  uploaded: 'Uploaded directly',
 };
 
 export type ModelDeploymentStatus = 'staging' | 'canary' | 'production' | 'archived';
@@ -253,12 +256,66 @@ export interface ModelVersion {
   validationMetrics: TrainingMetrics;
   deploymentStatus: ModelDeploymentStatus;
   metrics?: ModelVersionMetrics;
+  /**
+   * What a model with no training job on this server states about itself
+   * (TASK-498): the foundation model it was fine-tuned from, the dataset it
+   * was trained on (an id; the dataset may be gone) and free-text notes.
+   */
+  baseModel?: string | null;
+  datasetId?: string | null;
+  notes?: string | null;
+  /** Bytes and files this instance stores for the model; null when it only points elsewhere. */
+  artifactSizeBytes?: number | null;
+  artifactFileCount?: number | null;
   createdAt: string;
   updatedAt: string;
   skill?: SkillDefinition;
   parent?: ModelVersion | null;
   children?: ModelVersion[];
   checkpoints?: ModelCheckpoint[];
+}
+
+/**
+ * The two facts `GET /api/models/versions/:id` resolves beside the row
+ * (TASK-498): the dataset `datasetId` names, when it still exists, and whether
+ * this instance stores the model's files.
+ */
+export interface ModelVersionOrigin {
+  trainedOnDataset: { id: string; name: string } | null;
+  storage: { uploadId: string; storage: 'local' | 'rustfs'; filesRemovedAt: string | null } | null;
+}
+
+/** One stored file of an uploaded model. */
+export interface ModelFileEntry {
+  path: string;
+  size: number;
+  sha256: string | null;
+}
+
+/** `GET /api/models/versions/:id/files` — one page of what the instance stores for a model. */
+export interface ModelFileManifest {
+  modelVersionId: string;
+  artifactUri: string;
+  storage: 'local' | 'rustfs';
+  totalBytes: number;
+  fileCount: number;
+  files: ModelFileEntry[];
+  nextCursor: string | null;
+}
+
+/** A row of `GET /api/models/uploads`: an upload that is not a registered model yet. */
+export interface ModelUploadSummary {
+  uploadId: string;
+  state: 'uploading' | 'processing' | 'completed' | 'failed' | 'cancelling';
+  name: string;
+  version: string;
+  baseModel: string | null;
+  totalBytes: number;
+  totalFiles: number;
+  error: string | null;
+  createdAt: string;
+  lastActivityAt: string;
+  expiresAt: string | null;
 }
 
 /** One per-epoch checkpoint reported by the training worker. (TASK-238) */

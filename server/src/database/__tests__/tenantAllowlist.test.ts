@@ -87,7 +87,7 @@ describe('TENANT_SCOPED_MODELS vs the Prisma schema', () => {
     }
   });
 
-  it('derives 41 scoped models including control leases, comments, ratings, experiments, frame registrations and skills', () => {
+  it('derives 42 scoped models including control leases, comments, ratings, experiments, frame registrations, skills and model uploads', () => {
     // A count, not a list: it catches a model quietly *added* to the allowlist
     // with a column nobody reviewed, which neither test above would notice.
     // Moving this number is fine — it is a prompt to say why in the PR.
@@ -97,8 +97,10 @@ describe('TENANT_SCOPED_MODELS vs the Prisma schema', () => {
     // Back to 38: the fleet Zone is gone (TASK-334).
     // 39th: RobotFrameRegistration (TASK-341), stamped from the caller's tenant.
     // 40th/41st: SkillDefinition and SkillChain (TASK-384). ComplianceLog also
-    // gained the column but is an EXCEPTION, hence 42 models carry it.
-    expect(TENANT_SCOPED_MODELS.size).toBe(41);
-    expect(modelsWithTenantId()).toHaveLength(42);
+    // gained the column but is an EXCEPTION, hence one more model carries it.
+    // 42nd: ModelUpload (TASK-498) — an upload has no ModelVersion to be reached
+    // through until it completes, so the session row is scoped itself.
+    expect(TENANT_SCOPED_MODELS.size).toBe(42);
+    expect(modelsWithTenantId()).toHaveLength(43);
   });
 });
