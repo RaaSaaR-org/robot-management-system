@@ -199,12 +199,26 @@ export const useAuthStore = createStore<AuthStore>(
       const accessToken = tokenStorage.getAccessToken();
 
       if (!accessToken) {
+        // A returning visitor's remembered user opens the shell at once here
+        // too (TASK-482): on a server without sign-in the two requests below
+        // only confirm it, and a throttled or slow answer must not be a
+        // spinner on an empty page. Every way out of this branch ends
+        // initialized, with this session kept unless /me replaces it.
+        const remembered = get().isAuthenticated ? get().user : null;
+        if (remembered) {
+          set((state) => {
+            state.isInitialized = true;
+          });
+        }
+
         // TASK-483: a server without sign-in answers /me for anyone, as its one
         // shared user. Ask it instead of demanding a token nobody can obtain.
         if (await serverNeedsNoSignIn()) {
-          set((state) => {
-            state.isLoading = true;
-          });
+          if (!remembered) {
+            set((state) => {
+              state.isLoading = true;
+            });
+          }
           try {
             const user = await authApi.getCurrentUser();
             set((state) => {
@@ -215,6 +229,8 @@ export const useAuthStore = createStore<AuthStore>(
               state.mustChangePassword = false;
             });
           } catch {
+            // The remembered shared user stays: nothing here can refuse it.
+            if (remembered) return;
             // Unreachable or rate limited. Not signed out — there is nothing
             // to sign in to — so the route guard offers a retry instead.
             set((state) => {

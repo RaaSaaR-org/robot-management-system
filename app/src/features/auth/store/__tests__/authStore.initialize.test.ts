@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../../api/authApi', () => ({ authApi: api }));
 
 import { tokenStorage, ApiRequestError } from '@/api/client';
+import { useFeaturesStore } from '@/shared/hooks/useFeatures';
 import { useAuthStore } from '../authStore';
 
 const failure = (statusCode: number) =>
@@ -127,5 +128,66 @@ describe('initialize signed out', () => {
     await useAuthStore.getState().initialize();
     expect(useAuthStore.getState().isInitialized).toBe(true);
     expect(api.getCurrentUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('initialize on a server without sign-in, for a returning visitor with no token', () => {
+  const SHARED = { id: 'anon', name: 'Dev User', role: 'owner' } as never;
+  let answerFeatures: () => void = () => {};
+
+  beforeEach(() => {
+    reset('none');
+    useAuthStore.setState({ user: SHARED, isAuthenticated: true });
+    // The feature snapshot is in flight until the test lets it answer.
+    const pending = new Promise<void>((resolve) => { answerFeatures = resolve; });
+    useFeaturesStore.setState({
+      loaded: false,
+      fetch: async () => {
+        await pending;
+        useFeaturesStore.setState((state) => ({
+          loaded: true,
+          flags: { ...state.flags, signInRequired: false },
+        }));
+      },
+    } as never);
+  });
+
+  it('opens the shell at once, before the server has said anything', async () => {
+    let answerMe: (user: unknown) => void = () => {};
+    api.getCurrentUser.mockReturnValueOnce(new Promise((resolve) => { answerMe = resolve; }));
+
+    const done = useAuthStore.getState().initialize();
+
+    expect(useAuthStore.getState()).toMatchObject({ isInitialized: true, isAuthenticated: true, isLoading: false });
+
+    answerFeatures();
+    await vi.waitFor(() => expect(api.getCurrentUser).toHaveBeenCalledOnce());
+    // /me still in flight: no spinner state either.
+    expect(useAuthStore.getState()).toMatchObject({ isInitialized: true, isLoading: false });
+
+    answerMe({ id: 'anon', name: 'Shared User', role: 'owner' });
+    await done;
+    expect(useAuthStore.getState().user).toMatchObject({ name: 'Shared User' });
+  });
+
+  it.each([429, 503, 0])('keeps the remembered user when /auth/me fails with %i', async (status) => {
+    api.getCurrentUser.mockRejectedValue(failure(status));
+    answerFeatures();
+
+    await useAuthStore.getState().initialize();
+
+    expect(useAuthStore.getState()).toMatchObject({ isInitialized: true, isAuthenticated: true, user: SHARED });
+  });
+
+  it('a first visit still waits, and gets the retry screen when the server does not answer', async () => {
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+    api.getCurrentUser.mockRejectedValue(failure(429));
+
+    const done = useAuthStore.getState().initialize();
+    expect(useAuthStore.getState().isInitialized).toBe(false);
+    answerFeatures();
+    await done;
+
+    expect(useAuthStore.getState()).toMatchObject({ isInitialized: true, isAuthenticated: false, user: null });
   });
 });
