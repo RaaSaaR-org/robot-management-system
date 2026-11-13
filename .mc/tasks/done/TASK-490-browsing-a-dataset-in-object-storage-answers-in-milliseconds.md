@@ -3,7 +3,7 @@ id: "TASK-490"
 aliases: []
 title: "Browsing a dataset in object storage answers in milliseconds and holds up under parallel requests"
 slug: "browsing-a-dataset-in-object-storage-answers-in-milliseconds"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
