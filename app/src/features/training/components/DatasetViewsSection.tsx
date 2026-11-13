@@ -20,7 +20,7 @@ import {
   type RowActionItem,
 } from '@/shared/components/ui';
 import { getErrorMessage } from '@/shared/utils';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { formatDate } from '@/shared/utils/format';
 import { describeSelectionOrigin } from '../types';
 import type { DatasetViewSummary } from '../types';
 import { formatRelative } from './datasets/datasetFormat';
@@ -117,7 +117,7 @@ export const DatasetViewsSection = memo(function DatasetViewsSection({
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="truncate text-sm font-medium text-ink-primary">{view.name}</span>
               {view.frozenAt && (
-                <Tooltip content={`Frozen ${new Date(view.frozenAt).toLocaleDateString(UI_DATE_LOCALE)} — a training run cites this selection`}>
+                <Tooltip content={`Frozen ${formatDate(view.frozenAt)} — a training run cites this selection`}>
                   <span className="inline-flex">
                     <StatusTag tone="gated" size="sm" data-testid={`view-frozen-${view.id}`}>
                       <Lock className="h-3 w-3" strokeWidth={1.75} /> Frozen

@@ -14,7 +14,7 @@ import {
   confirm, toast, type DataTableColumn,
 } from '@/shared/components/ui';
 import { useFeatures } from '@/shared/hooks';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { formatDate } from '@/shared/utils/format';
 import { useOrganizationsStore } from '../store/organizationsStore';
 import { EnvVar, GatedNotice } from '../components/GatedNotice';
 import { OnboardingWizard } from '../components/OnboardingWizard';
@@ -22,7 +22,7 @@ import { OrganizationFormModal, orgErrorMessage } from '../components/Organizati
 import type { Organization } from '../types/organizations.types';
 
 const SAMPLE_ORG = { name: 'Acme Robotics', slug: 'acme' };
-const SAMPLE_LABEL = `Load sample (${SAMPLE_ORG.name})`;
+const SAMPLE_LABEL = 'Add a sample organization';
 const plus = <Plus className="h-4 w-4" strokeWidth={1.75} />;
 
 export function OrganizationsPage() {
@@ -102,7 +102,7 @@ export function OrganizationsPage() {
     { key: 'datasets', header: 'Datasets', align: 'right', sortable: true, hideBelow: 'md', sortValue: (o) => o.counts.datasets, cell: (o) => o.counts.datasets },
     {
       key: 'createdAt', header: 'Created', align: 'right', sortable: true, hideBelow: 'md',
-      sortValue: (o) => new Date(o.createdAt), cell: (o) => new Date(o.createdAt).toLocaleDateString(UI_DATE_LOCALE),
+      sortValue: (o) => new Date(o.createdAt), cell: (o) => formatDate(o.createdAt),
     },
   ];
 
@@ -128,9 +128,10 @@ export function OrganizationsPage() {
       />
 
       {!multiTenancyEnabled && (
-        <GatedNotice>
-          Organizations are listed, but tenant isolation only applies when the server runs with{' '}
-          <EnvVar>MULTI_TENANCY_ENABLED=true</EnvVar>.
+        <GatedNotice
+          adminHint={<>Organizations are kept apart once the server runs with <EnvVar>MULTI_TENANCY_ENABLED=true</EnvVar>.</>}
+        >
+          Organizations are listed here, but on this instance everyone shares the same robots and data.
         </GatedNotice>
       )}
 
@@ -139,7 +140,7 @@ export function OrganizationsPage() {
           <div className="min-w-0">
             <p className="text-sm font-medium text-ink-primary">No customer organizations yet</p>
             <p className="text-[13px] text-ink-tertiary">
-              Only the Default organization exists. Create one, or start from a sample for a demo.
+              Only the Default organization exists. Create one, or add “{SAMPLE_ORG.name}” as a sample to try it out.
             </p>
           </div>
           <Button variant="secondary" onClick={() => openCreate(SAMPLE_ORG)}>{SAMPLE_LABEL}</Button>

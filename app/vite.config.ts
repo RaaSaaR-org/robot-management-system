@@ -30,12 +30,32 @@ function brandHtmlPlugin(): Plugin {
   };
 }
 
+// The /docs viewer inlines ../docs/**/*.md through import.meta.glob. A glob
+// that matches nothing is not an error to Vite, so a build made where docs/
+// is missing (a Docker context of app/ alone) used to succeed and ship a help
+// button that opened an empty page (TASK-486). Refuse that build instead.
+function requireDocsPlugin(): Plugin {
+  const docsReadme = path.resolve(__dirname, '../docs/README.md');
+  return {
+    name: 'require-docs',
+    apply: 'build',
+    buildStart() {
+      if (!fs.existsSync(docsReadme)) {
+        this.error(
+          `The documentation folder is missing (${docsReadme}). The app bundles ../docs for its /docs viewer; ` +
+            'in Docker pass it as a named context: --build-context docs=../docs (see app/Dockerfile).',
+        );
+      }
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   base: process.env.VITE_DEMO_MODE === 'true'
     ? '/robot-management-system/'
     : '/',
-  plugins: [react(), brandHtmlPlugin()],
+  plugins: [react(), brandHtmlPlugin(), requireDocsPlugin()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

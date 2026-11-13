@@ -17,6 +17,7 @@ import {
 import type { AnomalyRecord } from '../types';
 import { ResolveAnomalyModal } from './ResolveAnomalyModal';
 import { humanize } from './oversightFormat';
+import { formatDateTime } from '@/shared/utils/format';
 
 export interface AnomaliesPanelProps {
   anomalies: AnomalyRecord[];
@@ -54,7 +55,7 @@ export function AnomaliesPanel({ anomalies, isLoading, onAcknowledge, onResolve,
       header: 'Detected',
       sortable: true,
       sortValue: (a) => new Date(a.detectedAt),
-      cell: (a) => <span className="whitespace-nowrap text-[13px] text-ink-tertiary">{new Date(a.detectedAt).toLocaleString()}</span>,
+      cell: (a) => <span className="whitespace-nowrap text-[13px] text-ink-tertiary">{formatDateTime(a.detectedAt)}</span>,
     },
     {
       key: 'robot',
@@ -112,7 +113,7 @@ export function AnomaliesPanel({ anomalies, isLoading, onAcknowledge, onResolve,
         onClose={() => setDetail(null)}
         size="lg"
         title={detail ? humanize(detail.anomalyType) : ''}
-        description={detail ? `Detected ${new Date(detail.detectedAt).toLocaleString()}` : undefined}
+        description={detail ? `Detected ${formatDateTime(detail.detectedAt)}` : undefined}
         footer={
           detail && (
             <>
@@ -132,7 +133,7 @@ export function AnomaliesPanel({ anomalies, isLoading, onAcknowledge, onResolve,
                 { label: 'Severity', value: <StatusTag tone={statusTone(detail.severity)}>{humanize(detail.severity)}</StatusTag> },
                 { label: 'Robot', value: detail.robotName ?? detail.robotId },
                 { label: 'Robot ID', value: detail.robotId, mono: true },
-                { label: 'Acknowledged', value: detail.acknowledgedAt ? `${new Date(detail.acknowledgedAt).toLocaleString()} by ${detail.acknowledgedByName ?? detail.acknowledgedBy ?? 'unknown'}` : undefined },
+                { label: 'Acknowledged', value: detail.acknowledgedAt ? `${formatDateTime(detail.acknowledgedAt)} by ${detail.acknowledgedByName ?? detail.acknowledgedBy ?? 'unknown'}` : undefined },
               ]}
             />
           </div>

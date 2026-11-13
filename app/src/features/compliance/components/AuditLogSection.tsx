@@ -20,6 +20,7 @@ import { AuditMetricsPanel } from './AuditMetricsPanel';
 import { RetentionSettings } from './RetentionSettings';
 import { LegalHoldManager } from './LegalHoldManager';
 import { EVENT_TYPE_OPTIONS, SEVERITIES, eventTypeLabel, humanize } from './complianceFormat';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 const VIEWS = [
   { value: 'log', label: 'Log' },
@@ -122,8 +123,8 @@ function IntegrityView() {
     await verifyIntegrity();
     const { integrityResult: r, error } = useComplianceStore.getState();
     if (error || !r) toast.error("Couldn't verify the hash chain", { description: error ?? undefined });
-    else if (r.isValid) toast.success('Hash chain intact', { description: `${r.verifiedLogs.toLocaleString()} entries verified` });
-    else toast.warning('Hash chain broken', { description: `${r.brokenLinks.length.toLocaleString()} broken links found` });
+    else if (r.isValid) toast.success('Hash chain intact', { description: `${r.verifiedLogs.toLocaleString(UI_DATE_LOCALE)} entries verified` });
+    else toast.warning('Hash chain broken', { description: `${r.brokenLinks.length.toLocaleString(UI_DATE_LOCALE)} broken links found` });
   };
   return <IntegrityStatus result={integrityResult} isVerifying={isVerifying} onVerify={() => void verify()} />;
 }

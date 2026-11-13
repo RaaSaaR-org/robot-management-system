@@ -89,7 +89,7 @@ const WS_FRESHNESS_WINDOW = 10_000;
  *     <div>
  *       <BatteryGauge level={telemetry?.batteryLevel ?? 0} />
  *       <SensorGrid sensors={telemetry?.sensors ?? {}} />
- *       <span>Last update: {lastUpdate?.toLocaleTimeString()}</span>
+ *       <span>Last update: {formatTime(lastUpdate)}</span>
  *     </div>
  *   );
  * }

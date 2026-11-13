@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ExternalLink, XCircle } from 'lucide-react';
 import {
-  Button, Checkbox, FormField, Input, Modal, Panel, ProgressBar, Select, Spinner, Switch, Textarea, toast,
+  AdminCode, AdminHint, Button, Checkbox, FormField, Input, Modal, Panel, ProgressBar, Select, Spinner, Switch, Textarea, toast,
 } from '@/shared/components/ui';
 import { getErrorMessage } from '@/shared/utils';
 import { trainingApi } from '../api';
@@ -266,10 +266,22 @@ export function PublishDatasetDialog({ isOpen, onClose, datasetId, datasetName, 
           ) : (
             <Panel variant="inset" padding="sm" className="flex items-start gap-3" role="alert" data-testid="publish-not-configured">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-signal-unknown" strokeWidth={1.75} />
-              <p className="text-[13px] text-ink-secondary">
-                {status?.error || (readOnly && status?.warning) || statusError ||
-                  'The server has no Hugging Face token. Run `hf auth login` on the server host, or set HF_TOKEN, then open this again.'}
-              </p>
+              {status?.error || (readOnly && status?.warning) || statusError ? (
+                <p className="text-[13px] text-ink-secondary">
+                  {status?.error || (readOnly && status?.warning) || statusError}
+                </p>
+              ) : (
+                <div className="flex min-w-0 flex-col gap-1">
+                  <p className="text-[13px] text-ink-secondary">
+                    Publishing is not set up on this instance: no Hugging Face account is connected yet. Ask an
+                    administrator to connect one, then open this again.
+                  </p>
+                  <AdminHint data-testid="publish-admin-hint">
+                    Run <AdminCode>hf auth login</AdminCode> on the server host, or set <AdminCode>HF_TOKEN</AdminCode> in
+                    the server&rsquo;s environment.
+                  </AdminHint>
+                </div>
+              )}
             </Panel>
           )}
 

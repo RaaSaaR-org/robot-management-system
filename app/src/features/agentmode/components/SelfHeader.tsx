@@ -23,6 +23,7 @@ import type { AgentSelfState } from '../types/agentmode.types';
 import { useElapsedSince } from '../hooks/useElapsedSince';
 import { IdentityDialog } from './IdentityDialog';
 import { RobotDetailsDrawer } from './RobotDetailsDrawer';
+import { formatTime } from '@/shared/utils/format';
 
 export interface SelfHeaderProps {
   /** Robot to name when the bootstrap badge is used; null disables the action. */
@@ -135,7 +136,7 @@ function FreshnessClause({
   const receivedAt = new Date(updatedAt);
   const clock = Number.isNaN(receivedAt.getTime())
     ? updatedAt
-    : receivedAt.toLocaleTimeString();
+    : formatTime(receivedAt);
 
   return (
     <Tooltip

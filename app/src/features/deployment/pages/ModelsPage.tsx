@@ -85,7 +85,7 @@ export function ModelsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         eyebrow="Build"
-        title="Model Registry"
+        title="Models"
         description="Every model version this system knows — trained here, imported, or derived from another."
         actions={registerButton}
       />

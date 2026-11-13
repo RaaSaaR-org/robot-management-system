@@ -49,7 +49,7 @@ export function PipelineBreadcrumb({ stage, hideOnMobile = true, className }: Pi
       <span className="tabular-nums text-primary">{info.number}/5</span>
       <span aria-hidden="true">·</span>
       <span>{info.label} stage</span>
-      <span className="text-ink-muted">· Pipeline overview</span>
+      <span className="text-ink-muted">· Skill Training overview</span>
     </Link>
   );
 }

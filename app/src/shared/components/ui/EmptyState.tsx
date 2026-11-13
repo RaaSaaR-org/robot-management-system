@@ -20,6 +20,11 @@ export interface EmptyStateProps {
   action?: ReactNode;
   /** Optional second action (e.g. "Import", "Read the docs") */
   secondaryAction?: ReactNode;
+  /**
+   * Setup detail for whoever runs the instance (an `AdminHint`), under the
+   * actions — the description stays in words a visitor understands.
+   */
+  hint?: ReactNode;
   /** Vertical padding preset (default 'md') */
   size?: 'sm' | 'md' | 'lg';
   className?: string;
@@ -42,7 +47,7 @@ const sizeStyles: Record<NonNullable<EmptyStateProps['size']>, string> = {
  * />
  * ```
  */
-export function EmptyState({ icon, title, description, action, secondaryAction, size = 'md', className }: EmptyStateProps) {
+export function EmptyState({ icon, title, description, action, secondaryAction, hint, size = 'md', className }: EmptyStateProps) {
   return (
     <div className={cn('flex flex-col items-center justify-center px-6 text-center', sizeStyles[size], className)}>
       {icon && (
@@ -61,6 +66,7 @@ export function EmptyState({ icon, title, description, action, secondaryAction, 
           {action}
         </div>
       )}
+      {hint && <div className="mt-4 flex max-w-sm flex-col items-center">{hint}</div>}
     </div>
   );
 }

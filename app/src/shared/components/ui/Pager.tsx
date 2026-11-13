@@ -11,6 +11,7 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { Button } from './Button';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface PagerProps {
   /** Current page, 1-based */
@@ -34,7 +35,7 @@ export interface PagerProps {
 }
 
 function totalText(total: number, noun?: string, nounPlural?: string): string {
-  const count = total.toLocaleString();
+  const count = total.toLocaleString(UI_DATE_LOCALE);
   if (!noun) return `${count} total`;
   return `${count} ${total === 1 ? noun : (nounPlural ?? `${noun}s`)}`;
 }

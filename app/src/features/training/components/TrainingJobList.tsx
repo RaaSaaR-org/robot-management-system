@@ -15,6 +15,7 @@ import {
 } from '@/shared/components/ui';
 import type { TrainingJob } from '../types';
 import { formatRelative, isActiveJob, jobDisplayName, methodLabel, progressLabel, shortId } from './jobs/jobFormat';
+import { formatDateTime } from '@/shared/utils/format';
 
 export interface TrainingJobListProps {
   jobs: TrainingJob[];
@@ -94,7 +95,7 @@ export function TrainingJobList({
       hideBelow: 'md',
       sortable: true,
       sortValue: (j) => new Date(j.createdAt),
-      cell: (j) => <span title={new Date(j.createdAt).toLocaleString()}>{formatRelative(j.createdAt)}</span>,
+      cell: (j) => <span title={formatDateTime(j.createdAt)}>{formatRelative(j.createdAt)}</span>,
     },
   ];
 

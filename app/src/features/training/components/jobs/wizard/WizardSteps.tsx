@@ -10,6 +10,7 @@ import type { SimScene } from '@/features/simulation/types';
 import type { BaseModel, Dataset, FineTuneMethod, InitFromSelection, WeightsSource } from '../../../types';
 import { InitFromModelPicker } from '../../InitFromModelPicker';
 import { BASE_MODEL_OPTIONS, FINE_TUNE_OPTIONS, GPU_OPTIONS, PRIORITY_OPTIONS, type FormState } from './wizardModel';
+import { formatNumber } from '@/shared/utils/format';
 
 type Patch = (patch: Partial<FormState>) => void;
 
@@ -75,7 +76,7 @@ export function DatasetStep({ form, datasets, onToggle, onWeight }: { form: Form
               <button type="button" aria-pressed={!!member} onClick={() => onToggle(dataset.id)} className="min-w-0 flex-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
                 <span className="block truncate text-sm font-medium text-ink-primary">{dataset.name}</span>
                 <span className="text-xs text-ink-secondary">
-                  {dataset.totalFrames.toLocaleString()} frames · {dataset.demonstrationCount} episodes
+                  {formatNumber(dataset.totalFrames)} frames · {dataset.demonstrationCount} episodes
                 </span>
               </button>
               {member && (
@@ -113,17 +114,29 @@ export function ModelStep(props: {
   onWeightsSource: (s: WeightsSource) => void;
   onInitFrom: (s: InitFromSelection | null) => void;
   onMethod: (m: FineTuneMethod) => void;
+  /** The architecture that suits the chosen dataset's robot, when one does. */
+  suggested?: { model: BaseModel; reason: string } | null;
 }) {
-  const { form } = props;
+  const { form, suggested } = props;
   const label = BASE_MODEL_OPTIONS.find((m) => m.value === form.baseModel)?.label ?? form.baseModel;
   return (
     <div className="flex flex-col gap-6">
       <StepSection title="Base model" description="The architecture to train. Continuing an existing model keeps its architecture.">
         <ChoiceCardGroup label="Base model">
           {BASE_MODEL_OPTIONS.map((m) => (
-            <ChoiceCard key={m.value} selected={form.baseModel === m.value} onSelect={() => props.onBaseModel(m.value)} title={m.label} description={m.description} />
+            <ChoiceCard
+              key={m.value}
+              selected={form.baseModel === m.value}
+              onSelect={() => props.onBaseModel(m.value)}
+              title={m.label}
+              description={m.description}
+              aside={suggested?.model === m.value ? <StatusTag tone="accent" size="sm" title={suggested.reason}>Suggested</StatusTag> : undefined}
+            />
           ))}
         </ChoiceCardGroup>
+        {suggested && (
+          <p className="text-xs text-ink-tertiary" data-testid="model-suggestion">{suggested.reason}</p>
+        )}
       </StepSection>
       <StepSection title="Starting weights" description="Start from the foundation model, or continue a model that already exists.">
         <ChoiceCardGroup label="Starting weights">

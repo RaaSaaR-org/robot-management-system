@@ -319,6 +319,45 @@ describe('dataset HuggingFace routes', () => {
       });
     });
 
+    it('reports a finished import as ready at 100 %, not as the importer left it (TASK-486)', async () => {
+      // The importer's last frame hands over to validation; the validation job
+      // then makes the row `ready` without touching the frame.
+      importActivityLog.start('ds-done');
+      importActivityLog.append('ds-done', 'info', 'Import finished');
+      importActivityLog.setProgress('ds-done', {
+        datasetId: 'ds-done', status: 'validating', phase: 'validating', progress: 95,
+        totalFiles: 40, completedFiles: 40,
+      });
+      datasets.get.mockResolvedValue({ id: 'ds-done', status: 'ready', importError: null });
+
+      const response = await request(app).get('/api/datasets/ds-done/import/log');
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('ready');
+      expect(response.body.progress).toMatchObject({ status: 'ready', progress: 100, totalFiles: 40, completedFiles: 40 });
+      expect(response.body.lines).toHaveLength(1);
+    });
+
+    it('leaves the frame alone while validation is still running', async () => {
+      importActivityLog.start('ds-val');
+      importActivityLog.setProgress('ds-val', { datasetId: 'ds-val', status: 'validating', phase: 'validating', progress: 95 });
+      datasets.get.mockResolvedValue({ id: 'ds-val', status: 'validating', importError: null });
+
+      const response = await request(app).get('/api/datasets/ds-val/import/log');
+
+      expect(response.body.progress).toMatchObject({ status: 'validating', progress: 95 });
+    });
+
+    it('reports a failed row as failed, keeping how far the import got', async () => {
+      importActivityLog.start('ds-bad');
+      importActivityLog.setProgress('ds-bad', { datasetId: 'ds-bad', status: 'validating', phase: 'validating', progress: 95 });
+      datasets.get.mockResolvedValue({ id: 'ds-bad', status: 'failed', importError: null });
+
+      const response = await request(app).get('/api/datasets/ds-bad/import/log');
+
+      expect(response.body.progress).toMatchObject({ status: 'failed', progress: 95 });
+    });
+
     it('still gives the status and the reason after a restart lost the lines', async () => {
       importActivityLog.forget('ds-old');
       const importError = { phase: 'downloading', error: '500 Server Error', repoId: 'a/b', failedAt: '2026-10-12T00:00:00Z' };

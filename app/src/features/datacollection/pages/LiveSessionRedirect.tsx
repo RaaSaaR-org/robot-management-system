@@ -16,6 +16,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Glasses } from 'lucide-react';
 import { Spinner } from '@/shared/components/ui/Spinner';
+import { AdminCode, AdminHint } from '@/shared/components/ui/AdminHint';
+import { LinkButton } from '@/shared/components/ui/LinkButton';
 import { datacollectionApi } from '../api/datacollectionApi';
 import { formatDateTime } from '@/shared/utils/format';
 import { sessionName } from '../utils/sessionFormat';
@@ -167,9 +169,19 @@ export function LiveSessionRedirect({
       <div className="flex w-full max-w-md flex-col items-center gap-3 text-center">
         <Glasses className="h-8 w-8 text-ink-tertiary" strokeWidth={1.5} />
         {!robotId ? (
-          <p className="text-[15px] text-ink-primary" data-testid="live-session-status" data-state="no-robot">
-            No robot named. Open this page as /data-collection/live?robot=&lt;robot id&gt;.
-          </p>
+          <>
+            <p className="text-[15px] font-medium text-ink-primary" data-testid="live-session-status" data-state="no-robot">
+              No robot selected
+            </p>
+            <p className="text-[13px] text-ink-secondary">
+              This page takes a headset to a robot&rsquo;s live recording session. Open it from the robot&rsquo;s
+              page or from a recording session, so it knows which robot you mean.
+            </p>
+            <LinkButton to="/data-collection" variant="secondary">Go to recording sessions</LinkButton>
+            <AdminHint data-testid="live-session-admin-hint">
+              The robot is named in the address: <AdminCode>/data-collection/live?robot=&lt;robot id&gt;</AdminCode>
+            </AdminHint>
+          </>
         ) : choosing ? (
           <>
             <p className="text-[15px] font-medium text-ink-primary" data-testid="live-session-status" data-state="choose">

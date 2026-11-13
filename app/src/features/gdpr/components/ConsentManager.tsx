@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import { ErrorState, Panel, SkeletonRows, Switch, errorMessage, toast } from '@/shared/components/ui';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { formatDate } from '@/shared/utils/format';
 import type { UserConsent, ConsentType } from '../types';
 import { ConsentTypes, CONSENT_TYPE_LABELS, CONSENT_TYPE_DESCRIPTIONS } from '../types';
 
@@ -22,7 +22,7 @@ export interface ConsentManagerProps {
 function meta(consent: UserConsent | undefined, granted: boolean): string | null {
   const at = granted ? consent?.grantedAt : consent?.revokedAt;
   if (!at) return null;
-  return `${granted ? 'Granted' : 'Withdrawn'} ${new Date(at).toLocaleDateString(UI_DATE_LOCALE)}`;
+  return `${granted ? 'Granted' : 'Withdrawn'} ${formatDate(at)}`;
 }
 
 export function ConsentManager({ consents, onToggle, onLoad, isLoading = false, error }: ConsentManagerProps) {

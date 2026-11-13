@@ -5,6 +5,8 @@
  * @dependencies None
  */
 
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
+
 // ============================================================================
 // STATUS TYPES
 // ============================================================================
@@ -554,5 +556,5 @@ export function canRevokeContribution(contribution: DataContribution): boolean {
  * Format credits with thousands separator
  */
 export function formatCredits(credits: number): string {
-  return new Intl.NumberFormat().format(credits);
+  return new Intl.NumberFormat(UI_DATE_LOCALE).format(credits);
 }

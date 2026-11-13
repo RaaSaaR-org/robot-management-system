@@ -33,6 +33,7 @@ import type {
   AgentEstopStatus,
   AgentRecoveryState,
 } from '../types/agentmode.types';
+import { formatDateTime } from '@/shared/utils/format';
 
 export interface EstopBannerProps {
   /** Clear the latch. Wired to the store's `resetEstop` by the page. */
@@ -454,7 +455,7 @@ function UnknownStateNotice({ reason }: { reason: string | null }) {
 /** Local date-time, or the raw ISO string when it cannot be parsed. */
 function formatBootTime(at: string): string {
   const date = new Date(at);
-  return Number.isNaN(date.getTime()) ? at : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? at : formatDateTime(date);
 }
 
 /**
