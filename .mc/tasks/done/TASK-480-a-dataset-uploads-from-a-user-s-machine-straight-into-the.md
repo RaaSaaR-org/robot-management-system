@@ -3,7 +3,7 @@ id: "TASK-480"
 aliases: []
 title: "A dataset uploads from a user's machine straight into the instance's storage"
 slug: "a-dataset-uploads-from-a-user-s-machine-straight-into-the"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
