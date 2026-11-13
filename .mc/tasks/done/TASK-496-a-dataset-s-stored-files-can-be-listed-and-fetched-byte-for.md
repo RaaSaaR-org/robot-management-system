@@ -3,7 +3,7 @@ id: "TASK-496"
 aliases: []
 title: "A dataset's stored files can be listed and fetched byte for byte, so a dataset can be downloaded back from the instance"
 slug: "a-dataset-s-stored-files-can-be-listed-and-fetched-byte-for"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
