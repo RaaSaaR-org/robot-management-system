@@ -22,7 +22,7 @@ export interface DatasetStatsPanelProps {
   isLoading: boolean;
   /** Joint groups of the two vectors, when the dataset names them. */
   modality: DatasetModality | null;
-  /** Channel names from `info.json`, used when there are no groups and they fit the vector. */
+  /** Channel names from `info.json`, used when they fit the vector and, beside groups, really name its channels. */
   names?: Partial<Record<Vector, string[]>>;
 }
 
@@ -66,8 +66,10 @@ export function DatasetStatsPanel({ stats, isLoading, modality, names }: Dataset
     const channels = channelStats(feature);
     const groups = (vector && modality?.[vector]) || [];
     const named = vector ? names?.[vector] : undefined;
+    // Inside a group a channel keeps its own name when info.json really names
+    // every channel (TASK-494); without groups the names are shown as they are.
     const labels = groups.length > 0 || named?.length !== channels.length
-      ? channelLabels(groups, channels.length)
+      ? channelLabels(groups, channels.length, named)
       : named;
     return channels.map((c) => ({ ...c, label: labels[c.index] ?? `ch[${c.index}]` }));
   }, [feature, vector, modality, names]);

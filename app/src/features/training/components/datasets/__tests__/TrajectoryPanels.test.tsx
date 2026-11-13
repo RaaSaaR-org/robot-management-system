@@ -8,7 +8,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { JointChartPanel } from '../TrajectoryPanels';
+import { JointChartPanel, rightSideColor, tooltipColumns } from '../TrajectoryPanels';
+import { chartChannelColor } from '@/shared/components/ui';
 import type { FrameData } from '../../../types';
 
 const frames = [0, 1, 2].map((i) => ({
@@ -135,5 +136,73 @@ describe('JointChartPanel', () => {
       expect(legend().getByText('left_leg[1]')).toBeInTheDocument();
       expect(legend().queryByText('left_arm[0]')).not.toBeInTheDocument();
     });
+  });
+
+  describe('named joints of both sides in one group (TASK-494)', () => {
+    const names = [
+      'waist_yaw_joint',
+      'left_shoulder_pitch_joint', 'right_shoulder_pitch_joint', 'left_elbow_joint', 'right_elbow_joint',
+    ];
+    const groups = [{ name: 'waist', start: 0, end: 1 }, { name: 'arms', start: 1, end: 5 }];
+    const moving = [0, 1, 2].map((i) => ({
+      frameIndex: i,
+      timestamp: i / 30,
+      action: [0, i, -i, i / 2, i / 3],
+      observationState: [0, i, -i, i / 2, i / 3],
+    })) as unknown as FrameData[];
+    const legend = () => within(screen.getByTestId('joint-chart-legend'));
+    const show = () => render(<JointChartPanel frames={moving} jointNames={names} groups={groups} isLoading={false} currentTime={0} />);
+
+    it('lists a left/right pair once, by the joint, with the whole names on hover', () => {
+      show();
+      const entries = legend().getAllByRole('button');
+      expect(entries.map((b) => b.textContent)).toEqual(['shoulder_pitch', 'elbow']);
+      expect(entries[0]).toHaveAttribute('title', 'left_shoulder_pitch_joint · right_shoulder_pitch_joint');
+      expect(screen.getByTestId('joint-chart-side-key')).toHaveTextContent(/left.*right/);
+    });
+
+    it('draws the pair in one hue, the right side stepped back, and each pair in its own', () => {
+      show();
+      const swatches = legend().getAllByTestId('joint-chart-swatch').map((s) => s.style.backgroundColor);
+      expect(swatches).toEqual([
+        chartChannelColor(0), rightSideColor(chartChannelColor(0)),
+        chartChannelColor(1), rightSideColor(chartChannelColor(1)),
+      ]);
+    });
+
+    it('drops the shared suffix for a group without sides, and pairs nothing', async () => {
+      show();
+      await userEvent.click(screen.getByRole('button', { name: 'waist' }));
+      const entry = legend().getByRole('button', { name: 'waist_yaw_joint' });
+      expect(entry).toHaveAttribute('title', 'waist_yaw_joint');
+      expect(screen.queryByTestId('joint-chart-side-key')).not.toBeInTheDocument();
+    });
+
+    it('keeps one joint picked out when its legend entry is clicked, and lets go on the second click', async () => {
+      show();
+      const elbow = legend().getByRole('button', { name: 'elbow' });
+      await userEvent.click(elbow);
+      expect(elbow).toHaveAttribute('aria-pressed', 'true');
+      expect(legend().getByRole('button', { name: 'shoulder_pitch' })).toHaveClass('opacity-50');
+      await userEvent.click(elbow);
+      await userEvent.unhover(elbow);
+      expect(elbow).toHaveAttribute('aria-pressed', 'false');
+      expect(legend().getByRole('button', { name: 'shoulder_pitch' })).not.toHaveClass('opacity-50');
+    });
+  });
+});
+
+describe('the columns of the chart tooltip (TASK-494)', () => {
+  it('keeps one column beside the video and for a few rows', () => {
+    expect(tooltipColumns(14, 290)).toBe(1);
+    expect(tooltipColumns(3, 862)).toBe(1);
+    expect(tooltipColumns(0, 862)).toBe(1);
+  });
+
+  it('puts many rows side by side on the wide plot, as far as its width allows', () => {
+    // arms[0]…arms[13] under the videos: fourteen rows in one column were cut off.
+    expect(tooltipColumns(14, 862)).toBe(2);
+    expect(tooltipColumns(31, 862)).toBe(3);
+    expect(tooltipColumns(31, 400)).toBe(1);
   });
 });

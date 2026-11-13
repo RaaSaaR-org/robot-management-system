@@ -6,8 +6,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  cameraKeys, cameraLabel, channelLabels, channelStats, cursorFraction, featureNames, formatPlayhead, formatStat, groupLabel,
-  mostActiveGroup, statsFrameCount,
+  cameraKeys, cameraLabel, channelLabels, channelNamesAgree, channelSides, channelStats, cursorFraction, featureNames, formatPlayhead, formatStat,
+  groupLabel, isPlaceholderName, mostActiveGroup, realChannelNames, shortChannelNames, statsFrameCount,
 } from '../episodeFormat';
 
 // nvidia/GR00T-N1.7-AppleToPlate meta/modality.json: the state groups of a Unitree G1.
@@ -38,6 +38,99 @@ describe('channelLabels (TASK-476)', () => {
 
   it('spells a group name for a button', () => {
     expect(groupLabel('left_arm')).toBe('left arm');
+  });
+});
+
+// g1-dex3-bottle-sorting-sim meta/info.json: 31 joints, left and right alternating.
+const G1_DEX3_NAMES = [
+  'waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint',
+  'left_shoulder_pitch_joint', 'right_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'right_shoulder_roll_joint',
+  'left_shoulder_yaw_joint', 'right_shoulder_yaw_joint', 'left_elbow_joint', 'right_elbow_joint',
+  'left_wrist_roll_joint', 'right_wrist_roll_joint', 'left_wrist_pitch_joint', 'right_wrist_pitch_joint',
+  'left_wrist_yaw_joint', 'right_wrist_yaw_joint',
+  'left_hand_index_0_joint', 'left_hand_middle_0_joint', 'left_hand_thumb_0_joint',
+  'right_hand_index_0_joint', 'right_hand_middle_0_joint', 'right_hand_thumb_0_joint',
+  'left_hand_index_1_joint', 'left_hand_middle_1_joint', 'left_hand_thumb_1_joint',
+  'right_hand_index_1_joint', 'right_hand_middle_1_joint', 'right_hand_thumb_1_joint',
+  'left_hand_thumb_2_joint', 'right_hand_thumb_2_joint',
+];
+// Its meta/modality.json.
+const G1_DEX3_GROUPS = [
+  { name: 'waist', start: 0, end: 3 },
+  { name: 'arms', start: 3, end: 17 },
+  { name: 'hands', start: 17, end: 31 },
+];
+
+describe('real channel names inside joint groups (TASK-494)', () => {
+  it('knows a placeholder from a name', () => {
+    for (const name of ['motor_0', 'dim_3', '7', ' 12 ', 'joint_4', 'joint 4', 'q7', 'j0', 'action[2]', 'ch[40]', 'state.5', 'axis-1', ''])
+      expect(isPlaceholderName(name), name).toBe(true);
+    for (const name of ['left_shoulder_pitch_joint', 'kLeftShoulderPitch', 'left_hand_thumb_2_joint', 'main_gripper', 'x', 'yaw', 'shoulder_pan', 'gripper'])
+      expect(isPlaceholderName(name), name).toBe(false);
+  });
+
+  it('takes names only when there is a real, different one for every channel', () => {
+    expect(realChannelNames(G1_DEX3_NAMES, 31)).toEqual(G1_DEX3_NAMES);
+    // GR00T: one name for 43 channels.
+    expect(realChannelNames(['observation_to_policy'], 43)).toBeNull();
+    // pusht.
+    expect(realChannelNames(['motor_0', 'motor_1'], 2)).toBeNull();
+    expect(realChannelNames(['0', '1', '2'], 3)).toBeNull();
+    // One placeholder among real names, the same name twice, no names at all.
+    expect(realChannelNames(['shoulder_pan', 'dim_1'], 2)).toBeNull();
+    expect(realChannelNames(['elbow', 'elbow'], 2)).toBeNull();
+    expect(realChannelNames(undefined, 2)).toBeNull();
+    expect(realChannelNames([], 0)).toBeNull();
+  });
+
+  it('labels a grouped vector by joint name where info.json names every joint', () => {
+    const labels = channelLabels(G1_DEX3_GROUPS, 31, G1_DEX3_NAMES);
+    expect(labels[3]).toBe('left_shoulder_pitch_joint');
+    expect(labels[4]).toBe('right_shoulder_pitch_joint');
+    // arms[5] of the group is the left yaw, not a fifth joint of one arm.
+    expect(labels[8]).toBe('right_shoulder_yaw_joint');
+    expect(labels).toEqual(G1_DEX3_NAMES);
+  });
+
+  it('keeps group and index where the names are placeholders or do not fit', () => {
+    const byIndex = channelLabels(G1_GROUPS, 43);
+    expect(channelLabels(G1_GROUPS, 43, ['observation_to_policy'])).toEqual(byIndex);
+    expect(channelLabels(G1_GROUPS, 43, Array.from({ length: 43 }, (_, i) => `motor_${i}`))).toEqual(byIndex);
+    expect(channelLabels(G1_DEX3_GROUPS, 31, G1_DEX3_NAMES.slice(0, 30))[8]).toBe('arms[5]');
+  });
+
+  it('lets one list label state and action only where the two vectors do not name a channel differently', () => {
+    expect(channelNamesAgree(G1_DEX3_NAMES, G1_DEX3_NAMES)).toBe(true);
+    // The other vector has no names, placeholders, or is shorter: nothing contradicts.
+    expect(channelNamesAgree(G1_DEX3_NAMES, undefined)).toBe(true);
+    expect(channelNamesAgree(G1_DEX3_NAMES, [])).toBe(true);
+    expect(channelNamesAgree(G1_DEX3_NAMES, G1_DEX3_NAMES.map((_, i) => `motor_${i}`))).toBe(true);
+    expect(channelNamesAgree(G1_DEX3_NAMES, G1_DEX3_NAMES.slice(0, 17))).toBe(true);
+    // The state lists the left arm first where the action alternates: channel 4 is two joints.
+    const leftFirst = [...G1_DEX3_NAMES];
+    [leftFirst[4], leftFirst[5]] = [leftFirst[5]!, leftFirst[4]!];
+    expect(channelNamesAgree(G1_DEX3_NAMES, leftFirst)).toBe(false);
+  });
+
+  it('shortens a suffix every name shares, and only then', () => {
+    expect(shortChannelNames(G1_DEX3_NAMES.slice(3, 6))).toEqual(['left_shoulder_pitch', 'right_shoulder_pitch', 'left_shoulder_roll']);
+    expect(shortChannelNames(['elbow_joint', 'gripper'])).toEqual(['elbow_joint', 'gripper']);
+    // Nothing would be left of the first one.
+    expect(shortChannelNames(['_joint', 'elbow_joint'])).toEqual(['_joint', 'elbow_joint']);
+    expect(shortChannelNames(['elbow_joint'])).toEqual(['elbow_joint']);
+    const short = shortChannelNames(G1_DEX3_NAMES);
+    expect(new Set(short).size).toBe(31);
+  });
+
+  it('pairs left and right joints, and leaves a one-sided set alone', () => {
+    const arms = channelSides(shortChannelNames(G1_DEX3_NAMES.slice(3, 17)));
+    expect(arms).toHaveLength(14);
+    expect(arms![0]).toEqual({ side: 'left', joint: 'shoulder_pitch' });
+    expect(arms![1]).toEqual({ side: 'right', joint: 'shoulder_pitch' });
+    expect(channelSides(['kLeftElbow', 'kRightElbow'])).toEqual([{ side: 'left', joint: 'Elbow' }, { side: 'right', joint: 'Elbow' }]);
+    // The waist has no side; one arm of a GR00T dataset has one.
+    expect(channelSides(['waist_yaw', 'left_elbow', 'right_elbow'])).toBeNull();
+    expect(channelSides(['left_arm[0]', 'left_arm[1]'])).toBeNull();
   });
 });
 

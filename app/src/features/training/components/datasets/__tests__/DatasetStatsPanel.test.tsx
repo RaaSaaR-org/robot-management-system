@@ -75,6 +75,17 @@ describe('DatasetStatsPanel', () => {
     expect(rowLabels()).toHaveLength(5);
   });
 
+  it('names the joints inside a group when info.json names every one of them (TASK-494)', async () => {
+    const names = ['left_hip_joint', 'right_hip_joint', 'left_elbow_joint', 'right_elbow_joint', 'left_wrist_joint'];
+    render(<DatasetStatsPanel stats={STATS} isLoading={false} modality={MODALITY} names={{ state: names, action: ['motor_0', 'motor_1', 'motor_2', 'motor_3', 'motor_4'] }} />);
+    expect(rowLabels()).toEqual(['left_hip_joint', 'right_hip_joint']);
+    await userEvent.click(screen.getByRole('button', { name: 'left arm' }));
+    expect(rowLabels()).toEqual(['left_elbow_joint', 'right_elbow_joint', 'left_wrist_joint']);
+    // The action vector only has placeholders: group and index there.
+    await userEvent.click(screen.getByRole('button', { name: 'Action' }));
+    expect(rowLabels()).toEqual(['left_arm[0]', 'left_arm[1]', 'left_arm[2]']);
+  });
+
   it('switches between the state and the action vector', async () => {
     render(<DatasetStatsPanel stats={STATS} isLoading={false} modality={MODALITY} />);
     await userEvent.click(screen.getByRole('button', { name: 'Action' }));
