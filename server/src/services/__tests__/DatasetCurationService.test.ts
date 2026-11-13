@@ -469,4 +469,27 @@ describe('DatasetCurationService — RustFS prefix normalization', () => {
 
     expect(mockClient.listAll).toHaveBeenCalledWith(expect.any(String), 'ds1/');
   });
+
+  it('fetches only the LeRobot tree, not the files a direct upload stored beside it', async () => {
+    mockRepo.findById.mockResolvedValue(makeDataset({ storagePath: 'ds1' }));
+    stubListAll([
+      'ds1/README.md',
+      'ds1/raw/session.bag',
+      'ds1/meta/info.json',
+      'ds1/data/chunk-000/episode_000000.parquet',
+    ]);
+    mockCuration.deleteEpisodes.mockImplementation(async (src: string, out: string) => {
+      expect(existsSync(path.join(src, 'meta', 'info.json'))).toBe(true);
+      expect(existsSync(path.join(src, 'README.md'))).toBe(false);
+      expect(existsSync(path.join(src, 'raw'))).toBe(false);
+      mkdirSync(path.join(out, 'meta'), { recursive: true });
+      writeFileSync(path.join(out, 'meta', 'info.json'), JSON.stringify(BASE_INFO));
+      return { ...SUMMARY, output: out };
+    });
+
+    await service.deleteEpisodes('ds1', [1]);
+
+    const fetched = mockClient.download.mock.calls.map((call) => call[1]);
+    expect(fetched).toEqual(['ds1/meta/info.json', 'ds1/data/chunk-000/episode_000000.parquet']);
+  });
 });

@@ -219,15 +219,16 @@ describe('start', () => {
     expect(mocks.events.map((e) => e.type)).toContain('dataset:created');
   });
 
-  it('passes an explicit robot type through and reports the files it leaves out', async () => {
+  it('passes an explicit robot type through and takes the files beside the tree as well', async () => {
     const upload = await service.start(startBody({
       robotTypeId: 'rt-explicit',
       files: [...manifestOf(TREE), { path: 'README.md', size: 11479 }],
     }));
 
     expect(mocks.resolveRobotTypeId).toHaveBeenCalledWith('rt-explicit', INFO);
-    expect(upload.ignored.map((i) => i.path)).toEqual(['README.md']);
-    expect(upload.files).toHaveLength(5);
+    expect(upload.ignored).toEqual([]);
+    expect(upload.files).toHaveLength(6);
+    expect(upload.files[5]).toMatchObject({ path: 'README.md', size: 11479, partCount: 1 });
   });
 
   it('uses a smaller part size when the client asks for one', async () => {

@@ -14,7 +14,6 @@
 import { posix } from 'path';
 import { AppError } from '../../utils/errors.js';
 import type { LeRobotInfoV3 } from '../../types/dataset.types.js';
-import { selectRepoFiles } from '../HuggingFaceImportService.js';
 
 const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
@@ -158,7 +157,10 @@ export interface IgnoredFile {
 
 export interface ManifestCheck {
   files: UploadFileEntry[];
-  /** Declared files that are safe but not part of a LeRobot tree; they are not uploaded. */
+  /**
+   * Declared files that are not uploaded. Always empty since TASK-500 — every
+   * safe path is stored — and kept because the start response carries it.
+   */
   ignored: IgnoredFile[];
   totalBytes: number;
   /** `full` when camera files are in the manifest, `metadata` when it is tables only. */
@@ -365,13 +367,19 @@ export function toUploadEntries(
 const DATASET_NOUNS: ManifestNouns = { thing: 'dataset', maxBytesVariable: 'DATASET_UPLOAD_MAX_BYTES' };
 
 /**
- * Check the declared files and split them into what will be uploaded and what
- * is left out.
+ * Check the declared files of a dataset upload.
  *
- * A safe path that a LeRobot tree does not need (a README, a `.gitattributes`)
- * is only listed as ignored, so a client can declare a directory as it is.
- * Which files a tree needs is the importer's `selectRepoFiles`, so both ways
- * in accept exactly the same tree.
+ * EVERY safe path is stored (TASK-500). The pair this serves is "upload a
+ * dataset, delete the local copy, download it again later": a server that
+ * quietly left out the README, a notebook or a calibration file beside the
+ * tree made that lose files. What a LeRobot tree *needs* is still checked
+ * below; what else a directory holds is the client's business, and no reader
+ * on this server lists the dataset root — they all ask for `meta/`, `data/`,
+ * `videos/` or `images/` by name, so an extra file is inert.
+ *
+ * `ignored` stays in the result and is always empty: it is part of the start
+ * response, and a client tells a server that stores everything from an older
+ * one (which lists the files it left out there) by exactly that.
  */
 export function checkManifest(
   declared: unknown,
@@ -380,18 +388,8 @@ export function checkManifest(
   limits: UploadLimits,
 ): ManifestCheck {
   const all = parseDeclaredFiles(declared, limits, DATASET_NOUNS);
-  const accepted: DeclaredFile[] = [];
+  const accepted: DeclaredFile[] = all;
   const ignored: IgnoredFile[] = [];
-  for (const file of all) {
-    if (selectRepoFiles([{ path: file.path, size: file.size }], true).length === 0) {
-      ignored.push({
-        path: file.path,
-        reason: 'not part of a LeRobot dataset tree (meta/**, data/**/*.parquet, videos/**/*.mp4, images/**)',
-      });
-      continue;
-    }
-    accepted.push(file);
-  }
 
   const has = (test: (path: string) => boolean): boolean => accepted.some((f) => test(f.path));
   const missing: string[] = [];
@@ -419,6 +417,10 @@ export function checkManifest(
     accepted, new Set(all.map((f) => f.path)), chunkSize, limits, DATASET_NOUNS,
   );
 
-  const importMode = has((p) => p.startsWith('videos/') || p.startsWith('images/')) ? 'full' : 'metadata';
+  // Camera files as the readers know them — `videos/**/*.mp4`, `images/**` —
+  // not any path under `videos/`: a note stored beside the videos is not one.
+  const importMode = has((p) => (p.startsWith('videos/') && p.endsWith('.mp4')) || p.startsWith('images/'))
+    ? 'full'
+    : 'metadata';
   return { files, ignored, totalBytes, importMode };
 }

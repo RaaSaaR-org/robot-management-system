@@ -52,16 +52,41 @@ that caps bodies at 100 MB and requests at 100 s.
 Paths in the manifest are **relative to the dataset root** — the directory
 that contains `meta/` and `data/` — with forward slashes.
 
-| Accepted | |
-| --- | --- |
-| `meta/**` | every file under `meta/` |
-| `data/**/*.parquet` | the episode tables |
-| `videos/**/*.mp4` | camera video (optional) |
-| `images/**` | camera frames of `dtype: image` features (optional) |
+**Every file you declare is stored**, at the path you declare it under — the
+LeRobot tree and whatever else the directory holds (`README.md`, a notebook, a
+calibration file, a directory of your own). That is what makes the way back
+exact: [downloading the dataset](dataset-download.md) lists and returns the
+same paths with the same bytes, so a directory that was uploaded can be
+deleted locally and fetched again whole.
 
-These are the same rules the Hugging Face importer selects by. Any other file
-you declare (`README.md`, `.gitattributes`, …) is **not an error**: it is
-listed under `ignored` in the start response and you do not upload it.
+| Path | What the server does with it |
+| --- | --- |
+| `meta/**` | stored; read as the dataset's metadata |
+| `data/**/*.parquet` | stored; read as the episode tables |
+| `videos/**/*.mp4` | stored; read as camera video (optional) |
+| `images/**` | stored; read as camera frames of `dtype: image` features (optional) |
+| anything else | stored and handed back, never read |
+
+Validation, the episode browser, the video player, statistics and publishing
+to the Hub ask for the first four by name and never list the dataset root, so
+a file beside the tree changes nothing about how the dataset behaves — it only
+counts against the size and file caps. Curation (trim, delete episodes) fetches
+only those four trees as well, so a revision it writes is a new dataset
+**without** the extra files; they stay with the dataset they were uploaded to.
+Whether an upload counts as having cameras (`importMode: "full"`) is decided
+by `videos/**/*.mp4` and `images/**` alone, not by any other file under
+`videos/`. Leave out what is not dataset content (`.git/`, `.DS_Store`,
+`__pycache__/`, a Hub `.cache/`) on the client: the server stores what it is
+told to.
+
+**`ignored` and older servers.** A server from before TASK-500 stored only the
+four trees and listed every other declared file under `ignored` in the start
+response, without an error. A current server stores them and always answers
+`"ignored": []`. A client that promises "everything in this directory is on
+the instance" must therefore read `ignored` after the start request: if it is
+not empty, the server is an older one and those files will **not** be stored —
+cancel the upload and say so (this is what `rmsctl datasets upload` does)
+instead of finishing an upload that silently lacks them.
 
 Required, or the start request is refused with `NOT_A_LEROBOT_DATASET`:
 
@@ -125,13 +150,13 @@ must match that type or the request is refused (`ROBOT_DIMENSION_MISMATCH`).
   "robotTypeId": "c5f6ef18-…",
   "storage": "rustfs",              // or "local" on a server without an object store
   "chunkSize": 33554432,            // bytes per part — use THIS value, not your own
-  "totalBytes": 446100758,          // sum of the accepted files
-  "files": [                        // the accepted files; `id` is what part URLs use
+  "totalBytes": 446100758,          // sum of the declared files
+  "files": [                        // every declared file; `id` is what part URLs use
     { "id": 0, "path": "meta/info.json", "size": 7406, "partCount": 1 },
     { "id": 5, "path": "videos/observation.images.head/chunk-000/file-000.mp4",
       "size": 208492163, "partCount": 7 }
   ],
-  "ignored": [ { "path": "README.md", "reason": "not part of a LeRobot dataset tree (…)" } ],
+  "ignored": [],                    // always empty; an older server lists here what it will NOT store
   "idleTimeoutSeconds": 21600,
   "expiresAt": "2026-11-13T16:00:00.000Z"
 }
@@ -424,9 +449,12 @@ uses RustFS.
 
 - **Input.** A dataset *folder*, from the folder picker or dropped on the
   dialog (Chrome, Edge, Firefox, Safari). The dataset root is wherever
-  `meta/info.json` sits, so the folder itself and its parent both work. Only
-  the paths under [What may be uploaded](#what-may-be-uploaded) are declared;
-  everything else stays on the user's machine.
+  `meta/info.json` sits, so the folder itself and its parent both work. The
+  dialog declares only the four trees the server reads
+  ([What may be uploaded](#what-may-be-uploaded)); a README or anything else
+  beside them stays on the user's machine. To store a directory whole — the
+  case of uploading it and then deleting the local copy — use
+  `rmsctl datasets upload`, and `rmsctl datasets verify` before deleting.
 - **Before anything is sent** it reads `meta/info.json` in the browser and
   shows version, episodes, frames, frame rate, cameras and size, and applies
   the start rules itself — a folder that is not a LeRobot dataset says why

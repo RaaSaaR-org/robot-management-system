@@ -368,7 +368,14 @@ export class DatasetCurationService {
     return viewOf(path.join(root, datasetId), { mode: 'local', cleanup: NOOP_CLEANUP });
   }
 
-  /** Download every object under `prefix` in TRAINING_DATASETS to `destDir`. */
+  /**
+   * Download the LeRobot tree under `prefix` in TRAINING_DATASETS to `destDir`.
+   *
+   * Only `meta/`, `data/`, `videos/` and `images/`: a directly uploaded dataset
+   * also stores whatever else its directory held (TASK-500 — a README, a raw
+   * recording of any size). Curation reads none of it, and every object here
+   * is buffered whole, so fetching it would only cost memory and disk.
+   */
   private async downloadPrefix(rawPrefix: string, destDir: string, skipVideos: boolean): Promise<void> {
     const client = getRustFSClient();
     // Normalize to a directory-style prefix so "ds1" cannot bleed into a
@@ -378,6 +385,7 @@ export class DatasetCurationService {
     for await (const obj of client.listAll(BUCKETS.TRAINING_DATASETS, prefix)) {
       const rel = obj.key.slice(prefix.length).replace(/^\/+/, '');
       if (!rel || rel.endsWith('/')) continue;
+      if (!/^(meta|data|videos|images)\//.test(rel)) continue;
       if (skipVideos && rel.startsWith('videos/')) continue;
       const data = await client.download(BUCKETS.TRAINING_DATASETS, obj.key);
       const dest = path.join(destDir, rel);
