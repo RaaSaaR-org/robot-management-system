@@ -28,16 +28,23 @@
 import { ParquetEnvelopeReader, ParquetReader } from '@dsnp/parquetjs';
 import { NewPageHeader } from '@dsnp/parquetjs/dist/lib/declare.js';
 import { decodeThrift } from '@dsnp/parquetjs/dist/lib/util.js';
+import { ReadAbandoned, ReadCache } from './ReadCache.js';
 
 /** Random access to one object's bytes. */
 export interface ByteSource {
   size: number;
   read(offset: number, length: number): Promise<Buffer>;
+  /**
+   * Names these exact bytes: two sources with the same key are the same file
+   * in the same state. With it the parsed footer is kept between reads.
+   */
+  key?: string;
 }
 
 /** A {@link ByteSource} over bytes already in memory. */
-export function bufferSource(buffer: Buffer): ByteSource {
+export function bufferSource(buffer: Buffer, key?: string): ByteSource {
   return {
+    key,
     size: buffer.length,
     async read(offset, length) {
       return buffer.subarray(offset, offset + length);
@@ -55,6 +62,12 @@ export interface ReadRowsOptions {
   columns: string[] | ((available: string[]) => string[]);
   /** Keep only rows whose (scalar) `column` equals `equals`. Without it every row is kept. */
   filter?: { column: string; equals: number };
+  /**
+   * Fires when nobody wants the rows any more. The read then stops at its next
+   * pause — before the next row group or after the page being decoded — and
+   * rejects with {@link ReadAbandoned}.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ReadRowsResult {
@@ -83,14 +96,33 @@ const YIELD_AFTER_MS = 8;
 let lastYield = performance.now();
 
 /**
+ * Parsed footers, by {@link ByteSource.key}. Thrift-decoding a footer costs
+ * CPU in proportion to row groups × columns — a third of a cold episode read
+ * on the 80-row-group demo file — and every episode of a file needs the same
+ * one. Weighed at ~600 bytes a column chunk; the objects are shared between
+ * readers and never changed after the first open.
+ */
+export const parquetMetadataCache = new ReadCache<object>({ maxWeight: 16 * 1024 * 1024, ttlMs: 10 * 60 * 1000 });
+
+function metadataWeight(metadata: object): number {
+  const rowGroups = (metadata as { row_groups?: Array<{ columns: unknown[] }> }).row_groups ?? [];
+  let chunks = 0;
+  for (const rowGroup of rowGroups) chunks += rowGroup.columns.length;
+  return 4096 + chunks * 600;
+}
+
+/**
  * Give the event loop a turn when decoding has held it for a while. Reads
  * served from memory resolve as microtasks, so without this a whole file is
  * decoded in one uninterrupted stretch and every other request waits for it.
  */
-async function breathe(): Promise<void> {
-  if (performance.now() - lastYield < YIELD_AFTER_MS) return;
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  lastYield = performance.now();
+async function breathe(signal?: AbortSignal): Promise<void> {
+  if (performance.now() - lastYield >= YIELD_AFTER_MS) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    lastYield = performance.now();
+  }
+  // The turn just given is when a closed connection gets to say so.
+  if (signal?.aborted) throw new ReadAbandoned();
 }
 
 /** Thrift-decoded pieces of the footer this reader touches. */
@@ -231,6 +263,7 @@ async function streamColumn(
   column: ColumnMeta,
   visit: (row: number, value: unknown, present: boolean, rowStart: boolean) => void | 'stop',
   skip: { before: number; width?: number } = { before: 0 },
+  signal?: AbortSignal,
 ): Promise<boolean> {
   const field = reader.schema.findField(column.path_in_schema) as unknown as FieldMeta;
   const { start, end } = chunkRange(column, source.size);
@@ -269,7 +302,7 @@ async function streamColumn(
       opts as unknown as Parameters<ParquetReader['decodePages']>[1],
     )) as unknown as DecodedPages;
     pos += pageSize;
-    await breathe();
+    await breathe(signal);
     if (realign && width) {
       // Rows 0..ceil(seen/width)-1 have started; the next starts here.
       const nextStart = (width - (seen % width)) % width;
@@ -299,14 +332,26 @@ async function streamColumn(
  * as its value.
  */
 export async function readParquetRows(source: ByteSource, options: ReadRowsOptions): Promise<ReadRowsResult> {
+  const { filter, signal } = options;
+  if (signal?.aborted) throw new ReadAbandoned();
   const envelope = new ParquetEnvelopeReader(
     (offset: number, length: number) => source.read(offset, length),
     () => undefined,
     source.size,
   );
-  const reader = await ParquetReader.openEnvelopeReader(envelope);
+  // A footer parsed before is handed to the reader as it is. Its statistics
+  // were decoded in place by the first open, hence `rawStatistics`.
+  const known = source.key ? parquetMetadataCache.get(source.key) : undefined;
+  const reader = await ParquetReader.openEnvelopeReader(
+    envelope,
+    (known ? { metadata: known, rawStatistics: true } : undefined) as Parameters<
+      typeof ParquetReader.openEnvelopeReader
+    >[1],
+  );
+  if (!known && source.key && reader.metadata) {
+    parquetMetadataCache.set(source.key, reader.metadata, metadataWeight(reader.metadata));
+  }
   const rowGroups = (reader.metadata?.row_groups ?? []) as unknown as RowGroupMeta[];
-  const { filter } = options;
   const columns =
     typeof options.columns === 'function' ? options.columns(Object.keys(reader.schema.fields)) : options.columns;
   const wanted = (rowGroup: RowGroupMeta): ColumnMeta[] =>
@@ -319,6 +364,7 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
     for (const rowGroup of rowGroups) {
       const numRows = Number(rowGroup.num_rows);
       if (numRows === 0) continue;
+      if (signal?.aborted) throw new ReadAbandoned();
 
       // Where this group's bytes come from: the object itself, or one fetch
       // spanning every column chunk that will be decoded.
@@ -341,9 +387,16 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
         // one whole to find a single episode would read the entire file.
         if (filterColumn.statistics) groupSource = await spanSource(source, [filterColumn, ...wanted(rowGroup)]);
         const hits: number[] = [];
-        await streamColumn(reader, groupSource, filterColumn, (row, value) => {
-          if (Number(value) === filter.equals) hits.push(row);
-        });
+        await streamColumn(
+          reader,
+          groupSource,
+          filterColumn,
+          (row, value) => {
+            if (Number(value) === filter.equals) hits.push(row);
+          },
+          { before: 0 },
+          signal,
+        );
         rowGroupsRead++;
         if (hits.length === 0) continue;
         first = hits[0];
@@ -393,7 +446,7 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
         // miscounted — read the column again from its first page.
         let consistent: boolean;
         try {
-          const skipped = await streamColumn(reader, groupSource, column, visit, { before: first, width });
+          const skipped = await streamColumn(reader, groupSource, column, visit, { before: first, width }, signal);
           consistent =
             !skipped ||
             !repeated ||
@@ -404,7 +457,7 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
         }
         if (!consistent) {
           for (const r of groupRows) delete r[name];
-          await streamColumn(reader, groupSource, column, visit);
+          await streamColumn(reader, groupSource, column, visit, { before: 0 }, signal);
         }
       }
     }

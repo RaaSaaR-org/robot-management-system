@@ -6,7 +6,8 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { ParquetReader } from '@dsnp/parquetjs';
-import { readParquetRows, type ByteSource } from '../parquetEpisodeRows.js';
+import { parquetMetadataCache, readParquetRows, type ByteSource } from '../parquetEpisodeRows.js';
+import { ReadAbandoned } from '../ReadCache.js';
 import { FRAME_FIELDS, frameRows, parquetBuffer } from './parquetFixtures.js';
 
 const FRAME_COLUMNS = ['episode_index', 'frame_index', 'timestamp', 'observation.state', 'action'];
@@ -217,5 +218,95 @@ describe('readParquetRows', () => {
         expect(r.action).toEqual(Array.from({ length: i % 2 === 0 ? 1 : 3 }, (_, j) => 3000 + f + j / 100));
       });
     });
+  });
+});
+
+describe('readParquetRows — the parsed footer is kept per file (TASK-492)', () => {
+  afterEach(() => parquetMetadataCache.clear());
+
+  it('opens a file it has parsed before without reading its footer, and reads the same rows', async () => {
+    const buf = await multiEpisodeFile();
+    const options = { columns: FRAME_COLUMNS, filter: { column: 'episode_index', equals: 3 } };
+    const first = countingSource(buf);
+    const cold = await readParquetRows({ ...first, key: 'ds@1#file:data.parquet' }, options);
+    const second = countingSource(buf);
+    const warm = await readParquetRows({ ...second, key: 'ds@1#file:data.parquet' }, options);
+
+    expect(warm.rows).toEqual(cold.rows);
+    expect(warm.rows).toHaveLength(40);
+    // Row groups are still skipped on the statistics of the remembered footer.
+    expect(warm.rowGroupsSkipped).toBe(cold.rowGroupsSkipped);
+    expect(warm.rowGroupsSkipped).toBeGreaterThan(0);
+    // The footer sits at the end of the file: the first open reads there, the second does not.
+    const tail = (source: { ranges: Array<[number, number]> }) =>
+      source.ranges.filter(([offset, length]) => offset + length > buf.length - 8);
+    expect(tail(first).length).toBeGreaterThan(0);
+    expect(tail(second)).toEqual([]);
+    expect(second.ranges.length).toBeLessThan(first.ranges.length);
+  });
+
+  it('reads another episode of the same file correctly from the remembered footer', async () => {
+    const buf = await multiEpisodeFile(true);
+    const read = (episode: number) =>
+      readParquetRows(
+        { ...countingSource(buf), key: 'ds@1#file:data.parquet' },
+        { columns: FRAME_COLUMNS, filter: { column: 'episode_index', equals: episode } },
+      );
+    await read(0);
+    for (const episode of [4, 2, 0]) {
+      const { rows } = await read(episode);
+      expect(rows).toHaveLength(40);
+      expect(rows.map((r) => Number(r['episode_index']))).toEqual(Array(40).fill(episode));
+      expect((rows[39]!['observation.state'] as number[])[0]).toBe(episode * 1000 + 39);
+    }
+  });
+
+  it('parses the footer every time for a source without a key, and keeps footers of two keys apart', async () => {
+    const one = await parquetBuffer(FRAME_FIELDS, frameRows(0, 5, 3));
+    const other = await parquetBuffer(FRAME_FIELDS, frameRows(7, 9, 3));
+    await readParquetRows(countingSource(one), { columns: FRAME_COLUMNS });
+    expect(parquetMetadataCache.size).toBe(0);
+
+    const a = await readParquetRows({ ...countingSource(one), key: 'ds@1#file:a' }, { columns: FRAME_COLUMNS });
+    const b = await readParquetRows({ ...countingSource(other), key: 'ds@2#file:a' }, { columns: FRAME_COLUMNS });
+    expect(a.rows).toHaveLength(5);
+    expect(b.rows).toHaveLength(9);
+    expect(parquetMetadataCache.size).toBe(2);
+  });
+});
+
+describe('readParquetRows — stops when nobody wants the rows (TASK-492)', () => {
+  afterEach(() => parquetMetadataCache.clear());
+
+  it('rejects with ReadAbandoned at its next pause and reads no further column', async () => {
+    const buf = await multiEpisodeFile();
+    const viewer = new AbortController();
+    const source = countingSource(buf);
+    let reads = 0;
+    const leaving: ByteSource = {
+      size: source.size,
+      async read(offset, length) {
+        // The viewer leaves while the first bytes of column data are on their way.
+        if (++reads === 4) viewer.abort();
+        return source.read(offset, length);
+      },
+    };
+    const whole = countingSource(buf);
+    await readParquetRows(whole, { columns: FRAME_COLUMNS });
+
+    await expect(readParquetRows(leaving, { columns: FRAME_COLUMNS, signal: viewer.signal })).rejects.toBeInstanceOf(
+      ReadAbandoned,
+    );
+    expect(source.ranges.length).toBeLessThan(whole.ranges.length);
+  });
+
+  it('does not open the file at all for a signal that has already fired', async () => {
+    const viewer = new AbortController();
+    viewer.abort();
+    const source = countingSource(await parquetBuffer(FRAME_FIELDS, frameRows(0, 5, 3)));
+    await expect(readParquetRows(source, { columns: FRAME_COLUMNS, signal: viewer.signal })).rejects.toBeInstanceOf(
+      ReadAbandoned,
+    );
+    expect(source.ranges).toEqual([]);
   });
 });

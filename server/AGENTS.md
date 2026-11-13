@@ -340,6 +340,7 @@ Photos: `PatrolPhotoStore` — S3 bucket `patrol-photos` when RustFS is configur
 - `/api/embodiments` — Robot type/embodiment configs
 - `/api/storage` — Object storage (presigned URLs)
   - A route that sends an object-store stream to its response goes through `sendStream` (`utils/streamResponse.ts`), never a bare `stream.pipe(res)`: a body opened for a client that already left is otherwise never read or destroyed and keeps its socket for the life of the process (TASK-491). Pass the signal it hands you to `rustfs.getStream(…, { signal })`. Store calls are bounded by `RUSTFS_CONNECT_TIMEOUT_MS` / `RUSTFS_SOCKET_TIMEOUT_MS` / `RUSTFS_RESPONSE_TIMEOUT_MS`; streams use their own socket pool
+  - A route that reads a dataset through `ReadCache.getOrLoad` passes `clientGoneSignal(res)` as its last argument and hands the `stop` signal its loader receives on to `coldReadGate(task, stop)` and the reader: a request whose client left then leaves the queue for a read slot, and a decode nobody else is waiting for stops at its next pause (TASK-492). A caller that passes no signal keeps the load alive to the end. `ReadAbandoned` is not an error to answer — the client is gone
 - `/api/teleoperation` — Teleoperation sessions
 - `/api/curation` — Data curation pipelines
 - `/api/active-learning` — Active learning strategies

@@ -17,8 +17,11 @@ import {
   footerCachingStore,
   invalidateDatasetReads,
   parquetFooterCache,
+  sharedFileCache,
   storageLocationCache,
 } from '../DatasetReadCache.js';
+import { ReadAbandoned } from '../ReadCache.js';
+import { parquetMetadataCache } from '../parquetEpisodeRows.js';
 import {
   episodeFramesCache,
   WHOLE_FILE_BYTES,
@@ -113,10 +116,12 @@ describe('invalidateDatasetReads', () => {
       await cachedLocation(`${id}@1#bucket`, async () => ({ bucket: 'training-datasets' }));
       parquetFooterCache.set(`${id}@1#file:data/chunk-000/file-000.parquet`, { size: 10 }, 64);
       episodeFramesCache.set(`${id}@1#0`, { frames: [], source: 'x' }, 10);
+      parquetMetadataCache.set(`${id}@1#file:data/chunk-000/file-000.parquet`, {}, 10);
+      sharedFileCache.set(`${id}@1#file:data/chunk-000/file-000.parquet`, Buffer.alloc(4), 4);
     }
     invalidateDatasetReads('gone');
     const usage = datasetReadCacheUsage();
-    expect(Object.values(usage).map((u) => u.entries)).toEqual([1, 1, 1, 1]);
+    expect(Object.values(usage).map((u) => u.entries)).toEqual([1, 1, 1, 1, 1, 1]);
     expect(episodeTableCache.get('kept@1#episodes')).toBeDefined();
     expect(episodeFramesCache.get('gone@1#0')).toBeUndefined();
   });
@@ -297,5 +302,127 @@ describe('createGate', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('createGate — who waits, and who goes first (TASK-492)', () => {
+  /** A task the test finishes by hand. */
+  function held(gate: ReturnType<typeof createGate>, order: string[], name: string, signal?: AbortSignal) {
+    let finish!: () => void;
+    const done = gate(
+      () =>
+        new Promise<string>((resolve) => {
+          order.push(name);
+          finish = () => resolve(name);
+        }),
+      signal,
+    );
+    return { done, finish: () => finish() };
+  }
+  const turn = () => new Promise((r) => setTimeout(r, 0));
+
+  it('gives a freed slot to the request that arrived last', async () => {
+    const gate = createGate(1);
+    const order: string[] = [];
+    const running = held(gate, order, 'running');
+    const stale = held(gate, order, 'episode 3');
+    const older = held(gate, order, 'episode 4');
+    const newest = held(gate, order, 'episode 5');
+    await turn();
+    expect(order).toEqual(['running']);
+
+    running.finish();
+    await turn();
+    expect(order).toEqual(['running', 'episode 5']);
+    newest.finish();
+    await turn();
+    older.finish();
+    await turn();
+    stale.finish();
+    await Promise.all([running.done, stale.done, older.done, newest.done]);
+    expect(order).toEqual(['running', 'episode 5', 'episode 4', 'episode 3']);
+  });
+
+  it('lets a waiter leave the queue without ever running it, and without losing a slot', async () => {
+    const gate = createGate(1);
+    const order: string[] = [];
+    const running = held(gate, order, 'running');
+    const viewer = new AbortController();
+    const left = held(gate, order, 'left', viewer.signal);
+    const stays = held(gate, order, 'stays');
+    await turn();
+
+    viewer.abort();
+    await expect(left.done).rejects.toBeInstanceOf(ReadAbandoned);
+    running.finish();
+    await turn();
+    stays.finish();
+    await Promise.all([running.done, stays.done]);
+    expect(order).toEqual(['running', 'stays']);
+    // The slot count is intact: one more task runs straight away.
+    expect(await gate(async () => 'next')).toBe('next');
+  });
+
+  it('refuses a task whose caller has already left', async () => {
+    const gate = createGate(1);
+    const viewer = new AbortController();
+    viewer.abort();
+    const task = vi.fn(async () => 'never');
+    await expect(gate(task, viewer.signal)).rejects.toBeInstanceOf(ReadAbandoned);
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it('does not stop a task that already holds a slot when its signal fires', async () => {
+    const gate = createGate(1);
+    const order: string[] = [];
+    const viewer = new AbortController();
+    const running = held(gate, order, 'running', viewer.signal);
+    await turn();
+    viewer.abort();
+    running.finish();
+    expect(await running.done).toBe('running');
+  });
+});
+
+describe('sharedFileCache — a small data file is fetched once for all its episodes (TASK-492)', () => {
+  const files = { 'data/chunk-000/file-000.parquet': Buffer.alloc(1000, 7) };
+
+  it('answers the second read of a file from memory, and a missing file every time from storage', async () => {
+    const inner = countingStore(files);
+    const store = footerCachingStore(inner, 'ds@1');
+    const first = await store.readShared!('data/chunk-000/file-000.parquet');
+    const second = await store.readShared!('data/chunk-000/file-000.parquet');
+    expect(second).toBe(first);
+    expect(inner.calls.filter((c) => c.startsWith('GET'))).toHaveLength(1);
+    expect(datasetReadCacheUsage().sharedFiles).toEqual({ entries: 1, weight: 1000 });
+
+    expect(await store.readShared!('data/chunk-000/file-009.parquet')).toBeNull();
+    expect(await store.readShared!('data/chunk-000/file-009.parquet')).toBeNull();
+    expect(inner.calls.filter((c) => c === 'GET data/chunk-000/file-009.parquet')).toHaveLength(2);
+  });
+
+  it('does not keep what a plain read fetched', async () => {
+    const inner = countingStore(files);
+    const store = footerCachingStore(inner, 'ds@1');
+    await store.read('data/chunk-000/file-000.parquet');
+    await store.read('data/chunk-000/file-000.parquet');
+    expect(inner.calls.filter((c) => c.startsWith('GET'))).toHaveLength(2);
+    expect(datasetReadCacheUsage().sharedFiles.entries).toBe(0);
+  });
+
+  it('stays within 24 MB however many files pass through', async () => {
+    const big = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`data/f${i}.parquet`, Buffer.alloc(WHOLE_FILE_BYTES)]));
+    const store = footerCachingStore(countingStore(big), 'ds@1');
+    for (const path of Object.keys(big)) await store.readShared!(path);
+    const usage = datasetReadCacheUsage().sharedFiles;
+    expect(usage.weight).toBeLessThanOrEqual(24 * 1024 * 1024);
+    expect(usage.entries).toBe(6);
+  });
+
+  it('names a file by the stored state of its dataset', () => {
+    const inner = countingStore(files);
+    expect(footerCachingStore(inner, 'ds@1').fileKey!('data/a.parquet')).not.toBe(
+      footerCachingStore(inner, 'ds@2').fileKey!('data/a.parquet'),
+    );
   });
 });

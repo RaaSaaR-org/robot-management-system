@@ -22,7 +22,12 @@
  * - **where an object is**: the bucket a dataset lives in, and the bucket, key
  *   and size of a video, which the player asks for again on every seek.
  *
- * Decoded frames are a fourth, older cache (`episodeFramesCache`, TASK-355).
+ * Two more save CPU rather than round trips (TASK-492): the **parsed footer**
+ * of a parquet file (`parquetMetadataCache` — thrift-decoding 80 row groups
+ * was a third of opening an episode) and the **bytes of a small data file**
+ * that holds several episodes (`sharedFileCache`).
+ *
+ * Decoded frames are a further, older cache (`episodeFramesCache`, TASK-355).
  *
  * Every key starts with `<dataset id>@<record updatedAt>`, so anything that
  * rewrites the dataset record reads fresh. {@link invalidateDatasetReads}
@@ -31,7 +36,8 @@
  * back.
  */
 
-import { ReadCache } from './ReadCache.js';
+import { ReadAbandoned, ReadCache } from './ReadCache.js';
+import { parquetMetadataCache } from './parquetEpisodeRows.js';
 import {
   episodeFramesCache,
   episodeTableWeight,
@@ -65,6 +71,13 @@ export interface StorageLocation {
 export const episodeTableCache = new ReadCache<EpisodeTable>({ maxWeight: 8 * 1024 * 1024, ttlMs: TTL_MS });
 /** Parquet footers, weighed by the bytes held. */
 export const parquetFooterCache = new ReadCache<FileHandle>({ maxWeight: 16 * 1024 * 1024, ttlMs: TTL_MS });
+/**
+ * The bytes of small parquet files that hold several episodes (a v3.0 data
+ * file under {@link WHOLE_FILE_BYTES}). Such a file is fetched whole, and was
+ * fetched whole again for every other episode in it (TASK-492). At most six of
+ * the largest fit; a v2.1 file per episode is read once and never kept here.
+ */
+export const sharedFileCache = new ReadCache<Buffer>({ maxWeight: 24 * 1024 * 1024, ttlMs: TTL_MS });
 /** Bucket and video lookups; every entry weighs 1, so this is a count. */
 export const storageLocationCache = new ReadCache<StorageLocation>({ maxWeight: 4096, ttlMs: TTL_MS });
 
@@ -83,6 +96,8 @@ export function invalidateDatasetReads(datasetId: string): void {
   const prefix = `${datasetId}@`;
   episodeTableCache.deletePrefix(prefix);
   parquetFooterCache.deletePrefix(prefix);
+  parquetMetadataCache.deletePrefix(prefix);
+  sharedFileCache.deletePrefix(prefix);
   storageLocationCache.deletePrefix(prefix);
   episodeFramesCache.deletePrefix(prefix);
 }
@@ -91,14 +106,23 @@ export function invalidateDatasetReads(datasetId: string): void {
 export function clearDatasetReadCaches(): void {
   episodeTableCache.clear();
   parquetFooterCache.clear();
+  parquetMetadataCache.clear();
+  sharedFileCache.clear();
   storageLocationCache.clear();
   episodeFramesCache.clear();
 }
 
 /**
- * Run at most `limit` of the given tasks at once; the rest wait their turn in
- * order. A slot is handed straight to the next waiter, so the count never
- * exceeds the limit even when a task finishes and another arrives together.
+ * Run at most `limit` of the given tasks at once; the rest wait for a slot.
+ * A slot is handed straight to a waiter, so the count never exceeds the limit
+ * even when a task finishes and another arrives together.
+ *
+ * The waiter that arrived LAST goes first. Whoever queues here is a viewer
+ * opening something, and when more are waiting than can run, the newest
+ * request is the one most likely still wanted — the older ones belong to
+ * episodes the viewer has clicked past (TASK-492). A waiter whose `signal`
+ * fires leaves the queue and is rejected with {@link ReadAbandoned}; a task
+ * that already runs is the task's own to stop.
  *
  * A task that has not settled after `maxHoldMs` gives its slot up and carries
  * on outside the count. The storage client has no request timeout, so a call
@@ -110,17 +134,32 @@ export function clearDatasetReadCaches(): void {
 export function createGate(
   limit: number,
   maxHoldMs: number = Infinity,
-): <T>(task: () => Promise<T>) => Promise<T> {
+): <T>(task: () => Promise<T>, signal?: AbortSignal) => Promise<T> {
   let active = 0;
   const waiting: Array<() => void> = [];
-  return async (task) => {
-    if (active >= limit) await new Promise<void>((resolve) => waiting.push(resolve));
-    else active++;
+  return async (task, signal) => {
+    if (signal?.aborted) throw new ReadAbandoned();
+    if (active >= limit) {
+      await new Promise<void>((resolve, reject) => {
+        const admit = (): void => {
+          signal?.removeEventListener('abort', leave);
+          resolve();
+        };
+        const leave = (): void => {
+          const at = waiting.indexOf(admit);
+          if (at < 0) return;
+          waiting.splice(at, 1);
+          reject(new ReadAbandoned());
+        };
+        signal?.addEventListener('abort', leave, { once: true });
+        waiting.push(admit);
+      });
+    } else active++;
     let held = true;
     const release = () => {
       if (!held) return;
       held = false;
-      const next = waiting.shift();
+      const next = waiting.pop();
       if (next) next();
       else active--;
     };
@@ -220,6 +259,23 @@ export function footerCachingStore(store: DatasetObjectStore, versionKey: string
 
   return {
     read: (path) => store.read(path),
+    async readShared(path) {
+      try {
+        return await sharedFileCache.getOrLoad(
+          keyOf(path),
+          (bytes) => bytes.length,
+          async () => {
+            const bytes = await store.read(path);
+            if (!bytes) throw new MissingObject();
+            return bytes;
+          },
+        );
+      } catch (error) {
+        if (error instanceof MissingObject) return null;
+        throw error;
+      }
+    },
+    fileKey: keyOf,
     list: (prefix) => store.list(prefix),
     async stat(path) {
       const handle = await open(path);
@@ -247,6 +303,8 @@ export function datasetReadCacheUsage(): Record<string, { entries: number; weigh
   return {
     episodeTables: usage(episodeTableCache),
     parquetFooters: usage(parquetFooterCache),
+    parquetMetadata: usage(parquetMetadataCache),
+    sharedFiles: usage(sharedFileCache),
     storageLocations: usage(storageLocationCache),
     episodeFrames: usage(episodeFramesCache),
   };

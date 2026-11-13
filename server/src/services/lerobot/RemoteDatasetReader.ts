@@ -18,7 +18,7 @@
 
 import type { EpisodeMeta, EpisodeVideoWindow, FrameData } from '../../types/dataset.types.js';
 import { bufferSource, readParquetRows, type ByteSource, type ReadRowsOptions } from './parquetEpisodeRows.js';
-import { ReadCache } from './ReadCache.js';
+import { isReadAbandoned, ReadCache } from './ReadCache.js';
 import { episodeDataPath, formatPathTemplate } from './episodePaths.js';
 
 export { formatPathTemplate };
@@ -37,6 +37,16 @@ export interface DatasetObjectStore {
   stat?(path: string): Promise<{ size: number } | null>;
   /** `length` bytes of the object starting at `offset`. Used together with {@link stat}. */
   readRange?(path: string, offset: number, length: number): Promise<Buffer>;
+  /**
+   * Like {@link read}, for a file several reads will want (a small v3.0 data
+   * file holds many episodes): the store may answer from memory.
+   */
+  readShared?(path: string): Promise<Buffer | null>;
+  /**
+   * A name for the file as it is stored now — it changes when the dataset's
+   * files do. With it the file's parsed parquet footer is kept between reads.
+   */
+  fileKey?(path: string): string;
 }
 
 /** A dataset that cannot be read as stored; `status` is the HTTP answer. */
@@ -165,9 +175,21 @@ function messageOf(error: unknown): string {
 async function readParquet(
   store: DatasetObjectStore,
   path: string,
-  options: ReadRowsOptions,
+  options: ReadRowsOptions & { shared?: boolean },
 ): Promise<Row[] | null> {
-  let source: ByteSource;
+  const { shared, ...readOptions } = options;
+  const key = store.fileKey?.(path);
+  // Fetch the whole object: one round trip instead of one per column chunk.
+  const whole = async (): Promise<ByteSource | null> => {
+    let buf: Buffer | null;
+    try {
+      buf = shared && store.readShared ? await store.readShared(path) : await store.read(path);
+    } catch (error) {
+      throw new DatasetReadError(502, `Could not read ${path} from object storage: ${messageOf(error)}`, path);
+    }
+    return buf ? bufferSource(buf, key) : null;
+  };
+  let source: ByteSource | null;
   if (store.stat && store.readRange) {
     let stat: { size: number } | null;
     try {
@@ -177,22 +199,20 @@ async function readParquet(
     }
     if (!stat) return null;
     if (stat.size <= WHOLE_FILE_BYTES) {
-      // One round trip instead of one per column chunk.
-      const buf = await fetchObject(store, path);
-      if (!buf) return null;
-      source = bufferSource(buf);
+      source = await whole();
     } else {
       const readRange = store.readRange.bind(store);
-      source = { size: stat.size, read: (offset, length) => readRange(path, offset, length) };
+      source = { key, size: stat.size, read: (offset, length) => readRange(path, offset, length) };
     }
   } else {
-    const buf = await fetchObject(store, path);
-    if (!buf) return null;
-    source = bufferSource(buf);
+    source = await whole();
   }
+  if (!source) return null;
   try {
-    return (await readParquetRows(source, options)).rows;
+    return (await readParquetRows(source, readOptions)).rows;
   } catch (error) {
+    // Nobody is waiting any more: that is not a file that could not be read.
+    if (isReadAbandoned(error)) throw error;
     throw new DatasetReadError(502, `Could not read ${path}: ${messageOf(error)}`, path);
   }
 }
@@ -356,13 +376,14 @@ async function readV2Frames(
   info: LeRobotInfo | null | undefined,
   episodeIndex: number,
   fps: number,
+  signal?: AbortSignal,
 ): Promise<{ frames: FrameData[]; source: string }> {
   const totalEpisodes = finiteOrUndefined(info?.total_episodes);
   if (totalEpisodes !== undefined && episodeIndex >= totalEpisodes) {
     throw notFound(episodeIndex, `the dataset has ${totalEpisodes} episodes`);
   }
   const path = episodeDataPath(info, episodeIndex);
-  const rows = await readParquet(store, path, { columns: FRAME_COLUMNS });
+  const rows = await readParquet(store, path, { columns: FRAME_COLUMNS, signal });
   if (!rows) {
     if (totalEpisodes === undefined) throw notFound(episodeIndex, `${path} does not exist`);
     throw new DatasetReadError(422, `Episode ${episodeIndex} has no data file: ${path} is missing`, path);
@@ -376,6 +397,7 @@ async function readV3Frames(
   episodeIndex: number,
   fps: number,
   loadTable?: () => Promise<EpisodeTable>,
+  signal?: AbortSignal,
 ): Promise<{ frames: FrameData[]; source: string }> {
   // The episode metadata says which data file to open. A caller that already
   // holds it passes it in, so opening an episode does not re-read the table.
@@ -405,6 +427,9 @@ async function readV3Frames(
     const rows = await readParquet(store, path, {
       columns: FRAME_COLUMNS,
       filter: { column: 'episode_index', equals: episodeIndex },
+      // The file holds other episodes too: its bytes are worth keeping.
+      shared: true,
+      signal,
     });
     if (!rows) {
       if (candidates.length === 1) {
@@ -434,7 +459,8 @@ async function readV3Frames(
 /**
  * Every frame of one episode, read from the parquet that holds it.
  * `loadTable` supplies the dataset's episode table when the caller has it
- * cached; only the v3.0 layout needs it.
+ * cached; only the v3.0 layout needs it. When `signal` fires the read stops
+ * at its next pause and rejects with `ReadAbandoned`.
  */
 export async function readRemoteEpisodeFrames(
   store: DatasetObjectStore,
@@ -443,10 +469,11 @@ export async function readRemoteEpisodeFrames(
   fps: number,
   recordVersion?: string | null,
   loadTable?: () => Promise<EpisodeTable>,
+  signal?: AbortSignal,
 ): Promise<{ frames: FrameData[]; source: string }> {
   return layoutOf(info, recordVersion) === 'v2'
-    ? readV2Frames(store, info, episodeIndex, fps)
-    : readV3Frames(store, info, episodeIndex, fps, loadTable);
+    ? readV2Frames(store, info, episodeIndex, fps, signal)
+    : readV3Frames(store, info, episodeIndex, fps, loadTable, signal);
 }
 
 /** One page of an episode's frames, read from the parquet that holds them. */
@@ -472,6 +499,22 @@ export function pageOf(
     total: episode.frames.length,
     source: episode.source,
   };
+}
+
+/**
+ * At most `maxPoints` of `frames`, evenly spaced, the first and the last
+ * always among them. A chart a few hundred pixels wide cannot show more
+ * samples than it has pixels, and every frame is ~1.2 KB of JSON for a
+ * 31-joint robot (TASK-492). Frames keep their own `frameIndex` and
+ * `timestamp`, so what is left is still placed where it was recorded.
+ */
+export function thinFrames(frames: FrameData[], maxPoints: number): FrameData[] {
+  const want = Math.max(2, Math.floor(maxPoints));
+  if (frames.length <= want) return frames;
+  const step = (frames.length - 1) / (want - 1);
+  const kept: FrameData[] = [];
+  for (let i = 0; i < want; i++) kept.push(frames[Math.round(i * step)]);
+  return kept;
 }
 
 /** Rough heap bytes of a decoded episode, for the cache's budget. */

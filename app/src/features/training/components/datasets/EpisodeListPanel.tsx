@@ -73,7 +73,7 @@ export function EpisodeListPanel(props: EpisodeListPanelProps) {
             <EmptyState size="sm" title="No episodes" description="This dataset holds no episodes yet." />
           ) : (
             <ul>
-              {episodes.map((ep) => {
+              {episodes.map((ep, position) => {
                 const active = selected === ep.index;
                 const score = scores[ep.index];
                 return (
@@ -86,6 +86,16 @@ export function EpisodeListPanel(props: EpisodeListPanelProps) {
                     onKeyDown={(e) => {
                       if (e.target !== e.currentTarget) return;
                       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(ep.index); }
+                      // Up and down walk the list: the neighbouring row is
+                      // opened and takes the focus, so a held key keeps going.
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const row = e.key === 'ArrowDown' ? e.currentTarget.nextElementSibling : e.currentTarget.previousElementSibling;
+                        const next = episodes[position + (e.key === 'ArrowDown' ? 1 : -1)];
+                        if (!next || !(row instanceof HTMLElement)) return;
+                        onSelect(next.index);
+                        row.focus();
+                      }
                     }}
                     className={cn(
                       'flex cursor-pointer items-center gap-2 border-l-2 px-4 py-2 outline-none transition-colors focus-visible:bg-ink-primary/[0.05]',

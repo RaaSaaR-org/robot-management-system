@@ -38,7 +38,9 @@ import { EpisodeListPanel } from '../components/datasets/EpisodeListPanel';
 import { EpisodeViewer } from '../components/datasets/EpisodeViewer';
 import { featureVideoCodec } from '../components/datasets/videoCodec';
 import { useDatasetVideoTicket } from '../hooks/useDatasetVideoTicket';
+import { useEpisodeFrames } from '../hooks/useEpisodeFrames';
 import { useEpisodePlayback } from '../hooks/useEpisodePlayback';
+import { useSettledValue } from '../hooks/useSettledValue';
 import { probeVideoThrottle } from '../api/datasetVideoApi';
 import { useViewportFill } from '../hooks/useViewportFill';
 import { CuratePanel } from '../components/datasets/CuratePanel';
@@ -61,7 +63,6 @@ import type {
   EpisodeAnnotation,
   EpisodeMeta,
   FeatureStats,
-  FrameData,
   SubmitSimRlJobInput,
   SubmitTrainingJobInput,
 } from '../types';
@@ -72,7 +73,12 @@ const DEFAULT_JOINTS = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_fl
 /** Cameras assumed for a dataset that carries no feature metadata at all. */
 const LEGACY_CAMERAS = ['observation.images.wrist', 'observation.images.top'];
 
-const NO_FRAMES: FrameData[] = [];
+/**
+ * How long the selection has to hold still, during a run of quick switches,
+ * before the episode's videos and frames are asked for. Under a deliberate
+ * double-click's spacing and above a held key's repeat (TASK-492).
+ */
+const EPISODE_SETTLE_MS = 250;
 
 /**
  * The stage (list, video, chart) ends at the bottom of the window. From this
@@ -105,12 +111,12 @@ export function DatasetEpisodesPage() {
   const [selectedEpisode, setSelectedEpisode] = useState<number | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedEpisodeRef = useRef(searchParams.get('episode'));
-  // The frames and the request they answer: until the two agree the chart is
-  // loading, so a slow or throttled request never leaves the previous episode's
-  // samples on screen as if they were this one's (TASK-482, TASK-484).
-  const [framesAnswer, setFramesAnswer] =
-    useState<{ key: string; frames: FrameData[]; error: string | null } | null>(null);
-  const [framesReloadKey, setFramesReloadKey] = useState(0);
+  // The episode whose videos and frames are loaded. A single click moves it
+  // at once; through a run of quick clicks or a held arrow key it waits for
+  // the selection to stop, so the episodes passed on the way cost no requests
+  // (TASK-492). The list highlight and the Curate panel follow
+  // `selectedEpisode` itself.
+  const stageEpisode = useSettledValue(selectedEpisode, EPISODE_SETTLE_MS);
   const [flaggedMap, setFlaggedMap] = useState<Record<number, boolean>>({});
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState<number | ''>('');
@@ -144,7 +150,7 @@ export function DatasetEpisodesPage() {
   // A <video> cannot send the bearer token, so the URL carries a short-lived
   // ticket for this dataset's videos. Re-checked per episode: that is when the
   // video changes anyway, so a renewed ticket never interrupts playback.
-  const videoTicket = useDatasetVideoTicket(datasetId, selectedEpisode);
+  const videoTicket = useDatasetVideoTicket(datasetId, stageEpisode);
   const { submitJob } = useTrainingJobs();
 
   // The feature table of info.json. A view owns no files and no info.json: its
@@ -203,24 +209,28 @@ export function DatasetEpisodesPage() {
 
   const primaryCamera = cameraNames?.[0];
   const selectedMeta = useMemo(() => episodes.find((e) => e.index === selectedEpisode) ?? null, [episodes, selectedEpisode]);
+  const stageMeta = useMemo(() => episodes.find((e) => e.index === stageEpisode) ?? null, [episodes, stageEpisode]);
   // v3.0 chunked datasets: the episode's window inside the chunk video, per camera.
-  const videoWindows = selectedMeta?.videoWindows;
+  const videoWindows = stageMeta?.videoWindows;
   const windowFor = useCallback((cam: string) => videoWindows?.[cam], [videoWindows]);
 
   const playback = useEpisodePlayback({
-    episodeKey: datasetId && selectedEpisode !== null ? `${datasetId}:${selectedEpisode}` : null,
+    episodeKey: datasetId && stageEpisode !== null ? `${datasetId}:${stageEpisode}` : null,
     datasetKey: datasetId,
     primaryCamera,
     windowFor,
-    fallbackDuration: selectedMeta?.durationSeconds ?? 0,
+    fallbackDuration: stageMeta?.durationSeconds ?? 0,
   });
   const { currentTime } = playback;
 
-  const framesKey = datasetId && selectedEpisode !== null ? `${datasetId}:${selectedEpisode}:${framesReloadKey}` : null;
-  const framesCurrent = framesAnswer && framesAnswer.key === framesKey ? framesAnswer : null;
-  const frames = framesCurrent?.frames ?? NO_FRAMES;
-  const framesLoading = framesKey !== null && !framesCurrent;
-  const framesError = framesCurrent?.error ?? null;
+  // Aborted when another episode is opened, retried by itself after a passing
+  // failure. While the selection has moved on and the stage has not caught up,
+  // what is in hand is the previous episode's: the chart reads as loading.
+  const episodeFrames = useEpisodeFrames(datasetId, stageEpisode);
+  const stageCurrent = stageEpisode === selectedEpisode;
+  const frames = episodeFrames.frames;
+  const framesLoading = episodeFrames.isLoading || !stageCurrent;
+  const framesError = stageCurrent ? episodeFrames.error : null;
 
   const stage = useViewportFill<HTMLDivElement>(STAGE_FILL);
   const stageLayout =
@@ -331,19 +341,6 @@ export function DatasetEpisodesPage() {
       .catch(() => { if (!cancelled) setAnnotations([]); });
     return () => { cancelled = true; };
   }, [datasetId]);
-
-  useEffect(() => {
-    if (!datasetId || selectedEpisode === null) return;
-    const key = `${datasetId}:${selectedEpisode}:${framesReloadKey}`;
-    let cancelled = false;
-    trainingApi.getEpisodeFrames(datasetId, selectedEpisode, 0, 2000)
-      .then((r) => { if (!cancelled) setFramesAnswer({ key, frames: r.frames, error: null }); })
-      .catch((err) => {
-        // An empty chart here used to hide a read failure (TASK-354).
-        if (!cancelled) setFramesAnswer({ key, frames: [], error: errorMessage(err, 'unknown error') });
-      });
-    return () => { cancelled = true; };
-  }, [datasetId, selectedEpisode, framesReloadKey]);
 
   /** Open another episode from the list. A typed trim range was the previous episode's. */
   const selectEpisode = useCallback((index: number) => {
@@ -661,7 +658,7 @@ export function DatasetEpisodesPage() {
               onRetry={() => setReloadKey((k) => k + 1)}
             />
           </Panel>
-        ) : selectedEpisode === null || !cameraNames ? (
+        ) : selectedEpisode === null || stageEpisode === null || !cameraNames ? (
           <Panel>
             {episodesLoading || !cameraNames
               ? <SkeletonText lines={6} />
@@ -678,7 +675,7 @@ export function DatasetEpisodesPage() {
           >
             <EpisodeViewer
               cameras={cameraNames}
-              srcFor={(cam) => trainingApi.getEpisodeVideoUrl(datasetId, selectedEpisode, cam, windowFor(cam), videoTicket.ticket)}
+              srcFor={(cam) => trainingApi.getEpisodeVideoUrl(datasetId, stageEpisode, cam, windowFor(cam), videoTicket.ticket)}
               codecFor={codecFor}
               ready={videoTicket.ready}
               onReload={videoTicket.refresh}
@@ -701,13 +698,14 @@ export function DatasetEpisodesPage() {
             />
             <JointChartPanel
               frames={frames}
+              sampleCount={episodeFrames.total}
               jointNames={jointNames}
               groups={jointGroups}
               isLoading={framesLoading}
               currentTime={currentTime}
               isPlaying={playback.isPlaying}
               error={framesError}
-              onRetry={() => setFramesReloadKey((k) => k + 1)}
+              onRetry={episodeFrames.retry}
             />
           </div>
         )}
@@ -721,9 +719,10 @@ export function DatasetEpisodesPage() {
       {activeTab === 'curate' && selectedEpisode !== null && (
         <CuratePanel
           episode={selectedEpisode}
-          // The episode list knows the length at once; the frames request is
-          // capped, and until it has answered there is no number to fall back on.
-          frameCount={selectedMeta?.frameCount ?? (framesCurrent && !framesError ? frames.length : null)}
+          // The episode list knows the length at once; failing that, the frames
+          // answer carries the episode's real count — the frames themselves are
+          // capped and thinned for the chart, so their number says nothing.
+          frameCount={selectedMeta?.frameCount ?? (stageCurrent ? episodeFrames.total : null)}
           trimStart={trimStart}
           trimEnd={trimEnd}
           onTrimStart={setTrimStart}
@@ -762,11 +761,12 @@ export function DatasetEpisodesPage() {
         <RewardCurvePanel reward={selectedReward} fallbackFps={dataset?.fps ?? 30} currentTime={currentTime} />
       )}
 
-      {activeTab === 'episode-discussion' && selectedEpisode !== null && (
+      {/* Its comments are a request per episode: asked for the settled one. */}
+      {activeTab === 'episode-discussion' && stageEpisode !== null && (
         <Panel>
           <SocialPanel
-            subject={{ subjectType: 'episode', subjectId: datasetId, episodeIndex: selectedEpisode }}
-            title={`Episode ${selectedEpisode} discussion`}
+            subject={{ subjectType: 'episode', subjectId: datasetId, episodeIndex: stageEpisode }}
+            title={`Episode ${stageEpisode} discussion`}
           />
         </Panel>
       )}

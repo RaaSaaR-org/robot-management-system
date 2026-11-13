@@ -10,17 +10,21 @@
  * the fixture does not contain.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import {
   DatasetReadError,
   formatPathTemplate,
   layoutOf,
   parseEpisodeRecords,
+  readRemoteEpisodeFrames,
   readRemoteEpisodes,
   readRemoteFrames,
+  thinFrames,
   type DatasetObjectStore,
 } from '../RemoteDatasetReader.js';
 import { FRAME_FIELDS, frameRows, memoryStore, parquetBuffer } from './parquetFixtures.js';
+import { clearDatasetReadCaches, footerCachingStore } from '../DatasetReadCache.js';
+import { ReadAbandoned } from '../ReadCache.js';
 
 const PAGE = { offset: 0, limit: 10_000 };
 
@@ -250,5 +254,98 @@ describe('LeRobot v3.0 (concatenated file-* parquet)', () => {
 
   it('fails without meta/episodes instead of inventing episodes from info.json', async () => {
     await expectReadError(readRemoteEpisodes(memoryStore({}), info, 30), 422, /meta\/episodes\/chunk-\*\/file-\*\.parquet is missing/);
+  });
+});
+
+describe('thinFrames — a chart gets as many samples as it can show (TASK-492)', () => {
+  const frames = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ frameIndex: i, timestamp: i / 30, observationState: [i], action: [-i] }));
+
+  it('returns the frames themselves when there are no more than asked for', () => {
+    const few = frames(400);
+    expect(thinFrames(few, 400)).toBe(few);
+    expect(thinFrames(frames(3), 400)).toHaveLength(3);
+  });
+
+  it('keeps the first and the last frame and spaces the rest evenly', () => {
+    const kept = thinFrames(frames(688), 400);
+    expect(kept).toHaveLength(400);
+    expect(kept[0]!.frameIndex).toBe(0);
+    expect(kept[399]!.frameIndex).toBe(687);
+    const steps = kept.slice(1).map((f, i) => f.frameIndex - kept[i]!.frameIndex);
+    expect(Math.min(...steps)).toBeGreaterThanOrEqual(1);
+    expect(Math.max(...steps)).toBeLessThanOrEqual(2);
+    // Each frame is still the one recorded at its own time.
+    expect(kept.every((f) => f.timestamp === f.frameIndex / 30 && f.observationState[0] === f.frameIndex)).toBe(true);
+  });
+
+  it('never returns fewer than the two ends', () => {
+    expect(thinFrames(frames(10), 1).map((f) => f.frameIndex)).toEqual([0, 9]);
+  });
+});
+
+describe('reading episodes of one small v3.0 data file (TASK-492)', () => {
+  const info = { codebase_version: 'v3.0', fps: 30 };
+  const DATA = 'data/chunk-000/file-000.parquet';
+  let files: Record<string, Buffer>;
+
+  beforeAll(async () => {
+    files = {
+      'meta/episodes/chunk-000/file-000.parquet': await parquetBuffer(
+        {
+          episode_index: { type: 'INT64' },
+          length: { type: 'INT64' },
+          'data/chunk_index': { type: 'INT64' },
+          'data/file_index': { type: 'INT64' },
+        },
+        [0, 1, 2, 3].map((i) => ({ episode_index: i, length: 6, 'data/chunk_index': 0, 'data/file_index': 0 })),
+      ),
+      [DATA]: await parquetBuffer(
+        FRAME_FIELDS,
+        [0, 1, 2, 3].flatMap((i) => frameRows(i, 6, 4)),
+        { rowGroupSize: 6 },
+      ),
+    };
+  });
+  beforeEach(() => clearDatasetReadCaches());
+
+  /** A ranged store over `files` that counts whole-file GETs of the data file. */
+  function rangedStore(): DatasetObjectStore & { gets: () => number } {
+    let gets = 0;
+    const plain = memoryStore(files);
+    return {
+      gets: () => gets,
+      async read(path) {
+        if (path === DATA) gets++;
+        return plain.read(path);
+      },
+      list: (prefix) => plain.list(prefix),
+      async stat(path) {
+        return files[path] ? { size: files[path].length } : null;
+      },
+      async readRange(path, offset, length) {
+        return files[path]!.subarray(offset, offset + length);
+      },
+    };
+  }
+
+  it('downloads the file once for every episode in it', async () => {
+    const inner = rangedStore();
+    const store = footerCachingStore(inner, 'ds@1');
+    for (const episode of [2, 0, 3, 1]) {
+      const { frames } = await readRemoteEpisodeFrames(store, info, episode, 30);
+      expect(frames).toHaveLength(6);
+      expect(frames[5]!.observationState[0]).toBe(episode * 1000 + 5);
+    }
+    expect(inner.gets()).toBe(1);
+  });
+
+  it('passes an abandoned read on as that, not as a file that could not be read', async () => {
+    const store = footerCachingStore(rangedStore(), 'ds@1');
+    const viewer = new AbortController();
+    viewer.abort();
+    await expect(
+      readRemoteEpisodeFrames(store, info, 1, 30, undefined, undefined, viewer.signal),
+    ).rejects.toBeInstanceOf(ReadAbandoned);
   });
 });
