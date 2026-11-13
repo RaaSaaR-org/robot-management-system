@@ -565,6 +565,22 @@ describe('the default base model', () => {
 
     expect(pressed(/OpenVLA\s*Open vision/)).toBe('true');
   });
+
+  it('keeps the architecture of a model picked to continue from, and the pick', () => {
+    openOnModelStep([G1_DATASET, SO101_DATASET], /our G1 recording/);
+    // The suggested GR00T N1.7 was never clicked; a model trained as it is.
+    fireEvent.click(screen.getByTestId('weights-source-existing'));
+    fireEvent.click(screen.getByLabelText('Start from GR00T-N1.7 AppleToPlate'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('button', { name: /our G1 recording/ }));
+    fireEvent.click(screen.getByRole('button', { name: /SO-101/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(pressed(/GR00T N1\.7.*native LeRobot/)).toBe('true');
+    expect(screen.getByLabelText('Start from GR00T-N1.7 AppleToPlate')).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Next' })).not.toBeDisabled();
+  });
 });
 
 describe('the step indicator', () => {

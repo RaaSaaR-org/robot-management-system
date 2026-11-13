@@ -136,11 +136,23 @@ three datasets and the seeded demo fleet, on a production build and a demo-mode 
 image was built with a `docs` context (a marker line added to the context's README is in the
 image) and without one (the docs fetched from the repository are in the image).
 
+Found in review and fixed in the same PR:
+
+- The import log of a ready dataset, opened after a server restart, said "its log is gone" above
+  an empty box reading "Waiting for the server…" — the state every imported dataset is in after a
+  deploy, reachable only since the action stays on ready datasets. The empty box is no longer drawn.
+- The wizard's suggestion replaced the architecture — and dropped the picked model — when the
+  person had chosen a model to continue from and then changed the datasets. Picking a model to
+  continue now counts as choosing its architecture.
+
 Not fixed here, noticed on the way:
 
 - `app/src/features/robots/components/tabs/vr/VRTeleopModal.tsx:1590` tells the operator to
   "Restart g1_sidecar.py with G1_WRITE_MODE=arm_sdk", and
   `app/src/features/robots/components/tabs/MotionTab.tsx:378` names `run.py` / `export_neodem.py`
   in an empty state — the same jargon pattern, on robots pages (TASK-485).
+- Agent Mode names a setting in two empty states: "This robot does not publish a map
+  (AGENT_MAP_ENABLED)." (`RobotMapPanel.tsx`) and "… does not keep a point cloud
+  (AGENT_CLOUD_ENABLED)." (`WorldCloudView.tsx`).
 - The dataset list scrolls horizontally at 1280 px: with the row menu in view the Name column is
   cut on the left (`app/src/features/training/components/DatasetList.tsx`).

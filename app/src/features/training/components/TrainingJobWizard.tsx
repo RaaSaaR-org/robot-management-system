@@ -122,7 +122,12 @@ export function TrainingJobWizard({ isOpen, onClose, onSubmit, datasets, isSubmi
   };
   const onWeightsSource = (source: WeightsSource) =>
     setForm((prev) => ({ ...prev, weightsSource: source, initFrom: source === 'foundation' ? null : prev.initFrom }));
-  const onInitFrom = (initFrom: InitFromSelection | null) => patch({ initFrom });
+  // Picking a model to continue is choosing its architecture: the suggestion
+  // must not swap it — and drop the pick — when the datasets change later.
+  const onInitFrom = (initFrom: InitFromSelection | null) => {
+    if (initFrom) modelChosen.current = true;
+    patch({ initFrom });
+  };
   const onMethod = (method: FineTuneMethod) => patch({ fineTuneMethod: method, hyperparameters: getDefaultHyperparameters(method) });
 
   const canProceed = (() => {
