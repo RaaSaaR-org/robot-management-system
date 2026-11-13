@@ -121,7 +121,7 @@ docker buildx imagetools inspect ghcr.io/raasaar-org/neodem-server:sha-77cc8ff
 
 ## Raspberry Pi Setup (systemd)
 
-This is the setup used on the NeoDEM reference platform (Raspberry Pi 5, Debian 12 aarch64).
+This is the single-node setup of the SO-101 bootstrap rig (Raspberry Pi 5, Debian 12 aarch64): everything on one small machine beside the arm. A G1 does not run this way — its robot side is started by the robot supervisor, see [G1 EDU lab bring-up](g1-edu-lab-bringup.md).
 
 ### Prerequisites
 

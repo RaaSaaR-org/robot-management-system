@@ -110,7 +110,11 @@ export function DashboardPage() {
                 </div>
               }
             />
-            <SiteMap size="compact" />
+            {/* A panel built from sections pads nothing itself: without the body the
+                site picker, the map and the robot list sat flush on the border. */}
+            <Panel.Body>
+              <SiteMap size="compact" />
+            </Panel.Body>
           </Panel>
           {firstLoad ? (
             <Panel>

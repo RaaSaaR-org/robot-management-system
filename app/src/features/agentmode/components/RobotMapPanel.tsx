@@ -10,7 +10,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { cn, getErrorMessage } from '@/shared/utils';
 import { formatTimeAgo } from '@/shared/utils/format';
-import { SegmentedControl, Tooltip } from '@/shared/components/ui';
+import { AdminCode, AdminHint, SegmentedControl, Tooltip } from '@/shared/components/ui';
 import { TWIN_ZONE_COLORS } from '@/features/digitaltwin/store/twinZoneStore';
 import { useAgentModeStore } from '../store/agentmodeStore';
 import type { RobotMapGrid, RobotMapPayload } from '../types/agentmode.types';
@@ -764,10 +764,13 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
             )}
           </>
         ) : (
-          <div className="absolute inset-0 flex items-center justify-center p-4 text-center" data-testid="agent-map-empty">
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center"
+            data-testid="agent-map-empty"
+          >
             <p className="text-xs text-ink-muted max-w-[26ch]">
               {status === 'disabled'
-                ? 'This robot does not publish a map (AGENT_MAP_ENABLED).'
+                ? 'This robot is not sharing a map of its surroundings.'
                 : status === 'unavailable'
                   ? (
                     <>
@@ -781,6 +784,13 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
                     ? 'Reading the robot’s map…'
                     : 'No robot selected.'}
             </p>
+            {status === 'disabled' && (
+              // The switch is the operator's, not the visitor's: its name stays
+              // out of the sentence and folds under "For administrators" (TASK-489).
+              <AdminHint className="max-w-[30ch] text-center text-xs" data-testid="agent-map-admin-hint">
+                Mapping is switched off on this robot&rsquo;s agent: <AdminCode>AGENT_MAP_ENABLED</AdminCode>
+              </AdminHint>
+            )}
           </div>
         )}
       </div>

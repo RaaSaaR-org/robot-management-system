@@ -199,6 +199,16 @@ describe('SiteMap', () => {
     expect(screen.queryByLabelText('Zone colours')).toBeNull();
   });
 
+  it('compact lists a robot off the map on one line, name and reason side by side (TASK-489)', async () => {
+    robotsHook.robots = [robot('a', null), robot('b', null)];
+    renderMap('compact');
+    const group = await screen.findByTestId('site-map-unbound');
+    expect(group.querySelector('h3')).toHaveTextContent('No site2');
+    const row = screen.getByRole('link', { name: 'Robot a' }).closest('li');
+    expect(row).toHaveClass('items-center', 'justify-between');
+    expect(row).toHaveTextContent('no site');
+  });
+
   it.each(['viewer', 'owner', 'super-admin'] as const)(
     'lets a %s stop a zone — the server grants the zone stop to every role (TASK-374)',
     async (role) => {
