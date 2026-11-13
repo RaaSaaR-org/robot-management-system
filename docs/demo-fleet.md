@@ -29,9 +29,12 @@ The script talks to the public API only; it needs no database access and no shel
 | `--dry-run` | Print what would change and write nothing. |
 | `--remove` | Take the script's own robots off again. |
 | `--without-microduck` | Leave the MicroDuck out. |
+| `--site <name\|id>` | The site to put the robots on. Default: the instance's only site. |
+| `--also <robot id>` | Bind this existing robot to the site as well, e.g. the sim robot. Repeatable. |
+| `--no-site` | Leave site bindings and planned places exactly as they are. |
 | `--token <jwt>` | Bearer token for an instance with auth on (or `NEODEM_TOKEN`). The account needs `member` or above. |
 
-Each line of the output is one robot and what happened to it: `created`, `updated`, `unchanged`, `removed`, `absent` or `skipped`.
+Each line of the output is one robot and what happened to it: `created`, `updated`, `unchanged`, `removed`, `absent` or `skipped`. A second block, `Site → <name>`, says the same for the site binding: `assigned`, `unchanged`, `skipped` or `absent` (see [On the site map](#on-the-site-map)).
 
 It is safe to run again, at any time:
 
@@ -40,6 +43,53 @@ It is safe to run again, at any time:
 - **It never touches a robot it did not create.** A row is the script's own when it carries `metadata.seededBy = "demo-fleet"` and no agent has registered it. Anything else under one of the three ids — most likely the real robot, once its agent registers under that id — is reported `skipped` and is neither modified nor removed. The server refuses such a write on its own with a 409.
 
 The instance needs a server build that has the `expected` route; an older one answers 404 and the script says so.
+
+## On the site map
+
+Without a site every robot is listed under "No site" and the dashboard and fleet maps show an empty building. The seed therefore also puts its robots on the instance's site — the "Demo Warehouse" the server seeds at start, when that is the only one:
+
+```bash
+npm run seed:demo-fleet -- --base-url https://neodem.example.org --also sim-robot-001 --dry-run
+npm run seed:demo-fleet -- --base-url https://neodem.example.org --also sim-robot-001
+```
+
+```
+Demo fleet → https://neodem.example.org
+  updated      demo-g1-dex3     Unitree G1 with Dex3 hands
+  updated      demo-so101       SO-101
+  updated      demo-microduck   MicroDuck
+Site → Demo Warehouse
+  assigned     demo-g1-dex3     Unitree G1 with Dex3 hands — planned at STAGING, drawn as not live
+  assigned     demo-so101       SO-101 — planned at STAGING, drawn as not live
+  assigned     demo-microduck   MicroDuck — planned at DOCK-1, drawn as not live
+  assigned     sim-robot-001    SimBot-01 — the map lists it as "not aligned" until its agent reports a pose in the site frame
+```
+
+A robot gets onto a site map in two separate steps, and the seed does only what it can do truthfully for each:
+
+| What | Where it comes from | What the seed writes |
+| ---- | ------------------- | -------------------- |
+| **The site** | `Robot.twinId` — `PATCH /api/robots/:id {"twinId": "<site id>"}`, the **Site** select on a robot's Details tab. | That `PATCH`, for each of its robots and each `--also` robot. |
+| **The position** | The robot's agent reports a pose; the map draws it only when the pose is in the site's frame (`location.siteAligned`, set by a frame registration or by a sim whose world is the site). | Nothing. An expected robot has no agent and no pose, and none is invented. |
+
+What stands in for a position is a **planned place**: `metadata.plannedPlace`, the name of a zone of the site. The G1 and the SO-101 are planned into the staging zone, the MicroDuck — not delivered yet — at the dock; a zone is picked by its place type (`staging`, `workcell`, `dock`), never a keep-out, and a site with no fitting zone gets the binding only.
+
+| Robot | On the map | In the list beside it |
+| ----- | ---------- | --------------------- |
+| Expected, with a planned place | A dashed, hollow ring in the zone, labelled "<name> (planned)". Never the solid dot of a live robot. | **Planned position** — "planned in STAGING", tagged Not connected / Arriving. |
+| Expected, no planned place | Not drawn. | **Not connected** |
+| Connected, pose not in the site frame (e.g. `--also sim-robot-001` on the stock sim) | Not drawn. | **Not aligned** — fence not enforcing. Align it on its Details tab, or run a sim whose world is the site. |
+| Connected and aligned | A solid dot with a heading tick, where it reports to be. | — |
+
+The count over the list says it in words: "0 robots live on the map. 3 expected robots are drawn where they are planned to stand."
+
+The same rules as for the robots apply:
+
+- **A second run writes nothing**; every line reads `unchanged`.
+- **`--dry-run` writes nothing** and prints `would-assign`.
+- **Only its own robots, plus the ones you name.** A robot under a demo id that an agent has registered is `skipped`. One that someone bound to a *different* site stays there unless `--site` names the site. A robot passed with `--also` is your explicit choice and is always bound — only bound: its metadata and pose are not touched. An unknown `--also` id is `absent` and the script exits 1.
+- **No site, or several.** With no site the robots stay under "No site" and the output says so. With several, nothing is guessed: pass `--site "<name>"`.
+- **When the real robot connects** under the id, its agent's metadata replaces the row's, so the planned place is gone and the robot is drawn where it says it is. The binding stays.
 
 ## What an expected robot is
 
@@ -50,7 +100,7 @@ A robot normally joins the fleet when its agent registers (`POST /api/robots/reg
 | `awaiting_agent` | The hardware exists; its agent has never connected to this instance. | Not connected | "Never connected"; the page says it goes live when its agent registers. |
 | `arriving` | The hardware has not been delivered. | Arriving | The note, e.g. where it is on order from; the page says there is nothing to connect yet. |
 
-Nothing is invented for it: no battery level, no "last seen", no place. It cannot be commanded, because it has no agent — so the app offers nothing that needs one:
+Nothing is invented for it: no battery level, no "last seen", no position — at most a *planned* place, shown as such ([On the site map](#on-the-site-map)). It cannot be commanded, because it has no agent — so the app offers nothing that needs one:
 
 | Where | An expected robot shows |
 | ----- | ----------------------- |
@@ -107,6 +157,39 @@ The server refuses with **409** and deletes nothing when
 - the type is one of the standard types seeded at start (`code: ROBOT_TYPE_STANDARD`).
 
 An unknown id is a 404 (`ROBOT_TYPE_NOT_FOUND`). A removal is written to the compliance log as `robot-type.delete`.
+
+## Renaming a robot type
+
+An import that finds no registered type for its `robot_type` creates one, and names it after the identifier — `unitree_g1_dex3 (action 31, state 31)` when a type of that identifier with other widths already exists. That reads as a raw identifier beside "Unitree G1 EDU (Dex3-1)". An owner can give it a proper name:
+
+```bash
+# from server/
+npm run rename:robot-type -- --base-url https://neodem.example.org \
+  --name "unitree_g1_dex3 (action 31, state 31)" --to "Unitree G1 upper body + Dex3-1 hands" --dry-run
+```
+
+| Option | Effect |
+| ------ | ------ |
+| `--base-url <url>` | The instance. Default `http://localhost:3001`. |
+| `--name <name>` | The type's exact current name (or `--id <uuid>`). |
+| `--to <name>` | The name it should have, up to 80 characters. |
+| `--dry-run` | Print what would be renamed and write nothing. |
+| `--token <jwt>` | Bearer token for an instance with auth on (or `NEODEM_TOKEN`). The account needs `owner`. |
+
+The line it prints is `renamed`, `would-rename`, `unchanged` (it already has that name — also the answer on a second run), `absent` or `refused`, with the server's reason; `refused` and `absent` exit 1.
+
+The script is two calls to the public API: `GET /api/datasets/robot-types`, then
+
+```bash
+curl -X PATCH https://neodem.example.org/api/datasets/robot-types/<id> \
+  -H 'Content-Type: application/json' -d '{"name":"Unitree G1 upper body + Dex3-1 hands"}'
+```
+
+**Only the name changes.** The type's `model` (`unitree_g1_dex3`, what an import matches a Hub `robot_type` against) and its state / action widths stay, so every dataset on it stays valid and the next import of the same robot lands on this row instead of creating the old name again. Datasets, embodiments and skills point at the type by id and need nothing.
+
+The server refuses with **409** and changes nothing when another type already has the name, whatever its case (`code: ROBOT_TYPE_EXISTS`), and for the standard types seeded at start (`code: ROBOT_TYPE_STANDARD`) — the seed and `metadata.robotTypeName` on fleet robots find those by name. A fleet robot that names a *non-standard* type in `metadata.robotTypeName` has to be given the new name too. An unknown id is a 404 (`ROBOT_TYPE_NOT_FOUND`), an empty or over-long name a 400. Robot types are platform-wide, not per organisation, so the route is owner-only like creating and deleting one. A rename is written to the compliance log as `robot-type.rename` with the old and the new name.
+
+There is no rename in the app yet; the script and the route are the way.
 
 ## The MicroDuck
 

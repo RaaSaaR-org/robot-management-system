@@ -149,7 +149,7 @@ export const MessageBubble = memo(function MessageBubble({ message, pendingStatu
         {isFailure ? (
           <div className="flex flex-col gap-1">
             <p className="font-medium text-signal-stopped">
-              {agentName ? `${agentName}'s assistant is unavailable` : 'The assistant is unavailable'}
+              {agentName ? `The assistant of ${agentName} is unavailable` : 'The assistant is unavailable'}
             </p>
             {failureDetail && (
               <p className="text-xs break-words text-ink-tertiary" title={failureDetail}>

@@ -52,6 +52,10 @@ export function DocsSidebar({ docs, groups, categories, contentMap, className, o
   }, [q, docs, groups, contentMap]);
 
   const shownCategories = categories.filter((cat) => (shownGroups.get(cat)?.length ?? 0) > 0);
+  // What the list above offers, not every file under docs/: decision records
+  // and ADRs are bundled for links to resolve but have no category here, and
+  // counting them told a reader "49 documents" over a list of 32 (TASK-493).
+  const shownCount = shownCategories.reduce((n, cat) => n + (shownGroups.get(cat)?.length ?? 0), 0);
 
   return (
     <nav aria-label="Documentation" className={cn('flex flex-col gap-4', className)}>
@@ -108,7 +112,10 @@ export function DocsSidebar({ docs, groups, categories, contentMap, className, o
         <p className="px-2 text-[13px] text-ink-tertiary">No docs match &ldquo;{search}&rdquo;.</p>
       )}
 
-      <p className="border-t border-line-subtle px-2 pt-3 text-xs text-ink-muted">{docs.length} documents</p>
+      <p className="border-t border-line-subtle px-2 pt-3 text-xs text-ink-muted" data-testid="docs-count">
+        {shownCount} {shownCount === 1 ? 'document' : 'documents'}
+        {q ? ' match' : ''}
+      </p>
     </nav>
   );
 }

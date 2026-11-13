@@ -32,6 +32,9 @@ export interface DataTableSort {
   direction: SortDirection;
 }
 
+/** Viewport widths a column can first appear at: 640, 768, 1024, 1280, 1440 and 1536 px. */
+export type DataTableBreakpoint = 'sm' | 'md' | 'lg' | 'xl' | 'wide' | '2xl';
+
 export interface DataTableColumn<T> {
   /** Unique column key; also the default field read when `cell` is omitted */
   key: string;
@@ -44,8 +47,8 @@ export interface DataTableColumn<T> {
   sortable?: boolean;
   /** Value to sort by (default: row[key]) */
   sortValue?: (row: T) => SortValue;
-  /** Hide the column below this breakpoint */
-  hideBelow?: 'sm' | 'md' | 'lg';
+  /** Hide the column below this breakpoint (`wide` is 1440 px, between `xl` and `2xl`) */
+  hideBelow?: DataTableBreakpoint;
   /** Extra classes for this column's cells */
   className?: string;
 }
@@ -103,10 +106,13 @@ export interface DataTableProps<T> {
 // HELPERS
 // ============================================================================
 
-const HIDE_BELOW: Record<'sm' | 'md' | 'lg', string> = {
+const HIDE_BELOW: Record<DataTableBreakpoint, string> = {
   sm: 'hidden sm:table-cell',
   md: 'hidden md:table-cell',
   lg: 'hidden lg:table-cell',
+  xl: 'hidden xl:table-cell',
+  wide: 'hidden min-[1440px]:table-cell',
+  '2xl': 'hidden 2xl:table-cell',
 };
 
 const ALIGN: Record<'left' | 'right' | 'center', string> = {

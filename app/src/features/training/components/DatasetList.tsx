@@ -1,6 +1,11 @@
 /**
  * @file DatasetList.tsx
- * @description Dataset table: search, status and synthetic filters, row actions and the four list states
+ * @description Dataset table: search, status and synthetic filters, row actions and the four list states.
+ *              The table always fits its panel (TASK-493): the name column takes
+ *              what the others leave and wraps or truncates inside it, every
+ *              other cell has a fixed width — a progress bar included — and the
+ *              low-value columns fold away as the window narrows, so the status
+ *              and the row actions are never pushed off the right edge.
  * @feature training
  */
 
@@ -112,15 +117,40 @@ export function DatasetList({
   const robotLabel = (d: Dataset) =>
     d.robotType?.name ?? typeName.get(d.robotTypeId) ?? datasetShape(d).robotType ?? '—';
 
+  // What is on screen at each width, so that nothing has to scroll sideways
+  // (TASK-493). The content area is the window minus the 224 px sidebar and
+  // the page gutters; every column but the name has a fixed width:
+  //
+  //   < 640   name · status                                   (TASK-358)
+  //   640     + episodes, with the duration under the count
+  //   1280    + robot type, updated
+  //   1440    + duration as its own column
+  //   1536    + frames
   const columns: DataTableColumn<Dataset>[] = [
     {
       key: 'name',
       header: 'Name',
       sortable: true,
       sortValue: (d) => d.name.toLowerCase(),
+      // `width: 100%` makes this the column that absorbs the slack, `max-width: 0`
+      // lets it shrink below its text instead of widening the table.
+      className: 'sm:w-full sm:max-w-0',
       cell: (d) => <DatasetNameCell dataset={d} parent={parentOf(d)} />,
     },
-    { key: 'robot', header: 'Robot type', hideBelow: 'md', sortable: true, sortValue: robotLabel, cell: robotLabel },
+    {
+      key: 'robot',
+      header: 'Robot type',
+      hideBelow: 'xl',
+      sortable: true,
+      sortValue: robotLabel,
+      cell: (d) => (
+        // Two lines at most: an import-created name like
+        // "unitree_g1_dex3 (action 31, state 31)" took three and set the row height.
+        <span className="line-clamp-2 w-40 break-words min-[1440px]:w-44" title={robotLabel(d)}>
+          {robotLabel(d)}
+        </span>
+      ),
+    },
     {
       key: 'demonstrationCount',
       header: 'Episodes',
@@ -128,31 +158,49 @@ export function DatasetList({
       sortable: true,
       // Below `sm` the name and the status are what fits in 400 px (TASK-358).
       hideBelow: 'sm',
-      cell: (d) => formatCount(d.demonstrationCount),
+      cell: (d) => (
+        <>
+          {formatCount(d.demonstrationCount)}
+          {/* Until the window has room for a Duration column, it rides here. */}
+          <span className="block whitespace-nowrap text-xs text-ink-tertiary min-[1440px]:hidden" data-testid="dataset-duration-inline">
+            {formatDuration(d.totalDuration)}
+          </span>
+        </>
+      ),
     },
     {
       key: 'totalDuration',
       header: 'Duration',
       align: 'right',
       sortable: true,
-      hideBelow: 'sm',
-      cell: (d) => formatDuration(d.totalDuration),
+      hideBelow: 'wide',
+      cell: (d) => <span className="whitespace-nowrap">{formatDuration(d.totalDuration)}</span>,
     },
     {
       key: 'totalFrames',
       header: 'Frames',
       align: 'right',
       sortable: true,
-      hideBelow: 'lg',
+      hideBelow: '2xl',
       cell: (d) => formatCount(d.totalFrames),
     },
-    { key: 'status', header: 'Status', sortable: true, cell: (d) => <DatasetStatusCell dataset={d} /> },
+    {
+      key: 'status',
+      header: 'Status',
+      sortable: true,
+      // One width for every state, so a row that starts uploading moves nothing.
+      cell: (d) => (
+        <div className={STATUS_CELL} data-testid="dataset-status-cell">
+          <DatasetStatusCell dataset={d} />
+        </div>
+      ),
+    },
     {
       key: 'updatedAt',
       header: 'Updated',
       align: 'right',
       sortable: true,
-      hideBelow: 'md',
+      hideBelow: 'xl',
       sortValue: (d) => new Date(d.updatedAt),
       cell: (d) => <span className="whitespace-nowrap">{formatRelative(d.updatedAt)}</span>,
     },
@@ -228,6 +276,12 @@ export function DatasetList({
   );
 }
 
+/**
+ * The status cell's box: 7 rem on a phone (TASK-358), 9 rem from `sm` up — wide
+ * enough for "12% · 55.1 MB / 425 MB" under a bar, and the same for a bare tag.
+ */
+const STATUS_CELL = 'flex w-28 min-w-0 flex-col items-start gap-1.5 sm:w-36';
+
 /** Status tag; an import in flight shows its bar, a failed one says why on hover. */
 function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
   // A Hub import in flight is followed by the import tracker (the datasets
@@ -238,8 +292,9 @@ function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
     && (dataset.status === 'importing' || dataset.status === 'validating');
   if (hubImport) {
     return (
-      // Narrower on a phone: at 400 px a 11 rem bar pushed the table sideways (TASK-358).
-      <div className="flex w-28 max-w-full flex-col gap-1.5 sm:w-44">
+      // The bar is as wide as the cell, never wider: an 11 rem bar pushed the
+      // table sideways at 400 px (TASK-358) and the row actions off it at 1440 (TASK-493).
+      <div className="flex w-full min-w-0 flex-col gap-1.5">
         <StatusTag status={dataset.status} dot pulse />
         {job?.state === 'running'
           ? <ImportProgress job={job} compact />
@@ -260,7 +315,7 @@ function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
           ? `${percent}% · ${formatBytes(upload.sentBytes)} / ${formatBytes(upload.totalBytes)}`
           : upload.phase === 'validating' ? 'Validating' : 'Verifying the files';
     return (
-      <div className="flex w-28 max-w-full flex-col gap-1.5 sm:w-44" data-testid={`upload-progress-${dataset.id}`}>
+      <div className="flex w-full min-w-0 flex-col gap-1.5" data-testid={`upload-progress-${dataset.id}`}>
         <StatusTag status={dataset.status} dot pulse={upload.phase !== 'failed'} />
         <ProgressBar
           size="sm"
@@ -269,7 +324,7 @@ function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
           variant={upload.phase === 'failed' ? 'error' : 'default'}
           indeterminate={!sending && upload.phase !== 'failed'}
         />
-        <span className="truncate text-[11px] tabular-nums text-ink-tertiary" title={line}>{line}</span>
+        <span className="w-full truncate text-[11px] tabular-nums text-ink-tertiary" title={line}>{line}</span>
       </div>
     );
   }
@@ -286,7 +341,11 @@ function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
     const failure = describeImportFailure(err.error, err.phase);
     return (
       <Tooltip content={`Import failed during ${err.phase}: ${failure.detail}`}>
-        <span data-testid="dataset-import-error" className="inline-flex w-28 max-w-full flex-col items-start gap-1 sm:w-auto sm:max-w-[14rem]">
+        {/* The cell's width spelled out, not `w-full`: the tooltip wraps this in
+            shrink-to-fit spans, where a percentage resolves to the text's own
+            width — a long headline then ran over "Updated" and the row actions
+            and scrolled the table sideways. */}
+        <span data-testid="dataset-import-error" className="inline-flex w-28 min-w-0 flex-col items-start gap-1 sm:w-36">
           <StatusTag status="failed" dot />
           <span className="max-w-full truncate text-[11px] text-ink-tertiary">{failure.headline}</span>
         </span>

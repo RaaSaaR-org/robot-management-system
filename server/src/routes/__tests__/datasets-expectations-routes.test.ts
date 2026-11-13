@@ -22,6 +22,7 @@ const svc = vi.hoisted(() => {
     reassociateRobotType: vi.fn(),
     createRobotConfiguration: vi.fn(),
     deleteRobotConfiguration: vi.fn(),
+    renameRobotConfiguration: vi.fn(),
     requestValidation: vi.fn(),
     auditDatasetAction: vi.fn(),
   };
@@ -34,6 +35,7 @@ vi.mock('../../services/DatasetService.js', () => ({
     reassociateRobotType: svc.reassociateRobotType,
     createRobotConfiguration: svc.createRobotConfiguration,
     deleteRobotConfiguration: svc.deleteRobotConfiguration,
+    renameRobotConfiguration: svc.renameRobotConfiguration,
     requestValidation: svc.requestValidation,
     auditDatasetAction: svc.auditDatasetAction,
     on: vi.fn(),
@@ -153,6 +155,41 @@ describe('DELETE /api/datasets/robot-types/:id (TASK-485)', () => {
     expect((await request(createApp()).delete('/api/datasets/robot-types/rt-std')).body.code).toBe('ROBOT_TYPE_STANDARD');
     svc.deleteRobotConfiguration.mockRejectedValueOnce(new svc.DatasetExpectationError('gone', 404, 'ROBOT_TYPE_NOT_FOUND'));
     expect((await request(createApp()).delete('/api/datasets/robot-types/nope')).status).toBe(404);
+  });
+});
+
+describe('PATCH /api/datasets/robot-types/:id (TASK-493)', () => {
+  it('answers the renamed type', async () => {
+    svc.renameRobotConfiguration.mockResolvedValue({ id: 'rt-31', name: 'Unitree G1 upper body + Dex3-1 hands' });
+    const res = await request(createApp()).patch('/api/datasets/robot-types/rt-31')
+      .send({ name: 'Unitree G1 upper body + Dex3-1 hands' });
+    expect(res.status).toBe(200);
+    expect(res.body.robotType.name).toBe('Unitree G1 upper body + Dex3-1 hands');
+    expect(svc.renameRobotConfiguration).toHaveBeenCalledWith('rt-31', 'Unitree G1 upper body + Dex3-1 hands', null);
+  });
+
+  it('refuses a member: only an owner renames shared configuration', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      (req as unknown as { user: unknown }).user = { id: 'u1', role: 'member', authType: 'service' };
+      next();
+    });
+    app.use('/api/datasets', datasetRoutes);
+    const res = await request(app).patch('/api/datasets/robot-types/rt-31').send({ name: 'G1' });
+    expect(res.status).toBe(403);
+    expect(svc.renameRobotConfiguration).not.toHaveBeenCalled();
+  });
+
+  it('passes a taken name, a standard type and an unknown id through with their own status', async () => {
+    svc.renameRobotConfiguration.mockRejectedValueOnce(new svc.DatasetExpectationError('taken', 409, 'ROBOT_TYPE_EXISTS'));
+    const taken = await request(createApp()).patch('/api/datasets/robot-types/rt-31').send({ name: 'SO-101 Follower' });
+    expect(taken.status).toBe(409);
+    expect(taken.body).toEqual({ error: 'taken', code: 'ROBOT_TYPE_EXISTS' });
+    svc.renameRobotConfiguration.mockRejectedValueOnce(new svc.DatasetExpectationError('standard', 409, 'ROBOT_TYPE_STANDARD'));
+    expect((await request(createApp()).patch('/api/datasets/robot-types/rt-std').send({ name: 'x' })).body.code).toBe('ROBOT_TYPE_STANDARD');
+    svc.renameRobotConfiguration.mockRejectedValueOnce(new svc.DatasetExpectationError('gone', 404, 'ROBOT_TYPE_NOT_FOUND'));
+    expect((await request(createApp()).patch('/api/datasets/robot-types/nope').send({ name: 'x' })).status).toBe(404);
   });
 });
 

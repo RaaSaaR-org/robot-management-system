@@ -616,6 +616,26 @@ datasetRoutes.delete('/robot-types/:id', ownerOnly, async (req: Request, res: Re
 });
 
 // ============================================================================
+// PATCH /api/datasets/robot-types/:id - Rename a robot type (TASK-493)
+// ============================================================================
+//
+// Body `{ name }`. Owner-only, like defining and deleting one. Only the display
+// name changes — never `model` or the widths, which datasets are matched and
+// validated against. 409 `ROBOT_TYPE_EXISTS` when another type has the name,
+// 409 `ROBOT_TYPE_STANDARD` for a type the server seeds at start, 404
+// `ROBOT_TYPE_NOT_FOUND`. Robot types are platform-wide rows with no tenant of
+// their own, so there is nothing to scope beyond the owner role.
+datasetRoutes.patch('/robot-types/:id', ownerOnly, async (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const robotType = await datasetService.renameRobotConfiguration(req.params.id, body.name, actorOf(req));
+    res.json({ robotType });
+  } catch (error) {
+    sendExpectationError(res, error, 'Failed to rename robot type');
+  }
+});
+
+// ============================================================================
 // GET /api/datasets - List datasets with filters
 // ============================================================================
 

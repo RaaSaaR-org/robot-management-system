@@ -7,12 +7,16 @@
  *   Only robots whose pose is in the twin frame (`siteAligned`) are
  *   plotted — a pose in any other frame would sit in the wrong room. Bound but
  *   unaligned robots and robots with no site are listed beside the map instead.
+ *   An expected robot (no agent yet) has no pose at all: one whose
+ *   `metadata.plannedPlace` names a zone of the site is drawn in that zone as
+ *   a dashed outline marked "planned" and listed as not connected, so it is
+ *   never read as a live position (TASK-493).
  *   Imports the twin feature by path: its barrel pulls in three.js.
  * @feature fleet
  * @dependencies @/features/digitaltwin, @/features/robots, @/features/safety
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Map as MapIcon } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
@@ -32,7 +36,11 @@ import { useTwinStore, selectTwins } from '@/features/digitaltwin/store/twinStor
 import { twinZoneApi } from '@/features/digitaltwin/api/twinZoneApi';
 import type { DigitalTwinDTO, TwinZoneDTO } from '@/features/digitaltwin/types/twin.types';
 import { useRobots } from '@/features/robots/hooks/useRobots';
-import type { Robot } from '@/features/robots/types/robots.types';
+import {
+  ROBOT_PROVISIONING_LABELS,
+  robotProvisioning,
+  type Robot,
+} from '@/features/robots/types/robots.types';
 import { useSafetyStore } from '@/features/safety/store/safetyStore';
 
 /** Per-viewer memory of the last site shown (a convenience, never state). */
@@ -54,9 +62,19 @@ function writeLastSite(twinId: string): void {
   }
 }
 
+/** An expected robot and the zone of the site it is planned to stand in. */
+export interface PlannedRobot {
+  robot: Robot;
+  zone: TwinZoneDTO;
+}
+
 export interface SiteRobotGroups {
   /** Bound to the site and posed in its frame — drawn on the map */
   plotted: Robot[];
+  /** Expected, bound to the site, planned into one of its zones — drawn there as planned, never as live */
+  planned: PlannedRobot[];
+  /** Expected, bound to the site, no planned place — listed as not connected */
+  expected: Robot[];
   /** Bound to the site, pose in some other frame — listed, fence not enforcing */
   unaligned: Robot[];
   /** Bound to no site at all */
@@ -64,15 +82,52 @@ export interface SiteRobotGroups {
 }
 
 /** Split the fleet by what the site map may honestly do with each robot. */
-export function groupSiteRobots(robots: Robot[], twinId: string | null): SiteRobotGroups {
-  const groups: SiteRobotGroups = { plotted: [], unaligned: [], unbound: [] };
+export function groupSiteRobots(
+  robots: Robot[],
+  twinId: string | null,
+  zones: TwinZoneDTO[] = [],
+): SiteRobotGroups {
+  const groups: SiteRobotGroups = { plotted: [], planned: [], expected: [], unaligned: [], unbound: [] };
   for (const r of robots) {
     if (!r.twinId) groups.unbound.push(r);
     else if (r.twinId !== twinId) continue;
     else if (r.location?.siteAligned === true) groups.plotted.push(r);
-    else groups.unaligned.push(r);
+    else if (robotProvisioning(r)) {
+      // No agent, so no pose: "not aligned" would blame a frame that does not exist yet.
+      const place = r.metadata?.plannedPlace;
+      const zone =
+        typeof place === 'string' ? zones.find((z) => z.name === place && z.type !== 'keepout' && z.points.length > 0) : undefined;
+      if (zone) groups.planned.push({ robot: r, zone });
+      else groups.expected.push(r);
+    } else groups.unaligned.push(r);
   }
   return groups;
+}
+
+/** Rows of planned markers in one zone are this far apart, in viewBox px. */
+const PLANNED_ROW_GAP = 18;
+
+/**
+ * Where to write each planned robot's label, in viewBox px: over its zone's
+ * name (drawn at the centroid), one row per robot of that zone going up, so
+ * two robots planned into the same zone do not sit on top of each other or on
+ * the name. `at` is the label's centre; the marker sits at its left end.
+ */
+export function plannedMarkerPositions(
+  planned: PlannedRobot[],
+  worldToScreen: (p: { x: number; y: number }) => { x: number; y: number },
+): Array<PlannedRobot & { at: { x: number; y: number } }> {
+  const rowOf = new Map<string, number>();
+  return planned.map((entry) => {
+    const { points } = entry.zone;
+    const centroid = worldToScreen({
+      x: points.reduce((a, p) => a + p.x, 0) / points.length,
+      y: points.reduce((a, p) => a + p.y, 0) / points.length,
+    });
+    const row = rowOf.get(entry.zone.id) ?? 0;
+    rowOf.set(entry.zone.id, row + 1);
+    return { ...entry, at: { x: centroid.x, y: centroid.y - 16 - row * PLANNED_ROW_GAP } };
+  });
 }
 
 /**
@@ -83,6 +138,28 @@ export function groupSiteRobots(robots: Robot[], twinId: string | null): SiteRob
  */
 export function sitePoseOf(robot: Robot): { x: number; y: number; heading?: number } {
   return robot.location.sitePose ?? { x: robot.location.x, y: robot.location.y, heading: robot.location.heading };
+}
+
+/**
+ * Width / height of an element, kept current as it resizes; undefined until it
+ * is measured, and where there is no ResizeObserver. A callback ref, because
+ * the map is not in the first render (the site list loads first).
+ */
+function useAspect(): [(el: HTMLElement | null) => void, number | undefined] {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  const [aspect, setAspect] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const measure = () => {
+      const { clientWidth: w, clientHeight: h } = el;
+      setAspect(w > 0 && h > 0 ? w / h : undefined);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [el]);
+  return [setEl, aspect];
 }
 
 export interface SiteMapProps {
@@ -99,6 +176,7 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
   const { robots, fetchRobots } = useRobots();
   const triggerZoneEStop = useSafetyStore((s) => s.triggerZoneEStop);
 
+  const [mapRef, mapAspect] = useAspect();
   const [pickedId, setPickedId] = useState<string | null>(readLastSite);
   const [zones, setZones] = useState<TwinZoneDTO[]>([]);
   const [fetched, setFetched] = useState(false);
@@ -132,7 +210,7 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
     writeLastSite(id);
   }, []);
 
-  const groups = useMemo(() => groupSiteRobots(robots, siteId), [robots, siteId]);
+  const groups = useMemo(() => groupSiteRobots(robots, siteId, zones), [robots, siteId, zones]);
 
   const stopZone = useCallback(
     async (zone: TwinZoneDTO) => {
@@ -199,20 +277,32 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
         {!compact && <ZoneLegend />}
       </div>
       <div className={cn('grid grid-cols-1 gap-4', !compact && 'lg:grid-cols-[1fr_16rem]')}>
-        <div className={cn('overflow-hidden rounded-control border border-line', compact ? 'h-64' : 'h-[28rem]')}>
+        <div
+          ref={mapRef}
+          className={cn('overflow-hidden rounded-control border border-line', compact ? 'h-64' : 'h-[28rem]')}
+        >
           <TwinTopDown
             twin={site}
             zones={zones}
+            fitZones
+            viewAspect={mapAspect}
             onZoneClick={(z) => void stopZone(z)}
             zoneLabel={(z) => `Stop zone ${z.name} (${ZONE_TYPE_LABELS[z.type] ?? z.type})`}
             aria-label={`Site map of ${site.name}`}
           >
             {(t) => (
-              <g data-testid="site-map-robots">
-                {groups.plotted.map((r) => (
-                  <RobotDot key={r.id} robot={r} at={t.worldToScreen(sitePoseOf(r))} />
-                ))}
-              </g>
+              <>
+                <g data-testid="site-map-planned-robots">
+                  {plannedMarkerPositions(groups.planned, t.worldToScreen).map(({ robot, zone, at }) => (
+                    <PlannedMarker key={robot.id} robot={robot} zoneName={zone.name} at={at} />
+                  ))}
+                </g>
+                <g data-testid="site-map-robots">
+                  {groups.plotted.map((r) => (
+                    <RobotDot key={r.id} robot={r} at={t.worldToScreen(sitePoseOf(r))} />
+                  ))}
+                </g>
+              </>
             )}
           </TwinTopDown>
         </div>
@@ -251,21 +341,94 @@ function RobotDot({ robot, at }: { robot: Robot; at: { x: number; y: number } })
   );
 }
 
-/** The robots the map cannot honestly draw, and why. */
-function SiteRobotList({ groups, compact }: { groups: SiteRobotGroups; compact: boolean }) {
-  const { plotted, unaligned, unbound } = groups;
-  if (compact && unaligned.length === 0 && unbound.length === 0) return null;
+/**
+ * An expected robot at its planned place: a dashed, hollow ring in the muted
+ * ink — nothing of the solid, primary-coloured dot a live robot gets — and the
+ * word "planned" in its label.
+ */
+function PlannedMarker({ robot, zoneName, at }: { robot: Robot; zoneName: string; at: { x: number; y: number } }) {
+  const ink = useCssColor('--color-ink-primary', 'gray');
+  const halo = useCssColor('--color-canvas', 'white');
+  const state = robotProvisioning(robot)?.state ?? 'awaiting_agent';
+  const label = `${robot.name} (planned)`;
+  // Centre ring + label on `at`: about 6 px a character at this size.
+  const left = at.x - (label.length * 6 + 16) / 2;
   return (
-    <div className="flex flex-col gap-4 text-[13px]" aria-label="Robots not on the map">
+    <g data-testid={`site-map-planned-${robot.id}`} pointerEvents="none">
+      <title>{`${robot.name} — planned position in ${zoneName}. ${ROBOT_PROVISIONING_LABELS[state]}, not a live position.`}</title>
+      <circle cx={left + 6} cy={at.y - 4} r={5.5} fill={halo} fillOpacity={0.6} stroke={ink} strokeWidth={1.5} strokeDasharray="3,2.5" />
+      {/* The halo keeps the label readable where it runs over a zone edge. */}
+      <text
+        x={left + 16}
+        y={at.y}
+        fontSize={12}
+        fill={ink}
+        stroke={halo}
+        strokeWidth={3}
+        strokeOpacity={0.75}
+        paintOrder="stroke"
+        strokeLinejoin="round"
+      >
+        {label}
+      </text>
+    </g>
+  );
+}
+
+/** The dashed ring of {@link PlannedMarker}, as the key beside the list heading. */
+function PlannedGlyph() {
+  return (
+    <svg viewBox="0 0 12 12" className="h-3 w-3 shrink-0 text-ink-secondary" aria-hidden="true">
+      <circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3,2.5" />
+    </svg>
+  );
+}
+
+/** Why an unaligned robot is listed and not drawn — the tag's hover text where the tag is shortened. */
+const UNALIGNED_REASON = 'Its pose is not in this site\u2019s frame, so it is not drawn and the site\u2019s fences do not hold it.';
+
+function provisioningNote(robot: Robot): string {
+  return ROBOT_PROVISIONING_LABELS[robotProvisioning(robot)?.state ?? 'awaiting_agent'].toLowerCase();
+}
+
+/** The robots the map does not draw as live, and why. */
+function SiteRobotList({ groups, compact }: { groups: SiteRobotGroups; compact: boolean }) {
+  const { plotted, planned, expected, unaligned, unbound } = groups;
+  if (compact && planned.length + expected.length + unaligned.length + unbound.length === 0) return null;
+  const plannedZone = new Map(planned.map((p) => [p.robot.id, p.zone.name]));
+  return (
+    <div className="flex flex-col gap-4 text-[13px]" aria-label="Robots not live on the map">
       {!compact && (
-        <p className="text-ink-tertiary">
-          {plotted.length} robot{plotted.length === 1 ? '' : 's'} on the map.
+        <p className="text-ink-tertiary" data-testid="site-map-count">
+          {plotted.length} robot{plotted.length === 1 ? '' : 's'} live on the map.
+          {planned.length > 0 &&
+            ` ${planned.length} expected robot${planned.length === 1 ? ' is' : 's are'} drawn where ${planned.length === 1 ? 'it is' : 'they are'} planned to stand.`}
         </p>
       )}
       <RobotGroup
+        title="Planned position"
+        glyph={<PlannedGlyph />}
+        robots={planned.map((p) => p.robot)}
+        note={provisioningNote}
+        detail={(r) => `planned in ${plannedZone.get(r.id)}`}
+        tone="neutral"
+        testId="site-map-planned"
+        compact={compact}
+      />
+      <RobotGroup
+        title="Not connected"
+        robots={expected}
+        note={provisioningNote}
+        tone="neutral"
+        testId="site-map-expected"
+        compact={compact}
+      />
+      <RobotGroup
         title="Not aligned"
         robots={unaligned}
-        note="not aligned — fence not enforcing"
+        // Under the dashboard's map a row is half the panel wide: the long tag left "Sim…" of the name.
+        note={compact ? 'not aligned' : 'not aligned — fence not enforcing'}
+        noteTitle={UNALIGNED_REASON}
         tone="warning"
         testId="site-map-unaligned"
         compact={compact}
@@ -289,21 +452,33 @@ function RobotGroup({
   tone,
   testId,
   compact,
+  glyph,
+  detail,
+  noteTitle,
 }: {
   title: string;
   robots: Robot[];
-  note: string;
+  /** The tag beside each robot: one reason for the group, or one per robot */
+  note: string | ((robot: Robot) => string);
   tone: 'warning' | 'neutral';
   testId: string;
+  /** The map marker this group is the key for */
+  glyph?: ReactNode;
+  /** A second, quieter line per robot (where it is planned) */
+  detail?: (robot: Robot) => string;
+  /** Hover text of the tag */
+  noteTitle?: string;
   /** Under the dashboard's map the list has the panel's width: one line a robot, in columns */
   compact: boolean;
 }) {
   if (robots.length === 0) return null;
+  const noteOf = (r: Robot) => (typeof note === 'function' ? note(r) : note);
   return (
     <section data-testid={testId} className="flex flex-col gap-2">
-      <h3 className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">
+      <h3 className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-ink-tertiary">
+        {glyph}
         {title}
-        <span className="ml-1.5 tabular-nums text-ink-muted">{robots.length}</span>
+        <span className="tabular-nums text-ink-muted">{robots.length}</span>
       </h3>
       <ul className={cn(compact ? 'grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2' : 'flex flex-col gap-2')}>
         {robots.map((r) => (
@@ -314,12 +489,23 @@ function RobotGroup({
               compact ? 'items-center justify-between gap-3' : 'flex-col items-start gap-1',
             )}
           >
-            <Link to={`/robots/${r.id}`} className="min-w-0 max-w-full truncate text-ink-primary hover:underline">
-              {r.name}
-            </Link>
-            <StatusTag tone={tone} size="sm" className="shrink-0">
-              {note}
-            </StatusTag>
+            <span className="flex min-w-0 max-w-full flex-col">
+              <Link to={`/robots/${r.id}`} className="min-w-0 max-w-full truncate text-ink-primary hover:underline">
+                {r.name}
+              </Link>
+              {detail && (
+                <span className="truncate text-xs text-ink-tertiary">
+                  {detail(r)}
+                  {/* One line a robot under the dashboard's map: the state rides on the detail line. */}
+                  {compact && ` · ${noteOf(r)}`}
+                </span>
+              )}
+            </span>
+            {!(compact && detail) && (
+              <StatusTag tone={tone} size="sm" className="shrink-0" title={noteTitle}>
+                {noteOf(r)}
+              </StatusTag>
+            )}
           </li>
         ))}
       </ul>
