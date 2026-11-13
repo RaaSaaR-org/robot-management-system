@@ -136,8 +136,6 @@ export class UploadRefusal extends Error {
   }
 }
 
-export const isAborted = (error: unknown): boolean => error instanceof UploadRefusal && error.code === 'ABORTED';
-
 function parseRetryAfter(value: unknown): number | null {
   if (typeof value !== 'string' || value.trim() === '') return null;
   const seconds = Number(value);

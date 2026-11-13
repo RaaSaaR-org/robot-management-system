@@ -14,7 +14,7 @@
 
 import { createStore } from '@/store';
 import { toast } from '@/shared/components/ui/toast';
-import { datasetUploadApi, isAborted, UploadRefusal } from '../api/datasetUploadApi';
+import { datasetUploadApi, UploadRefusal } from '../api/datasetUploadApi';
 import { trainingApi } from '../api/trainingApi';
 import type { FolderInspection } from '../upload/lerobotFolder';
 import {
@@ -171,11 +171,21 @@ interface Session {
   ticker: ReturnType<typeof setInterval> | null;
   /** Bumped whenever the job is replaced, so a stale loop stops writing */
   generation: number;
+  /** The generation whose verdict is already being followed — one poll loop, not two */
+  verdictGeneration: number;
 }
 
 const session: Session = {
-  local: new Map(), abort: new AbortController(), progress: null, samples: [], ticker: null, generation: 0,
+  local: new Map(), abort: new AbortController(), progress: null, samples: [], ticker: null, generation: 0, verdictGeneration: -1,
 };
+
+/**
+ * The dataset no longer exists on the server: deleted from its row (here, in
+ * another tab or by someone else) or removed by the idle timeout. There is
+ * nothing left to resume or to cancel.
+ */
+export const isDatasetGone = (error: unknown): boolean =>
+  error instanceof UploadRefusal && error.status === 404 && (error.code === 'NOT_FOUND' || error.code === 'NO_UPLOAD');
 
 const warnBeforeUnload = (event: BeforeUnloadEvent) => {
   event.preventDefault();
@@ -274,8 +284,27 @@ export const useDatasetUploadStore = createStore<DatasetUploadStore>(
       }
     };
 
+    /** The dataset was deleted under the upload: the upload is over, and that is not a failure. */
+    const endAsGone = async (datasetId: string, name: string): Promise<void> => {
+      session.generation += 1;
+      stopTicker();
+      session.abort.abort();
+      session.local = new Map();
+      session.progress = null;
+      guardUnload(false);
+      set((state) => { state.job = null; state.dialogOpen = false; });
+      await removeDatasetRow(datasetId);
+      toast.info('Upload ended', {
+        id: uploadToastId(datasetId),
+        description: `${name} was deleted on the server, so its upload stopped. Nothing of it is kept.`,
+      });
+    };
+
     /** Follow the dataset from "finish accepted" to ready or failed. */
     const awaitVerdict = async (datasetId: string, name: string, generation: number): Promise<void> => {
+      // Finish and a late cancel can both hand over to the verdict.
+      if (session.verdictGeneration === generation) return;
+      session.verdictGeneration = generation;
       for (;;) {
         if (session.generation !== generation) return;
         let outcome: { ok: boolean; reason?: string } | null = null;
@@ -339,8 +368,10 @@ export const useDatasetUploadStore = createStore<DatasetUploadStore>(
         });
       } catch (error) {
         if (session.generation !== generation) return;
-        // Stopped by cancel: that path reports for itself.
-        if (isAborted(error) && get().job?.phase === 'cancelling') return;
+        // Cancel is under way: that path reports for itself, whatever the
+        // requests it interrupted (a part, or a finish the cancel overtook) answer.
+        if (get().job?.phase === 'cancelling') return;
+        if (isDatasetGone(error)) { await endAsGone(datasetId, name); return; }
         fail(error);
         return;
       }
@@ -454,6 +485,7 @@ export const useDatasetUploadStore = createStore<DatasetUploadStore>(
           chunkSize = status.chunkSize;
           files = planFiles(status.files, session.local);
         } catch (error) {
+          if (isDatasetGone(error)) { await endAsGone(datasetId, name); return; }
           fail(error);
           return;
         }
@@ -525,6 +557,7 @@ export const isSending = (job: UploadJob | null): boolean =>
 /** For tests: forget the running upload without telling the server. */
 export function resetDatasetUploadStore(): void {
   session.generation += 1;
+  session.verdictGeneration = -1;
   session.abort.abort();
   if (session.ticker) clearInterval(session.ticker);
   session.ticker = null;

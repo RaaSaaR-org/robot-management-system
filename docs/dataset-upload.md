@@ -443,7 +443,10 @@ uses RustFS.
   browser asks before the tab is left. "Cancel upload" calls
   [cancel](#5-cancel). A tab that is closed anyway leaves the upload on the
   server until its row is deleted or the idle timeout removes it — the file
-  handles do not survive a reload, so the browser cannot resume it.
+  handles do not survive a reload, so the browser cannot resume it. Deleting
+  the dataset from its row while this tab uploads it ends the upload too — the
+  parts are answered `404 NOT_FOUND`, which the dialog reads as "gone", not as
+  a failure to retry.
 - **After finish** the dialog closes and the dataset's row shows the server
   verifying and validating, then `ready`.
 

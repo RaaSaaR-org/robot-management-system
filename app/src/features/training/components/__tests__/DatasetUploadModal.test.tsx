@@ -346,4 +346,79 @@ describe('DatasetUploadModal', () => {
     await waitFor(() => expect(useDatasetUploadStore.getState().job).toBeNull());
     expect(screen.queryByTestId('dataset-upload-modal')).not.toBeInTheDocument();
   });
+
+  it('ends without an error when the dataset is deleted under the upload', async () => {
+    // Deleted from its row while parts were going up: the server no longer knows it.
+    api.sendPart.mockRejectedValue(new UploadRefusal({ status: 404, code: 'NOT_FOUND', message: 'Dataset not found' }));
+    useTrainingStore.setState({ datasets: [{ id: 'ds1', name: 'bottles' } as never] });
+    open();
+    await pick(DATASET());
+    fireEvent.click(screen.getByTestId('upload-start'));
+
+    await waitFor(() => expect(api.sendPart).toHaveBeenCalled());
+    await waitFor(() => expect(useDatasetUploadStore.getState().job).toBeNull());
+    // Nothing to try again and nothing to cancel: no stopped upload is left behind.
+    expect(screen.queryByTestId('upload-error')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dataset-upload-modal')).not.toBeInTheDocument();
+    expect(useTrainingStore.getState().datasets).toEqual([]);
+    expect(api.cancel).not.toHaveBeenCalled();
+    expect(api.finish).not.toHaveBeenCalled();
+  });
+
+  it('ends a stopped upload whose dataset is gone when it is tried again', async () => {
+    api.sendPart.mockRejectedValue(new UploadRefusal({ status: 400, code: 'PART_SIZE_MISMATCH', message: 'Wrong size.' }));
+    open();
+    await pick(DATASET());
+    fireEvent.click(screen.getByTestId('upload-start'));
+    await screen.findByTestId('upload-error');
+
+    api.status.mockRejectedValue(new UploadRefusal({ status: 404, code: 'NOT_FOUND', message: 'Dataset not found' }));
+    fireEvent.click(screen.getByTestId('upload-resume'));
+    await waitFor(() => expect(useDatasetUploadStore.getState().job).toBeNull());
+    expect(screen.queryByTestId('dataset-upload-modal')).not.toBeInTheDocument();
+  });
+
+  it('does not report a failure for a finish that a cancel overtook', async () => {
+    let refuseFinish: (error: unknown) => void = () => {};
+    api.finish.mockImplementation(() => new Promise((_resolve, reject) => { refuseFinish = reject; }));
+    let answerCancel: (value: unknown) => void = () => {};
+    api.cancel.mockImplementation(() => new Promise((resolve) => { answerCancel = resolve; }));
+    open();
+    await pick(DATASET());
+    fireEvent.click(screen.getByTestId('upload-start'));
+    await waitFor(() => expect(useDatasetUploadStore.getState().job?.phase).toBe('finishing'));
+
+    fireEvent.click(screen.getByTestId('upload-cancel'));
+    await waitFor(() => expect(api.cancel).toHaveBeenCalledWith('ds1'));
+    // The server cancelled first; the finish that was on its way is refused.
+    await act(async () => {
+      refuseFinish(new UploadRefusal({ status: 409, code: 'UPLOAD_NOT_ACCEPTING', message: 'The upload was cancelled.' }));
+      await Promise.resolve();
+    });
+    expect(useDatasetUploadStore.getState().job?.phase).toBe('cancelling');
+    expect(screen.queryByTestId('upload-error')).not.toBeInTheDocument();
+
+    await act(async () => { answerCancel({ datasetId: 'ds1', status: 'cancelled' }); });
+    await waitFor(() => expect(useDatasetUploadStore.getState().job).toBeNull());
+  });
+
+  it('follows the verdict once when finish was accepted before a cancel arrived', async () => {
+    let acceptFinish: (value: unknown) => void = () => {};
+    api.finish.mockImplementation(() => new Promise((resolve) => { acceptFinish = resolve; }));
+    api.cancel.mockRejectedValue(new UploadRefusal({ status: 409, code: 'UPLOAD_PROCESSING', message: 'Finish was accepted.' }));
+    api.status.mockResolvedValue({ datasetId: 'ds1', state: 'processing', status: 'uploading', files: [], importError: null });
+    open();
+    await pick(DATASET());
+    fireEvent.click(screen.getByTestId('upload-start'));
+    await waitFor(() => expect(useDatasetUploadStore.getState().job?.phase).toBe('finishing'));
+
+    fireEvent.click(screen.getByTestId('upload-cancel'));
+    await waitFor(() => expect(useDatasetUploadStore.getState().job?.phase).toBe('processing'));
+    await act(async () => { acceptFinish({ datasetId: 'ds1', state: 'processing', status: 'uploading' }); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+
+    // One poll loop: the cancel's hand-over and the finish's are the same upload.
+    expect(api.status).toHaveBeenCalledTimes(1);
+    expect(useDatasetUploadStore.getState().job?.phase).toBe('processing');
+  });
 });
