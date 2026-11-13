@@ -19,6 +19,9 @@
 import type { EpisodeMeta, EpisodeVideoWindow, FrameData } from '../../types/dataset.types.js';
 import { bufferSource, readParquetRows, type ByteSource, type ReadRowsOptions } from './parquetEpisodeRows.js';
 import { ReadCache } from './ReadCache.js';
+import { episodeDataPath, formatPathTemplate } from './episodePaths.js';
+
+export { formatPathTemplate };
 
 /** Object access scoped to one dataset's root; every path is relative to it. */
 export interface DatasetObjectStore {
@@ -62,8 +65,6 @@ export interface LeRobotInfo {
 
 export type LeRobotLayout = 'v2' | 'v3';
 
-const DEFAULT_CHUNKS_SIZE = 1000;
-const V2_DATA_PATH = 'data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet';
 const V3_DATA_PATH = 'data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet';
 const PARQUET_FILE_RE = /\/chunk-\d+\/file-\d+\.parquet$/;
 
@@ -82,18 +83,6 @@ export function layoutOf(info: LeRobotInfo | null | undefined, recordVersion?: s
       ? `Unsupported LeRobot version "${version}" — only v2.x and v3.x datasets can be browsed`
       : 'The dataset has no LeRobot codebase_version in meta/info.json, so its layout is unknown',
   );
-}
-
-/**
- * Expand a LeRobot path template such as
- * `data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet`.
- */
-export function formatPathTemplate(template: string, vars: Record<string, number>): string {
-  return template.replace(/\{(\w+)(?::0?(\d+)d)?\}/g, (whole, name: string, width?: string) => {
-    if (!(name in vars)) return whole;
-    const value = String(vars[name]);
-    return width ? value.padStart(Number(width), '0') : value;
-  });
 }
 
 /**
@@ -325,11 +314,7 @@ async function readV2Frames(
   if (totalEpisodes !== undefined && episodeIndex >= totalEpisodes) {
     throw notFound(episodeIndex, `the dataset has ${totalEpisodes} episodes`);
   }
-  const chunksSize = Number(info?.chunks_size) > 0 ? Number(info?.chunks_size) : DEFAULT_CHUNKS_SIZE;
-  const path = formatPathTemplate(info?.data_path ?? V2_DATA_PATH, {
-    episode_chunk: Math.floor(episodeIndex / chunksSize),
-    episode_index: episodeIndex,
-  });
+  const path = episodeDataPath(info, episodeIndex);
   const rows = await readParquet(store, path, { columns: FRAME_COLUMNS });
   if (!rows) {
     if (totalEpisodes === undefined) throw notFound(episodeIndex, `${path} does not exist`);

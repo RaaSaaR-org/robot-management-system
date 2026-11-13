@@ -61,9 +61,44 @@ def _load_info(root: Path) -> dict:
     return json.loads((root / "meta" / "info.json").read_text())
 
 
-def _episode_parquet(root: Path, info: dict, episode_index: int) -> Path:
-    rel = info["data_path"].format(episode_chunk=0, episode_index=episode_index)
-    return root / rel
+DEFAULT_CHUNKS_SIZE = 1000
+
+
+def _chunks_size(info: dict) -> int:
+    """Episodes per chunk directory: ``info.chunks_size``, 1000 when absent or unusable."""
+    try:
+        size = int(info.get("chunks_size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    return size if size > 0 else DEFAULT_CHUNKS_SIZE
+
+
+def _episode_chunk(info: dict, episode_index: int) -> int:
+    """LeRobot v2.1 keeps episode N in chunk ``N // chunks_size``, not always chunk 0."""
+    return episode_index // _chunks_size(info)
+
+
+def _existing_or_legacy(path: Path, legacy: Path) -> Path:
+    """``path``, unless only ``legacy`` exists.
+
+    The v3.0 converter once wrote every episode to chunk-000 whatever
+    ``chunks_size`` it declared; such a tree may still be on disk, and reading
+    it beats refusing it.
+    """
+    if not path.exists() and legacy.exists():
+        return legacy
+    return path
+
+
+def _episode_parquet(root: Path, info: dict, episode_index: int, *, existing: bool = False) -> Path:
+    """Where an episode's parquet is (``existing=True``: where to read it from)."""
+    template = info["data_path"]
+    path = root / template.format(
+        episode_chunk=_episode_chunk(info, episode_index), episode_index=episode_index)
+    if existing:
+        return _existing_or_legacy(
+            path, root / template.format(episode_chunk=0, episode_index=episode_index))
+    return path
 
 
 def _video_keys(info: dict) -> list[str]:
@@ -72,12 +107,21 @@ def _video_keys(info: dict) -> list[str]:
     return sorted(k for k, f in feats.items() if isinstance(f, dict) and f.get("dtype") == "video")
 
 
-def _video_path(root: Path, info: dict, video_key: str, episode_index: int) -> Path | None:
+def _video_path(
+    root: Path, info: dict, video_key: str, episode_index: int, *, existing: bool = False,
+) -> Path | None:
+    """Where an episode's camera video is (``existing=True``: where to read it from)."""
     template = info.get("video_path")
     if not template:
         return None
-    rel = template.format(episode_chunk=0, video_key=video_key, episode_index=episode_index)
-    return root / rel
+    path = root / template.format(
+        episode_chunk=_episode_chunk(info, episode_index),
+        video_key=video_key, episode_index=episode_index)
+    if existing:
+        return _existing_or_legacy(
+            path,
+            root / template.format(episode_chunk=0, video_key=video_key, episode_index=episode_index))
+    return path
 
 
 def _find_ffmpeg() -> str | None:
@@ -125,7 +169,7 @@ def _copy_video(src: Path, dst: Path) -> None:
 # Stats recompute (v2.1)
 # ---------------------------------------------------------------------------
 
-def _compute_stats(dst: Path) -> dict:
+def _compute_stats(files: list[Path]) -> dict:
     """Recompute per-feature min/max/mean/std from the output parquet files.
 
     Mirrors the LeRobot ``meta/stats.json`` shape (per-dimension arrays for
@@ -137,7 +181,6 @@ def _compute_stats(dst: Path) -> dict:
     import numpy as np
 
     acc: dict[str, dict] = {}
-    files = sorted((dst / "data" / "chunk-000").glob("episode_*.parquet"))
     for f in files:
         table = pq.read_table(f)
         for name in table.column_names:
@@ -196,7 +239,6 @@ def _rebuild(src: Path, dst: Path, plan: list[dict], note: str, recompute_stats:
     fps = info["fps"]
     if dst.exists():
         shutil.rmtree(dst)
-    (dst / "data" / "chunk-000").mkdir(parents=True, exist_ok=True)
     (dst / "meta").mkdir(parents=True, exist_ok=True)
 
     video_keys = _video_keys(info)
@@ -221,12 +263,13 @@ def _rebuild(src: Path, dst: Path, plan: list[dict], note: str, recompute_stats:
 
     global_index = 0
     new_episodes_meta = []
+    written: list[Path] = []  # output parquet files, in episode order
     total_frames = 0
     total_videos = 0
 
     for new_ep, step in enumerate(plan):
         old_ep = step["episode"]
-        table = pq.read_table(_episode_parquet(src, info, old_ep))
+        table = pq.read_table(_episode_parquet(src, info, old_ep, existing=True))
         n = table.num_rows
         start = step.get("start", 0)
         end = step.get("end", n)
@@ -249,12 +292,18 @@ def _rebuild(src: Path, dst: Path, plan: list[dict], note: str, recompute_stats:
         if "timestamp" in cols:
             cols["timestamp"] = timestamp
         new_table = pa.table(cols)
-        pq.write_table(new_table, dst / "data" / "chunk-000" / f"episode_{new_ep:06d}.parquet")
+        # The output keeps the source's `chunks_size`, so each renumbered
+        # episode goes to the chunk that size puts it in — a reader of the
+        # result looks nowhere else.
+        dst_parquet = _episode_parquet(dst, info, new_ep)
+        dst_parquet.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(new_table, dst_parquet)
+        written.append(dst_parquet)
 
         # Copy / renumber / re-cut this episode's camera videos for every key.
         is_partial = start > 0 or end < n
         for key in video_keys:
-            src_vid = _video_path(src, info, key, old_ep)
+            src_vid = _video_path(src, info, key, old_ep, existing=True)
             if src_vid is None or not src_vid.exists():
                 continue
             dst_vid = _video_path(dst, info, key, new_ep)
@@ -286,7 +335,7 @@ def _rebuild(src: Path, dst: Path, plan: list[dict], note: str, recompute_stats:
     # write meta
     stats_recompute_required = True
     if recompute_stats:
-        stats = _compute_stats(dst)
+        stats = _compute_stats(written)
         # Video/image feature stats live in mp4s and are not recomputable from
         # parquet — carry them over from the source stats.json so the revision
         # doesn't silently lose them (image normalization needs mean/std).
@@ -305,7 +354,7 @@ def _rebuild(src: Path, dst: Path, plan: list[dict], note: str, recompute_stats:
     new_info = dict(info)
     new_info["total_episodes"] = len(plan)
     new_info["total_frames"] = total_frames
-    new_info["total_chunks"] = 1
+    new_info["total_chunks"] = _episode_chunk(info, len(plan) - 1) + 1
     new_info["total_videos"] = total_videos
     new_info["splits"] = {"train": f"0:{len(plan)}"}
     new_info["_curation"] = {"note": note, "stats_recompute_required": stats_recompute_required}
@@ -468,7 +517,7 @@ def cmd_suggest(args) -> dict:
     suggestions: list[dict] = []
 
     for ep in episodes:
-        table = pq.read_table(_episode_parquet(src, info, ep))
+        table = pq.read_table(_episode_parquet(src, info, ep, existing=True))
         col = "action" if "action" in table.column_names else "observation.state"
         if col not in table.column_names:
             continue

@@ -52,6 +52,12 @@ import {
   toNumberArray,
   type DatasetObjectStore,
 } from '../services/lerobot/RemoteDatasetReader.js';
+import {
+  episodeChunkOf,
+  episodeDataCandidates,
+  episodeVideoCandidates,
+  type EpisodePathInfo,
+} from '../services/lerobot/episodePaths.js';
 // TASK-220 — POST /compatibility, at the bottom of this file.
 import { analyzeDatasetIds, UnknownDatasetError } from '../services/lerobot/datasetCompatibility.js';
 import { ConflictError, ServiceUnavailableError } from '../utils/errors.js';
@@ -86,10 +92,6 @@ function isLocalDataset(storagePath: string): boolean {
   // POSIX ('/…') or Windows ('C:\…' / 'C:/…') absolute path; RustFS datasets
   // use relative object-key prefixes (`<id>/`) and never match.
   return (isAbsolute(storagePath) || storagePath.startsWith('/')) && existsSync(storagePath);
-}
-
-function padEpisode(index: number): string {
-  return String(index).padStart(6, '0');
 }
 
 /**
@@ -223,6 +225,37 @@ async function readLocalEpisodes(storagePath: string, fps: number): Promise<Epis
   return null;
 }
 
+/**
+ * `meta/info.json` of the directory a local dataset is served from. Read from
+ * disk rather than taken from the dataset record: a v3.0 dataset is served
+ * from its converted v2.1 view, whose templates and `chunks_size` are the
+ * view's own. Null when the file is missing or unreadable — the path helpers
+ * then fall back to the LeRobot defaults.
+ */
+async function readLocalInfo(storagePath: string): Promise<EpisodePathInfo | null> {
+  try {
+    const parsed = JSON.parse(await readFile(join(storagePath, 'meta', 'info.json'), 'utf8')) as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as EpisodePathInfo) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The first of `candidates` (paths relative to the dataset directory) that
+ * exists on disk, as an absolute path. A candidate that would resolve outside
+ * the dataset directory is skipped, never opened.
+ */
+function firstExistingFile(storagePath: string, candidates: string[]): string | null {
+  const baseDir = resolve(storagePath);
+  for (const candidate of candidates) {
+    const file = resolve(baseDir, candidate);
+    if (!file.startsWith(baseDir + sep)) continue;
+    if (existsSync(file)) return file;
+  }
+  return null;
+}
+
 async function readLocalFrames(
   storagePath: string,
   episodeIndex: number,
@@ -230,8 +263,10 @@ async function readLocalFrames(
   offset: number,
   limit: number,
 ): Promise<{ frames: FrameData[]; total: number } | null> {
-  const file = join(storagePath, 'data', 'chunk-000', `episode_${padEpisode(episodeIndex)}.parquet`);
-  if (!existsSync(file)) return null;
+  // Episode N lives in chunk floor(N / chunks_size), not always chunk-000 (TASK-479).
+  const info = await readLocalInfo(storagePath);
+  const file = firstExistingFile(storagePath, episodeDataCandidates(info, episodeIndex));
+  if (!file) return null;
   try {
     const { ParquetReader } = await import('@dsnp/parquetjs');
     const reader = await ParquetReader.openFile(file);
@@ -273,20 +308,11 @@ async function streamLocalVideo(
     res.status(400).json({ error: 'Invalid camera key' });
     return true;
   }
-  const baseDir = resolve(storagePath);
-  const episodeFile = `episode_${padEpisode(episodeIndex)}.mp4`;
-  // Cosmos-converter layout: videos/<camera>/chunk-000/episode.mp4;
-  // standard LeRobot v2.1 layout: videos/chunk-000/<camera>/episode.mp4.
-  const candidates = [
-    resolve(baseDir, 'videos', featureKey, 'chunk-000', episodeFile),
-    resolve(baseDir, 'videos', 'chunk-000', featureKey, episodeFile),
-  ];
-  // Defense in depth: the resolved file must stay within the dataset dir.
-  if (candidates.some((f) => f !== baseDir && !f.startsWith(baseDir + sep))) {
-    res.status(400).json({ error: 'Invalid path' });
-    return true;
-  }
-  const file = candidates.find((f) => existsSync(f));
+  // The mp4 sits in the episode's chunk directory, in the order `info.json`
+  // names or either of the two in use: videos/chunk-NNN/<camera>/ (standard
+  // LeRobot v2.1) and videos/<camera>/chunk-NNN/ (Cosmos converter).
+  const info = await readLocalInfo(storagePath);
+  const file = firstExistingFile(storagePath, episodeVideoCandidates(info, featureKey, episodeIndex));
   if (!file) return false;
 
   const { size } = statSync(file);
@@ -1310,11 +1336,21 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
 
     // Optional exact chunk/file coordinates from the episodes API's
     // videoWindows (v3.0 multi-file chunks, see #179); fall back to the
-    // legacy floor(ep/1000) guess when absent.
-    const CHUNKS_SIZE = 1000;
+    // floor(ep / chunks_size) guess when absent.
+    // An unreadable infoJson must not cost the video: the helper then goes by
+    // the LeRobot default of 1000, which is what this route always assumed.
+    let info: EpisodePathInfo | null = null;
+    try {
+      info = (typeof dataset.infoJson === 'string'
+        ? JSON.parse(dataset.infoJson as string)
+        : dataset.infoJson) as EpisodePathInfo | null;
+    } catch {
+      info = null;
+    }
+    const episodeChunk = episodeChunkOf(info, episodeIndex);
     const chunkQ = parseInt(String(req.query.chunk ?? ''), 10);
     const fileQ = parseInt(String(req.query.file ?? ''), 10);
-    const chunkIndex = Number.isFinite(chunkQ) ? chunkQ : Math.floor(episodeIndex / CHUNKS_SIZE);
+    const chunkIndex = Number.isFinite(chunkQ) ? chunkQ : episodeChunk;
     const fileIndex = Number.isFinite(fileQ) ? fileQ : 0;
     const pad3 = (n: number) => String(n).padStart(3, '0');
 
@@ -1324,7 +1360,7 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
     //   videos/{camera key}/chunk-{chunk:03d}/file-{file:03d}.mp4
     // Try the layout matching the dataset's version first, then the other one
     // as a fallback (imports occasionally mislabel the version).
-    const v2Path = `videos/chunk-${pad3(Math.floor(episodeIndex / CHUNKS_SIZE))}/${featureKey}/episode_${String(episodeIndex).padStart(6, '0')}.mp4`;
+    const v2Path = `videos/chunk-${pad3(episodeChunk)}/${featureKey}/episode_${String(episodeIndex).padStart(6, '0')}.mp4`;
     const v3Path = `videos/${featureKey}/chunk-${pad3(chunkIndex)}/file-${pad3(fileIndex)}.mp4`;
     const isV2 = (dataset.lerobotVersion ?? '').toLowerCase().startsWith('v2');
     const candidatePaths = isV2 ? [v2Path, v3Path] : [v3Path, v2Path];
