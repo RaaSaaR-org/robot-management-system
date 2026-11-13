@@ -52,6 +52,8 @@ const h = vi.hoisted(() => ({
   getRobotType: vi.fn(),
   useRobotReadiness: vi.fn(() => ({ readiness: null })),
   canWrite: true,
+  useVoiceChannel: vi.fn(() => ({ voice: { entries: [], activity: [], paused: false }, health: null, status: 'disconnected', refreshHealth: vi.fn() })),
+  usePointCloudStream: vi.fn(() => ({ frame: null, isConnected: false, lastUpdate: null })),
 }));
 
 vi.mock('../../hooks/useRobots', () => ({
@@ -87,6 +89,12 @@ vi.mock('../visualization/Robot3DViewer', () => ({
 }));
 vi.mock('../readiness/RobotReadinessPanel', () => ({ RobotReadinessPanel: () => <div data-testid="readiness-panel" /> }));
 vi.mock('../tabs/vr/VRTeleopSection', () => ({ VRTeleopSection: () => <div data-testid="vr-section" /> }));
+vi.mock('../../hooks/useVoiceChannel', () => ({ useVoiceChannel: h.useVoiceChannel }));
+vi.mock('../../hooks/usePointCloudStream', () => ({ usePointCloudStream: h.usePointCloudStream }));
+vi.mock('../PointCloudGallery', () => ({ PointCloudGallery: () => <div data-testid="scan-gallery" /> }));
+vi.mock('../voice/VoiceComposer', () => ({ VoiceComposer: () => <div data-testid="voice-composer" /> }));
+vi.mock('../voice/VoiceConversation', () => ({ VoiceConversation: () => null }));
+vi.mock('../voice/VoicePipelinePanel', () => ({ VoicePipelinePanel: () => null }));
 vi.mock('../RobotChatPanel', () => ({ RobotChatPanel: () => <div data-testid="robot-chat-panel" /> }));
 vi.mock('../tabs/SiteSelect', () => ({ SiteSelect: () => null }));
 vi.mock('../telemetry', () => ({
@@ -101,6 +109,8 @@ import { RobotDetailPanel } from '../RobotDetailPanel';
 import { RobotQuickStats } from '../RobotQuickStats';
 import { TeleopTab } from '../tabs/TeleopTab';
 import { ChatTab } from '../tabs/ChatTab';
+import { VoiceTab } from '../tabs/VoiceTab';
+import { PerceptionTab } from '../tabs/PerceptionTab';
 import { OverviewTab } from '../tabs/OverviewTab';
 import { CommandsTab } from '../tabs/CommandsTab';
 import { TelemetryTab } from '../tabs/TelemetryTab';
@@ -114,6 +124,8 @@ beforeEach(() => {
   h.canWrite = true;
   h.getRobotType.mockReset().mockResolvedValue({ robotType: null, linkedBy: null });
   h.useRobotReadiness.mockClear();
+  h.useVoiceChannel.mockClear();
+  h.usePointCloudStream.mockClear();
 });
 
 const inRouter = (ui: React.ReactElement) => render(<MemoryRouter>{ui}</MemoryRouter>);
@@ -220,6 +232,40 @@ describe('the Chat tab', () => {
   it('still opens the chat of a robot with an agent', () => {
     inRouter(<ChatTab robot={onlineG1} robotId={onlineG1.id} />);
     expect(screen.getByTestId('robot-chat-panel')).toBeInTheDocument();
+  });
+});
+
+describe('the Voice tab', () => {
+  it('asks no voice service of a robot without an agent and offers no composer', () => {
+    inRouter(<VoiceTab robot={expectedG1} robotId={expectedG1.id} />);
+    expect(screen.getByTestId('voice-awaiting-agent')).toHaveTextContent(
+      "Voice opens when Unitree G1 with Dex3 hands's robot agent connects to this server.",
+    );
+    expect(screen.queryByTestId('voice-composer')).toBeNull();
+    expect(h.useVoiceChannel).not.toHaveBeenCalled();
+  });
+
+  it('still opens voice for a robot with an agent', () => {
+    inRouter(<VoiceTab robot={onlineG1} robotId={onlineG1.id} />);
+    expect(screen.queryByTestId('voice-awaiting-agent')).toBeNull();
+    expect(h.useVoiceChannel).toHaveBeenCalledWith(onlineG1.id);
+  });
+});
+
+describe('the Perception tab', () => {
+  it('does not call an expected robot offline or offer a scan capture', () => {
+    inRouter(<PerceptionTab robot={expectedG1} robotId={expectedG1.id} telemetry={null} />);
+    expect(screen.getByTestId('perception-awaiting-agent')).toHaveTextContent('Not connected yet');
+    expect(screen.queryByText(/is offline/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /capture scan/i })).toBeNull();
+    expect(h.usePointCloudStream).not.toHaveBeenCalled();
+  });
+
+  it('keeps the viewer and capture for a robot that was connected before', () => {
+    inRouter(<PerceptionTab robot={offlineG1} robotId={offlineG1.id} telemetry={null} />);
+    expect(screen.queryByTestId('perception-awaiting-agent')).toBeNull();
+    expect(screen.getByRole('button', { name: /capture scan/i })).toBeInTheDocument();
+    expect(h.usePointCloudStream).toHaveBeenCalledWith(offlineG1.id, { enabled: false });
   });
 });
 

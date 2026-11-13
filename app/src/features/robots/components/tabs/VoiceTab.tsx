@@ -19,10 +19,36 @@ import { VoiceComposer } from '../voice/VoiceComposer';
 import { VoiceConversation } from '../voice/VoiceConversation';
 import { VoicePipelinePanel } from '../voice/VoicePipelinePanel';
 import type { VoiceLanguage } from '../../types/voice.types';
+import { robotProvisioning } from '../../types/robots.types';
+import { AwaitingAgentState } from '../common';
 import type { VoiceTabProps } from './types';
 
-/** Voice tab — talk to and through the robot's speaker/microphone. */
-export const VoiceTab = memo(function VoiceTab({ robot, robotId }: VoiceTabProps) {
+/**
+ * Voice tab — talk to and through the robot's speaker/microphone.
+ *
+ * An expected robot (TASK-477) has no agent and so no voice service to ask:
+ * the tab says so and mounts nothing, where it used to fire three voice
+ * requests that could only answer 404 and offer a composer that could not
+ * speak (TASK-485).
+ */
+export function VoiceTab(props: VoiceTabProps) {
+  const provisioning = robotProvisioning(props.robot);
+  if (provisioning) {
+    return (
+      <AwaitingAgentState
+        robotName={props.robot.name}
+        provisioning={provisioning}
+        title="Voice"
+        lead="Voice opens"
+        icon={<MicOff />}
+        data-testid="voice-awaiting-agent"
+      />
+    );
+  }
+  return <ConnectedVoiceTab {...props} />;
+}
+
+const ConnectedVoiceTab = memo(function ConnectedVoiceTab({ robot, robotId }: VoiceTabProps) {
   const { voice, health, status, refreshHealth } = useVoiceChannel(robotId);
   const addTypedEntry = useVoiceStore((s) => s.addTypedEntry);
   const setPaused = useVoiceStore((s) => s.setPaused);

@@ -21,7 +21,8 @@ import { usePointCloudStream } from '../../hooks/usePointCloudStream';
 import { useRobotsStore } from '../../store/robotsStore';
 import { sensorScansApi } from '../../api/sensorScansApi';
 import { frameToPcdBlob, downloadBlob } from '../../utils/pointcloud';
-import type { RobotType } from '../../types/robots.types';
+import { robotProvisioning, type RobotType } from '../../types/robots.types';
+import { AwaitingAgentState } from '../common';
 import type { PerceptionTabProps } from './types';
 import type { PointCloudColorMode } from '../visualization';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
@@ -54,7 +55,29 @@ const COLOR_OPTIONS: { value: PointCloudColorMode; label: string }[] = [
   { value: 'intensity', label: 'Intensity' },
 ];
 
-export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps) {
+/**
+ * An expected robot (TASK-477) has no agent, so no sensor to read and nothing
+ * to capture: one sentence instead of a viewer that calls it "offline" beside
+ * a Capture button that cannot work (TASK-485).
+ */
+export function PerceptionTab(props: PerceptionTabProps) {
+  const provisioning = robotProvisioning(props.robot);
+  if (provisioning) {
+    return (
+      <AwaitingAgentState
+        robotName={props.robot.name}
+        provisioning={provisioning}
+        title="Point cloud"
+        lead="Live scans appear here"
+        icon={<Radar />}
+        data-testid="perception-awaiting-agent"
+      />
+    );
+  }
+  return <ConnectedPerceptionTab {...props} />;
+}
+
+function ConnectedPerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps) {
   const { frame: streamFrame, isConnected, lastUpdate } = usePointCloudStream(robotId, {
     // Nothing to scan without a connected agent (TASK-485).
     enabled: robot.status !== 'offline',
