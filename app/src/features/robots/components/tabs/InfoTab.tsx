@@ -27,6 +27,18 @@ const METADATA_LABELS: Record<string, string> = {
   description: 'Description',
   seededBy: 'Added by',
   degreesOfFreedom: 'Degrees of freedom',
+  isSimulated: 'Simulated',
+  hardwareConnected: 'Hardware connected',
+  footprintRadiusM: 'Footprint radius (m)',
+};
+
+/** The embodiment keys an agent reports, as a person names them. */
+const EMBODIMENT_NAMES: Record<string, string> = {
+  g1: 'Unitree G1',
+  g1_edu: 'Unitree G1 EDU',
+  h1: 'Unitree H1',
+  so101: 'SO-101',
+  generic: 'Generic',
 };
 
 /** Shown by the status tag and the banner above, not as raw key/value pairs. */
@@ -72,8 +84,12 @@ function humanizeKey(key: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
 }
 
-function metadataValue(value: unknown): string | null {
+function metadataValue(key: string, value: unknown): string | null {
   if (value == null || value === '') return null;
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (key === 'robotType' && typeof value === 'string' && EMBODIMENT_NAMES[value.toLowerCase()]) {
+    return EMBODIMENT_NAMES[value.toLowerCase()];
+  }
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
     return String(value).replace(/_/g, ' ');
   }
@@ -83,7 +99,7 @@ function metadataValue(value: unknown): string | null {
 export function InfoTab({ robot }: InfoTabProps) {
   const metadata = Object.entries(robot.metadata ?? {})
     .filter(([key]) => !HIDDEN_METADATA.has(key))
-    .map(([key, value]) => ({ key, label: METADATA_LABELS[key] ?? humanizeKey(key), value: metadataValue(value) }))
+    .map(([key, value]) => ({ key, label: METADATA_LABELS[key] ?? humanizeKey(key), value: metadataValue(key, value) }))
     .filter((item): item is { key: string; label: string; value: string } => item.value !== null);
   const hasAgent = Boolean(robot.a2aEnabled || robot.a2aAgentUrl || robot.capabilities.includes('a2a'));
   const provisioning = robotProvisioning(robot);

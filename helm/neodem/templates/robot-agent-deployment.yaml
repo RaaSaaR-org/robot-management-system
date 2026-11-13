@@ -50,6 +50,12 @@ spec:
               value: {{ .Values.robotAgent.env.robotName | quote }}
             - name: ROBOT_MODEL
               value: {{ .Values.robotAgent.env.robotModel | quote }}
+            # Embodiment (g1, g1_edu, h1, so101): picks the joints the agent
+            # simulates and the 3D model the app shows. Unset = the agent's default.
+            {{- with .Values.robotAgent.env.robotType }}
+            - name: ROBOT_TYPE
+              value: {{ . | quote }}
+            {{- end }}
             - name: ROBOT_CLASS
               value: {{ .Values.robotAgent.env.robotClass | quote }}
             - name: MAX_PAYLOAD_KG

@@ -206,7 +206,7 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
         eyebrow="Operate"
         back={BACK}
         title={robot.name}
-        description={provisioning ? robot.model : `${robot.model} · ${robot.location?.place ?? 'Place unknown'}`}
+        description={provisioning ? robot.model : `${robot.model} · ${robot.location?.place ?? (robot.twinId ? 'Place unknown' : 'No site')}`}
         meta={
           <>
             <RobotStatusTag status={robot.status} provisioning={provisioning?.state} />

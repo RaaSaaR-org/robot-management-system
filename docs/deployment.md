@@ -441,6 +441,8 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `robotAgent.env.controlLeaseRequired` | Agent refuses motion without a bound lease (`CONTROL_LEASE_REQUIRED`) | `"false"` |
 | `app.replicaCount` | App replicas | `2` |
 | `robotAgent.enabled` | Deploy robot agent | `true` |
+| `robotAgent.env.robotType` | Embodiment the simulated robot is (`ROBOT_TYPE`): `g1`, `g1_edu`, `h1`, `so101` | `g1` |
+| `robotAgent.env.robotModel` | Model name shown under the robot's name (`ROBOT_MODEL`) | `Unitree G1 (simulated)` |
 | `ingress.enabled` | Enable ingress | `true` |
 | `ingress.host` | Ingress hostname | `neodem.local` |
 | `ingress.tls` | Enable TLS | `false` |
