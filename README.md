@@ -595,6 +595,7 @@ Full contributor guide: [CONTRIBUTING.md](CONTRIBUTING.md).
 | [`docs/robot-integration-guide.md`](docs/robot-integration-guide.md) | Wiring a robot up: SO-101, G1 EDU, calibration, sidecars |
 | [`docs/vla-integration-guide.md`](docs/vla-integration-guide.md) | VLA models, cameras, inference pipeline |
 | [`docs/dataset-upload.md`](docs/dataset-upload.md) | Uploading a LeRobot dataset directory directly, without Hugging Face: the HTTP contract, resume, limits |
+| [`docs/dataset-download.md`](docs/dataset-download.md) | Taking a stored dataset back out as its LeRobot directory: the file list and raw files with Range |
 | [`docs/g1-edu-lab-bringup.md`](docs/g1-edu-lab-bringup.md) | Real G1 EDU lab bringup — status and log |
 | [`docs/real-g1-apple-runbook.md`](docs/real-g1-apple-runbook.md) | Robot-day runbook for the apple-to-plate use case |
 | [`docs/vr-teleop-data-collection.md`](docs/vr-teleop-data-collection.md) | VR teleoperation data collection with G1 EDU + Dex3-1 |

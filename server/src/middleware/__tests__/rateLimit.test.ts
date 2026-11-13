@@ -62,6 +62,9 @@ describe('isDatasetBrowseRequest', () => {
     ['HEAD', `/api/datasets/${DS}/episodes/12/video/observation.images.ego_view`],
     ['GET', `/api/datasets/${DS}/stats`],
     ['GET', `/api/datasets/${DS}/modality`],
+    ['GET', `/api/datasets/${DS}/files`],
+    ['GET', `/api/datasets/${DS}/files/content`],
+    ['HEAD', `/api/datasets/${DS}/files/content`],
     ['POST', `/api/datasets/${DS}/video-ticket`],
   ])('%s %s is dataset browsing', (method, path) => {
     expect(isDatasetBrowseRequest(method, path)).toBe(true);
@@ -75,6 +78,7 @@ describe('isDatasetBrowseRequest', () => {
     ['POST', `/api/datasets/${DS}/compute-stats`],
     ['POST', '/api/datasets/import/huggingface'],
     ['DELETE', `/api/datasets/${DS}`],
+    ['GET', `/api/datasets/${DS}/files/other`],
     ['GET', '/api/auth/me'],
     ['GET', `/api/social/episode/${DS}:3/comments`],
   ])('%s %s is not', (method, path) => {

@@ -9,7 +9,8 @@ dataset page, the episode browser, the video player, statistics and training
 all work on it unchanged.
 
 This page is the contract. It is complete: a client can be written from it
-without reading the server.
+without reading the server. The way back — listing a stored dataset's files
+and fetching them byte for byte — is [Downloading a dataset's files](dataset-download.md).
 
 - [At a glance](#at-a-glance)
 - [What may be uploaded](#what-may-be-uploaded)

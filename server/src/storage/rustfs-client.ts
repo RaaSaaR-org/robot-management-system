@@ -154,6 +154,8 @@ export interface ListOptions {
   maxKeys?: number;
   continuationToken?: string;
   delimiter?: string;
+  /** List only keys that sort after this one (S3 `StartAfter`). */
+  startAfter?: string;
 }
 
 export interface ListResult {
@@ -798,6 +800,7 @@ export class RustFSClient {
       MaxKeys: options?.maxKeys ?? 1000,
       ContinuationToken: options?.continuationToken,
       Delimiter: options?.delimiter,
+      StartAfter: options?.startAfter,
     };
 
     const response = await this.bounded(`ListObjectsV2 ${bucket}`, (abortSignal) =>
