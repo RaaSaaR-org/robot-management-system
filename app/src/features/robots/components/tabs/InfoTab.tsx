@@ -47,9 +47,23 @@ const HIDDEN_METADATA = new Set(['provisioning', 'provisioningNote', 'robotTypeN
 /**
  * The robot type this robot is one of, as the server links it (TASK-485):
  * "Microduck · state 15 / action 15". While the answer is out, or when the
- * server cannot tell, the name the robot's own metadata states, else "—".
+ * server cannot tell, the name the robot's own metadata states, else the
+ * embodiment its agent reports ("Unitree G1"), else "—".
+ *
+ * The embodiment is a fallback, not a link (TASK-499): the demo's simulated G1
+ * is a plain 29-joint G1 and no robot type describes one — the G1 types are
+ * the Dex3-hand configurations — so the server rightly answers none, and the
+ * row said "—" about a robot that knows exactly what it is.
  */
-function RobotTypeValue({ robotId, stated }: { robotId: string; stated: string | null }) {
+function RobotTypeValue({
+  robotId,
+  stated,
+  embodiment,
+}: {
+  robotId: string;
+  stated: string | null;
+  embodiment: string | null;
+}) {
   const [link, setLink] = useState<RobotTypeLink | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -68,7 +82,18 @@ function RobotTypeValue({ robotId, stated }: { robotId: string; stated: string |
   }, [robotId]);
 
   const type = link?.robotType ?? null;
-  if (!type) return <span data-testid="robot-type-link">{stated ?? '—'}</span>;
+  if (!type) {
+    if (stated || !embodiment) return <span data-testid="robot-type-link">{stated ?? '—'}</span>;
+    return (
+      <span
+        data-testid="robot-type-link"
+        data-linked-by="embodiment"
+        title="The embodiment this robot reports. No robot type with dataset widths is linked to it."
+      >
+        {embodiment}
+      </span>
+    );
+  }
   return (
     <span data-testid="robot-type-link" data-linked-by={link?.linkedBy ?? undefined}>
       {type.name}
@@ -104,6 +129,8 @@ export function InfoTab({ robot }: InfoTabProps) {
   const hasAgent = Boolean(robot.a2aEnabled || robot.a2aAgentUrl || robot.capabilities.includes('a2a'));
   const provisioning = robotProvisioning(robot);
   const statedType = robot.metadata?.robotTypeName;
+  const embodimentKey = robot.metadata?.robotType;
+  const embodiment = typeof embodimentKey === 'string' ? EMBODIMENT_NAMES[embodimentKey.toLowerCase()] ?? null : null;
 
   return (
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
@@ -120,6 +147,7 @@ export function InfoTab({ robot }: InfoTabProps) {
                   <RobotTypeValue
                     robotId={robot.id}
                     stated={typeof statedType === 'string' && statedType.trim() ? statedType : null}
+                    embodiment={embodiment}
                   />
                 ),
               },

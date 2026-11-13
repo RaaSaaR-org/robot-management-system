@@ -419,7 +419,10 @@ function adoptable(reported: unknown, current: unknown): string | null {
  *
  * @returns only the changed fields, or null when nothing changed.
  */
-export function buildIdentityUpdate(current: Robot, reported: Robot): Partial<Robot> | null {
+export function buildIdentityUpdate(
+  current: Robot,
+  reported: Robot | ReportedRobot
+): Partial<Robot> | null {
   const update: Partial<Robot> = {};
 
   const name = adoptable(reported.name, current.name);
@@ -456,6 +459,64 @@ export function buildIdentityUpdate(current: Robot, reported: Robot): Partial<Ro
   }
 
   return Object.keys(update).length > 0 ? update : null;
+}
+
+/** The two fields that say what a robot is doing right now. `null` clears one. */
+export interface RobotTaskUpdate {
+  currentTaskId?: string | null;
+  currentTaskName?: string | null;
+}
+
+/**
+ * A robot as its agent reports it. The task fields have three states on the
+ * wire: a string (the task), an explicit `null` (no task), or absent (this
+ * agent does not say — an older build, or a partial payload).
+ */
+export type ReportedRobot = Omit<Robot, keyof RobotTaskUpdate> & RobotTaskUpdate;
+
+/**
+ * Diff the task the agent reports against the stored robot (TASK-499).
+ *
+ * Until now the task fields were written at registration and never again, so a
+ * robot that registered while charging read "Charging · Running now" for as
+ * long as the row lived. The health check syncs them like it syncs identity:
+ *
+ *  - a string that differs is adopted;
+ *  - an explicit `null` (or a blank string) CLEARS a stored value — "the agent
+ *    says it is doing nothing";
+ *  - an absent field changes nothing — "the agent did not say". `undefined`
+ *    does not survive JSON, so an agent that wants to clear must send `null`.
+ *
+ * @returns only the changed fields (`null` = clear), or null when nothing changed.
+ */
+export function buildTaskUpdate(current: Robot, reported: ReportedRobot): RobotTaskUpdate | null {
+  const update: RobotTaskUpdate = {};
+  for (const field of ['currentTaskId', 'currentTaskName'] as const) {
+    const value = reported[field];
+    if (value === undefined) continue;
+    const next = typeof value === 'string' && value.trim() ? value : null;
+    if (next === (current[field] ?? null)) continue;
+    update[field] = next;
+  }
+  return Object.keys(update).length > 0 ? update : null;
+}
+
+/** Write a task diff into a cached robot: a cleared field is absent, never `null`. */
+export function applyTaskUpdate(robot: Robot, update: RobotTaskUpdate): void {
+  for (const field of ['currentTaskId', 'currentTaskName'] as const) {
+    if (!(field in update)) continue;
+    const value = update[field];
+    if (value == null) delete robot[field];
+    else robot[field] = value;
+  }
+}
+
+/** The task fields a report clears outright (`null` on the wire), for a write that skips `undefined`. */
+export function clearedTaskFields(reported: ReportedRobot): RobotTaskUpdate {
+  const cleared: RobotTaskUpdate = {};
+  if (reported.currentTaskId === null) cleared.currentTaskId = null;
+  if (reported.currentTaskName === null) cleared.currentTaskName = null;
+  return cleared;
 }
 
 // ============================================================================
@@ -563,9 +624,16 @@ export class RobotManager {
         telemetryWs: registrationInfo.endpoints.telemetryWs,
       };
 
-      // Update robot with A2A info
+      // Update robot with A2A info. A task field the agent reports as `null`
+      // ("no task") is absent in the domain object and cleared on the row
+      // (TASK-499): the upsert below skips `undefined`, which is how a robot
+      // that re-registered idle kept the task of its previous registration.
+      const reportedRobot: ReportedRobot = registrationInfo.robot;
+      const clearedTask = clearedTaskFields(reportedRobot);
       const robotWithA2A: Robot = {
         ...registrationInfo.robot,
+        currentTaskId: reportedRobot.currentTaskId ?? undefined,
+        currentTaskName: reportedRobot.currentTaskName ?? undefined,
         a2aEnabled: true,
         a2aAgentUrl: baseUrl,
       };
@@ -576,7 +644,8 @@ export class RobotManager {
         robotWithA2A,
         endpoints,
         agentCard,
-        baseUrl
+        baseUrl,
+        clearedTask
       );
       robotWithA2A.twinId = persisted?.twinId ?? null;
 
@@ -1154,9 +1223,10 @@ export class RobotManager {
         // Also fetch robot data to sync position + identity
         let locationChanged = false;
         let identityChanged = false;
+        let taskChanged = false;
         try {
           const robotHttpClient = new HttpClient(undefined, HTTP_TIMEOUTS.SHORT);
-          const robotData = await robotHttpClient.get<Robot>(registered.endpoints.robot);
+          const robotData = await robotHttpClient.get<ReportedRobot>(registered.endpoints.robot);
           if (robotData.location) {
             const newLoc = robotData.location;
             if (locationDiffers(registered.robot.location, newLoc)) {
@@ -1186,6 +1256,16 @@ export class RobotManager {
             console.log(
               `[RobotManager] Synced identity for ${registered.robot.id}: ${Object.keys(identityUpdate).join(', ')}`
             );
+          }
+
+          // What the robot is doing right now (TASK-499): adopted when it
+          // changes and cleared when the agent says `null`. The cache follows
+          // the row, so a failed write is found again by the next check.
+          const taskUpdate = buildTaskUpdate(registered.robot, robotData);
+          if (taskUpdate && (await robotRepository.update(registered.robot.id, taskUpdate))) {
+            applyTaskUpdate(registered.robot, taskUpdate);
+            registered.robot.updatedAt = now;
+            taskChanged = true;
           }
         } catch {
           // Log but don't fail health check - position sync is secondary
@@ -1284,7 +1364,7 @@ export class RobotManager {
         }
 
         // Emit event if status, battery, location, or identity changed
-        if (statusChanged || batteryChanged || locationChanged || identityChanged) {
+        if (statusChanged || batteryChanged || locationChanged || identityChanged || taskChanged) {
           this.emitEvent({
             type: 'robot_status_changed',
             robotId: registered.robot.id,
@@ -1346,7 +1426,7 @@ export class RobotManager {
   }
 
   /** @see {@link buildIdentityUpdate} — kept as a method so the call site reads unchanged. */
-  private buildIdentityUpdate(current: Robot, reported: Robot): Partial<Robot> | null {
+  private buildIdentityUpdate(current: Robot, reported: ReportedRobot): Partial<Robot> | null {
     return buildIdentityUpdate(current, reported);
   }
 

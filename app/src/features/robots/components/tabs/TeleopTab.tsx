@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Keyboard, Plug, Unplug } from 'lucide-react';
+import { Bot, Keyboard, Plug, Unplug } from 'lucide-react';
 import { Button, EmptyState, Panel, StatusTag, toast } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import type { TeleopTabProps } from './types';
@@ -18,6 +18,8 @@ import { ControlLeaseBar } from './ControlLeaseBar';
 import { useControlLease, type LeaseSocket } from '../../hooks/useControlLease';
 import { openTeleopSocket } from './vr/vrUrls';
 import { RobotReadinessPanel, type ReadinessLease } from '../readiness/RobotReadinessPanel';
+import { hasNoRobotSide } from '../readiness/readinessRows';
+import { useRobotReadiness } from '../../hooks/useRobotReadiness';
 import { SessionEStopButton } from '../../../datacollection/components/session/SessionEStopButton';
 import { isSimRobot } from '../../utils/simRobot';
 import { robotProvisioning } from '../../types/robots.types';
@@ -549,8 +551,42 @@ export function KeyboardTeleopSection({
 // page (`/data-collection/record/:sessionId`). This tab hosts only the live keyboard
 // teleop, which drives the agent's simulated joint state directly, and VR teleop.
 
-export function TeleopTab({ robot }: TeleopTabProps) {
+/**
+ * The tab of a robot whose agent is connected. A simulated robot with no robot
+ * side (TASK-499) — no supervisor, no sidecar — gets one plain sentence where
+ * the readiness panel said "Can't reach the robot sidecar (8767). Start the
+ * robot side.": there is no robot side, and keyboard and VR teleop drive the
+ * agent's simulated joints without one. A simulated robot that has one (the
+ * rehearsal robot) and every real robot keep the panel.
+ */
+function ConnectedTeleopTab({ robot }: Pick<TeleopTabProps, 'robot'>) {
   const [lease, setLease] = useState<ReadinessLease | null>(null);
+  const ready = useRobotReadiness(robot.id);
+  const simulationOnly = isSimRobot(robot) && hasNoRobotSide(ready.readiness);
+  return (
+    <div className="flex flex-col gap-6">
+      <KeyboardTeleopSection robot={robot} onLeaseChange={setLease} />
+      {simulationOnly ? (
+        <Panel data-testid="teleop-simulated-readiness">
+          <Panel.Header title="Robot readiness" />
+          <Panel.Body>
+            <EmptyState
+              size="sm"
+              icon={<Bot />}
+              title="Nothing to start on a simulated robot"
+              description={`${robot.name} is simulated: it has no robot hardware, so there is no robot side to start. Keyboard and VR teleop move its simulated joints.`}
+            />
+          </Panel.Body>
+        </Panel>
+      ) : (
+        <RobotReadinessPanel robotId={robot.id} lease={lease} readiness={ready} />
+      )}
+      <VRTeleopSection robot={robot} showReadiness={!simulationOnly} />
+    </div>
+  );
+}
+
+export function TeleopTab({ robot }: TeleopTabProps) {
   // An expected robot has no agent to open a teleop socket to, no readiness to
   // read and nothing a headset could drive (TASK-485): say so, offer nothing.
   const provisioning = robotProvisioning(robot);
@@ -566,11 +602,5 @@ export function TeleopTab({ robot }: TeleopTabProps) {
       />
     );
   }
-  return (
-    <div className="flex flex-col gap-6">
-      <KeyboardTeleopSection robot={robot} onLeaseChange={setLease} />
-      <RobotReadinessPanel robotId={robot.id} lease={lease} />
-      <VRTeleopSection robot={robot} />
-    </div>
-  );
+  return <ConnectedTeleopTab robot={robot} />;
 }

@@ -8,7 +8,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildIdentityUpdate, type Robot } from '../RobotManager.js';
+import {
+  applyTaskUpdate,
+  buildIdentityUpdate,
+  buildTaskUpdate,
+  clearedTaskFields,
+  type ReportedRobot,
+  type Robot,
+} from '../RobotManager.js';
 
 function robot(over: Partial<Robot> = {}): Robot {
   return {
@@ -69,5 +76,75 @@ describe('buildIdentityUpdate', () => {
       robot({ name: 'Nova', serialNumber: 'G1EDU-0042', firmware: 'v2.1.0' }),
     );
     expect(update).toEqual({ name: 'Nova', serialNumber: 'G1EDU-0042', firmware: 'v2.1.0' });
+  });
+});
+
+/**
+ * TASK-499: the task a robot is on is synced like its identity, with one more
+ * state — an explicit `null` clears. The demo's simulated robot registered
+ * while charging and read "Charging · Running now" from then on, online and
+ * draining, because the task fields were written at registration only.
+ */
+describe('buildTaskUpdate', () => {
+  const reported = (over: Partial<ReportedRobot>): ReportedRobot => ({ ...robot(), ...over });
+
+  it('clears a stored task when the agent reports null', () => {
+    const update = buildTaskUpdate(
+      robot({ currentTaskName: 'Charging' }),
+      reported({ currentTaskId: null, currentTaskName: null }),
+    );
+    // Only what changed: there was no task id to clear.
+    expect(update).toEqual({ currentTaskName: null });
+  });
+
+  it('leaves a stored task alone when the payload omits the field', () => {
+    // An older agent, or a partial payload: silence is not "no task".
+    const wire = JSON.parse(JSON.stringify(robot({ currentTaskName: undefined }))) as ReportedRobot;
+    expect(wire).not.toHaveProperty('currentTaskName');
+    expect(buildTaskUpdate(robot({ currentTaskName: 'Pick item', currentTaskId: 't-1' }), wire)).toBeNull();
+  });
+
+  it('adopts a task that started or changed', () => {
+    expect(buildTaskUpdate(robot(), reported({ currentTaskId: 't-2', currentTaskName: 'Charging' }))).toEqual({
+      currentTaskId: 't-2',
+      currentTaskName: 'Charging',
+    });
+    expect(
+      buildTaskUpdate(robot({ currentTaskName: 'Charging' }), reported({ currentTaskName: 'Moving to (1.0, 2.0)' })),
+    ).toEqual({ currentTaskName: 'Moving to (1.0, 2.0)' });
+  });
+
+  it('reads a blank name as no task', () => {
+    expect(buildTaskUpdate(robot({ currentTaskName: 'Charging' }), reported({ currentTaskName: '  ' }))).toEqual({
+      currentTaskName: null,
+    });
+  });
+
+  it('returns null when nothing changed, cleared or not', () => {
+    expect(buildTaskUpdate(robot(), reported({ currentTaskId: null, currentTaskName: null }))).toBeNull();
+    expect(
+      buildTaskUpdate(robot({ currentTaskName: 'Charging' }), reported({ currentTaskName: 'Charging' })),
+    ).toBeNull();
+  });
+});
+
+describe('applyTaskUpdate', () => {
+  it('removes a cleared field from the cached robot instead of storing null', () => {
+    const cached = robot({ currentTaskId: 't-1', currentTaskName: 'Charging' });
+    applyTaskUpdate(cached, { currentTaskName: null });
+    expect(cached).not.toHaveProperty('currentTaskName');
+    expect(cached.currentTaskId).toBe('t-1');
+
+    applyTaskUpdate(cached, { currentTaskName: 'Pick item' });
+    expect(cached.currentTaskName).toBe('Pick item');
+  });
+});
+
+describe('clearedTaskFields', () => {
+  it('names only the fields reported as null', () => {
+    expect(clearedTaskFields({ ...robot(), currentTaskId: null, currentTaskName: 'Charging' })).toEqual({
+      currentTaskId: null,
+    });
+    expect(clearedTaskFields(robot())).toEqual({});
   });
 });

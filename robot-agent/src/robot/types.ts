@@ -135,8 +135,14 @@ export interface Robot {
   batteryLevel: number | null;  // null = no battery / AC-powered
   location: RobotLocation;
   lastSeen: string;
-  currentTaskId?: string;
-  currentTaskName?: string;
+  /**
+   * `null` = no task, said outright (TASK-499). An absent field does not
+   * survive as a statement: JSON drops `undefined`, and the fleet server then
+   * cannot tell "nothing running" from "this agent does not say" — so it kept
+   * the last task it had heard of.
+   */
+  currentTaskId?: string | null;
+  currentTaskName?: string | null;
   capabilities: string[];
   firmware?: string;
   ipAddress?: string;

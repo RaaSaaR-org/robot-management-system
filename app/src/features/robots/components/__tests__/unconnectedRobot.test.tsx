@@ -45,14 +45,38 @@ const arrivingDuck = makeRobot({
 const onlineG1 = makeRobot({ id: 'g1-live', name: 'G1 live', status: 'online', batteryLevel: 80, metadata: { robotType: 'g1_edu', powerSource: 'battery' } });
 const onlineArm = makeRobot({ id: 'arm-live', name: 'Bench arm', model: 'SO-101 Follower', status: 'online', metadata: { robotType: 'so101', powerSource: 'ac_powered' } });
 const offlineG1 = makeRobot({ id: 'g1-off', name: 'G1 off', batteryLevel: 40, metadata: { robotType: 'g1_edu' } });
+// The demo's simulated robot (TASK-499): an agent, and nothing else next to it.
+const simG1 = makeRobot({
+  id: 'sim-robot-001',
+  name: 'SimBot-01',
+  model: 'Unitree G1 (simulated)',
+  status: 'online',
+  batteryLevel: 78,
+  metadata: { isSimulated: true, hardwareConnected: false, robotType: 'g1', footprintRadiusM: 0.35 },
+});
+/** A snapshot of a robot whose agent answers and reaches no sidecar. */
+const noSidecar = (supervisor: RobotReadiness['supervisor'] = null) =>
+  ({
+    robotId: 'r',
+    bringup: null,
+    supervisor,
+    agent: { reachable: true, error: null, readiness: { sidecar: { reachable: false } } },
+    reason: { code: 'sidecar_unreachable', severity: 'block', text: "Can't reach the robot sidecar (8767). Start the robot side.", source: 'agent' },
+  }) as unknown as RobotReadiness;
 
 const h = vi.hoisted(() => ({
   robot: null as unknown,
   telemetryOptions: [] as Array<Record<string, unknown> | undefined>,
   getRobotType: vi.fn(),
-  useRobotReadiness: vi.fn(() => ({ readiness: null })),
+  useRobotReadiness: vi.fn((): { readiness: unknown } => ({ readiness: null })),
   canWrite: true,
-  useVoiceChannel: vi.fn(() => ({ voice: { entries: [], activity: [], paused: false }, health: null, status: 'disconnected', refreshHealth: vi.fn() })),
+  voiceHealth: null as { available: boolean } | null,
+  useVoiceChannel: vi.fn((_robotId: string, _options?: { whenAvailable?: boolean }) => ({
+    voice: { entries: [], activity: [], paused: false },
+    health: h.voiceHealth,
+    status: 'disconnected',
+    refreshHealth: vi.fn(),
+  })),
   usePointCloudStream: vi.fn(() => ({ frame: null, isConnected: false, lastUpdate: null })),
 }));
 
@@ -123,7 +147,8 @@ beforeEach(() => {
   h.telemetryOptions = [];
   h.canWrite = true;
   h.getRobotType.mockReset().mockResolvedValue({ robotType: null, linkedBy: null });
-  h.useRobotReadiness.mockClear();
+  h.useRobotReadiness.mockReset().mockImplementation(() => ({ readiness: null }));
+  h.voiceHealth = null;
   h.useVoiceChannel.mockClear();
   h.usePointCloudStream.mockClear();
 });
@@ -222,6 +247,41 @@ describe('the Teleop tab', () => {
   });
 });
 
+describe('the Teleop tab of a simulated robot (TASK-499)', () => {
+  it('says there is nothing to start instead of naming a sidecar port', () => {
+    h.useRobotReadiness.mockImplementation(() => ({ readiness: noSidecar() }));
+    inRouter(<TeleopTab robot={simG1} robotId={simG1.id} />);
+    const calm = screen.getByTestId('teleop-simulated-readiness');
+    expect(calm).toHaveTextContent('Nothing to start on a simulated robot');
+    expect(calm).toHaveTextContent('SimBot-01 is simulated: it has no robot hardware, so there is no robot side to start.');
+    expect(screen.queryByTestId('readiness-panel')).toBeNull();
+    expect(screen.queryByText(/sidecar/i)).toBeNull();
+    // Teleop itself still works on the agent's simulated joints.
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument();
+    expect(screen.getByTestId('vr-section')).toBeInTheDocument();
+  });
+
+  it('keeps the readiness panel for a simulated robot that has a robot side to start', () => {
+    // The rehearsal robot: a supervisor is configured, so Start means something.
+    h.useRobotReadiness.mockImplementation(() => ({ readiness: noSidecar({ reachable: true, error: null }) }));
+    inRouter(<TeleopTab robot={simG1} robotId={simG1.id} />);
+    expect(screen.getByTestId('readiness-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('teleop-simulated-readiness')).toBeNull();
+  });
+
+  it('keeps the readiness panel, and its hint, for a real robot in the same state', () => {
+    h.useRobotReadiness.mockImplementation(() => ({ readiness: noSidecar() }));
+    inRouter(<TeleopTab robot={onlineG1} robotId={onlineG1.id} />);
+    expect(screen.getByTestId('readiness-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('teleop-simulated-readiness')).toBeNull();
+  });
+
+  it('shows the panel while the first snapshot is still out', () => {
+    inRouter(<TeleopTab robot={simG1} robotId={simG1.id} />);
+    expect(screen.getByTestId('readiness-panel')).toBeInTheDocument();
+  });
+});
+
 describe('the Chat tab', () => {
   it('mounts no chat for a robot without an agent', () => {
     inRouter(<ChatTab robot={expectedG1} robotId={expectedG1.id} />);
@@ -248,7 +308,35 @@ describe('the Voice tab', () => {
   it('still opens voice for a robot with an agent', () => {
     inRouter(<VoiceTab robot={onlineG1} robotId={onlineG1.id} />);
     expect(screen.queryByTestId('voice-awaiting-agent')).toBeNull();
-    expect(h.useVoiceChannel).toHaveBeenCalledWith(onlineG1.id);
+    expect(h.useVoiceChannel).toHaveBeenCalledWith(onlineG1.id, { whenAvailable: false });
+  });
+
+  it('tells a real robot whose voice service is down how to start it, as before', () => {
+    h.voiceHealth = { available: false };
+    inRouter(<VoiceTab robot={onlineG1} robotId={onlineG1.id} />);
+    expect(screen.getByTestId('voice-offline-banner')).toHaveTextContent('python -m voice_service');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByTestId('voice-simulated')).toBeNull();
+  });
+
+  it('says plainly that a simulated robot has no voice, with no start command and no Retry (TASK-499)', () => {
+    h.voiceHealth = { available: false };
+    inRouter(<VoiceTab robot={simG1} robotId={simG1.id} />);
+    const calm = screen.getByTestId('voice-simulated');
+    expect(calm).toHaveTextContent('Voice is not available on a simulated robot');
+    expect(calm).toHaveTextContent('SimBot-01 is simulated: it has no speaker and no microphone');
+    expect(screen.queryByText(/voice_service/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByTestId('voice-composer')).toBeNull();
+    // Health first: the status call and the event stream wait for a service.
+    expect(h.useVoiceChannel).toHaveBeenCalledWith(simG1.id, { whenAvailable: true });
+  });
+
+  it('opens voice on a simulated robot that does run the voice service', () => {
+    h.voiceHealth = { available: true };
+    inRouter(<VoiceTab robot={simG1} robotId={simG1.id} />);
+    expect(screen.getByTestId('voice-composer')).toBeInTheDocument();
+    expect(screen.queryByTestId('voice-simulated')).toBeNull();
   });
 });
 
@@ -393,6 +481,10 @@ describe('the Details tab', () => {
     expect(screen.getByText('Simulated').nextElementSibling).toHaveTextContent('Yes');
     expect(screen.getByText('Hardware connected').nextElementSibling).toHaveTextContent('No');
     expect(screen.getByText('Embodiment').nextElementSibling).toHaveTextContent('Unitree G1');
+    // TASK-499: no robot type describes a plain G1, so the row names the
+    // embodiment the robot reports instead of a dash — marked as not a link.
+    expect(screen.getByTestId('robot-type-link')).toHaveTextContent(/^Unitree G1$/);
+    expect(screen.getByTestId('robot-type-link')).toHaveAttribute('data-linked-by', 'embodiment');
     expect(screen.getByText('Footprint radius (m)').nextElementSibling).toHaveTextContent('0.35');
     expect(screen.queryByText('Is simulated')).toBeNull();
   });
@@ -402,8 +494,19 @@ describe('the Details tab', () => {
     inRouter(<InfoTab robot={expectedArm} robotId={expectedArm.id} />);
     await waitFor(() => expect(h.getRobotType).toHaveBeenCalled());
     expect(screen.getByTestId('robot-type-link')).toHaveTextContent('SO-101 Follower');
+    // What the robot states wins over the embodiment fallback.
+    expect(screen.getByTestId('robot-type-link')).not.toHaveAttribute('data-linked-by');
     // The key that picks the 3D model is no longer labelled as the robot type.
     expect(screen.getByText('Embodiment')).toBeInTheDocument();
+  });
+});
+
+describe('the Details tab of a robot nothing names', () => {
+  it('still shows a dash when there is no link, no stated type and no known embodiment', async () => {
+    const bare = makeRobot({ id: 'bare', status: 'online', metadata: { robotType: 'something_new' } });
+    inRouter(<InfoTab robot={bare} robotId={bare.id} />);
+    await waitFor(() => expect(h.getRobotType).toHaveBeenCalledWith('bare'));
+    expect(screen.getByTestId('robot-type-link')).toHaveTextContent('—');
   });
 });
 
