@@ -40,6 +40,7 @@ vi.mock('../../api/trainingApi', () => ({ trainingApi: trainingApiMock }));
 vi.mock('../../api/datasetViewsApi', () => ({ datasetViewsApi: datasetViewsApiMock }));
 vi.mock('../../api/datasetVideoApi', () => ({
   getDatasetVideoTicket: vi.fn(async (datasetId: string) => `tkt-${datasetId}`),
+  probeVideoThrottle: vi.fn(async () => null),
 }));
 vi.mock('@/features/evaluation/api/evaluationApi', () => ({
   evaluationApi: { listRewards },

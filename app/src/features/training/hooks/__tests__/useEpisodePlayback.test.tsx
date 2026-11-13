@@ -177,6 +177,23 @@ describe('useEpisodePlayback', () => {
     expect(result.current.isPlaying).toBe(false);
   });
 
+  it('follows a video that starts without the button, and keeps it across an episode switch', () => {
+    const { result, rerender, ego, options } = setup();
+    ego.paused = false; // a media key
+    act(() => result.current.onPlayingChange(true));
+    expect(result.current.isPlaying).toBe(true);
+
+    ego.loadNewSource(12);
+    rerender({ ...options, episodeKey: 'ds:1' });
+    act(() => result.current.onLoadedMetadata(EGO));
+    expect(ego.paused).toBe(false);
+    expect(result.current.isPlaying).toBe(true);
+
+    ego.paused = true;
+    act(() => result.current.onPlayingChange(false));
+    expect(result.current.isPlaying).toBe(false);
+  });
+
   it('starts and speeds every camera, and seeks them together', () => {
     const { result, ego } = setup();
     const wrist = fakeVideo(19.67);

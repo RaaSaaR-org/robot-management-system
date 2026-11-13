@@ -27,9 +27,9 @@ export const datasetUploadRoutes = Router();
 /**
  * Whether a request is one part of a direct upload.
  *
- * The general API rate limit (100 a minute in production) would stall every
- * upload after its first hundred files, so `app.ts` exempts exactly these
- * requests from it. They are bounded on their own terms: the upload service
+ * The API rate limits (300 writes a minute in production) would stall every
+ * upload after its first few hundred parts, so `app.ts` exempts exactly these
+ * requests from them. They are bounded on their own terms: the upload service
  * streams only a few at a time and answers the rest 503 with Retry-After.
  * `path` may be given with or without the `/api` mount prefix.
  */

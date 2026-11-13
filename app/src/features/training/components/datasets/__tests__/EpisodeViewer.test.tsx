@@ -245,15 +245,16 @@ describe('EpisodeViewer', () => {
     });
 
     it('passes on a pause of the primary video only', () => {
-      const onPause = vi.fn();
+      const onPlayingChange = vi.fn();
       const { container } = render(
-        <EpisodeViewer {...props({ cameras: [EGO, 'observation.images.wrist'], onPause })} />,
+        <EpisodeViewer {...props({ cameras: [EGO, 'observation.images.wrist'], onPlayingChange })} />,
       );
       const [first, second] = Array.from(container.querySelectorAll('video'));
       fireEvent.pause(second!);
-      expect(onPause).not.toHaveBeenCalled();
+      expect(onPlayingChange).not.toHaveBeenCalled();
       fireEvent.pause(first!);
-      expect(onPause).toHaveBeenCalledTimes(1);
+      expect(onPlayingChange).toHaveBeenCalledTimes(1);
+      expect(onPlayingChange).toHaveBeenLastCalledWith(false);
     });
 
     it('says when a camera ends in a notice instead of a video', () => {

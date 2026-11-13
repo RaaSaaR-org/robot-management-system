@@ -39,6 +39,7 @@ import { EpisodeViewer } from '../components/datasets/EpisodeViewer';
 import { featureVideoCodec } from '../components/datasets/videoCodec';
 import { useDatasetVideoTicket } from '../hooks/useDatasetVideoTicket';
 import { useEpisodePlayback } from '../hooks/useEpisodePlayback';
+import { probeVideoThrottle } from '../api/datasetVideoApi';
 import { useViewportFill } from '../hooks/useViewportFill';
 import { CuratePanel } from '../components/datasets/CuratePanel';
 import { JointChartPanel, RewardCurvePanel } from '../components/datasets/TrajectoryPanels';
@@ -105,7 +106,8 @@ export function DatasetEpisodesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedEpisodeRef = useRef(searchParams.get('episode'));
   // The frames and the request they answer: until the two agree the chart is
-  // loading, so it never shows the previous episode's samples (TASK-484).
+  // loading, so a slow or throttled request never leaves the previous episode's
+  // samples on screen as if they were this one's (TASK-482, TASK-484).
   const [framesAnswer, setFramesAnswer] =
     useState<{ key: string; frames: FrameData[]; error: string | null } | null>(null);
   const [framesReloadKey, setFramesReloadKey] = useState(0);
@@ -685,7 +687,8 @@ export function DatasetEpisodesPage() {
               onTimeUpdate={playback.onTimeUpdate}
               onLoadedMetadata={playback.onLoadedMetadata}
               onEnded={playback.onEnded}
-              onPause={playback.onPause}
+              probeThrottle={probeVideoThrottle}
+              onPlayingChange={playback.onPlayingChange}
               onFailure={playback.onFailure}
               layout={stageLayout}
               isPlaying={playback.isPlaying}
@@ -718,7 +721,9 @@ export function DatasetEpisodesPage() {
       {activeTab === 'curate' && selectedEpisode !== null && (
         <CuratePanel
           episode={selectedEpisode}
-          frameCount={selectedMeta?.frameCount ?? frames.length}
+          // The episode list knows the length at once; the frames request is
+          // capped, and until it has answered there is no number to fall back on.
+          frameCount={selectedMeta?.frameCount ?? (framesCurrent && !framesError ? frames.length : null)}
           trimStart={trimStart}
           trimEnd={trimEnd}
           onTrimStart={setTrimStart}

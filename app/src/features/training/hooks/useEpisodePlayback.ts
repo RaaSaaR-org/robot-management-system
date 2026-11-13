@@ -49,7 +49,12 @@ export interface EpisodePlayback {
   onTimeUpdate: () => void;
   onLoadedMetadata: (camera: string) => void;
   onEnded: () => void;
+  /** The primary element reported `play`. */
+  onPlay: () => void;
+  /** The primary element reported `pause`. */
   onPause: () => void;
+  /** `onPlay` and `onPause` as the one callback the viewer takes. */
+  onPlayingChange: (playing: boolean) => void;
   onFailure: (camera: string) => void;
 }
 
@@ -61,6 +66,11 @@ export interface EpisodePlayback {
  * are put back on every video the moment it has loaded; anything that stops
  * playback for real (the end, a failed load, a refused `play()`) comes back
  * here as well, so the button and the element never disagree.
+ *
+ * It is the only place the play state is kept: the element's own `play` and
+ * `pause` events arrive here too (TASK-482), and nothing else resets it when
+ * the episode changes. A video waiting out a rate limit is not a stop — it
+ * reloads by itself and is started then, like any newly loaded episode.
  */
 export function useEpisodePlayback(options: EpisodePlaybackOptions): EpisodePlayback {
   const { episodeKey, datasetKey, primaryCamera, windowFor, fallbackDuration } = options;
@@ -172,6 +182,11 @@ export function useEpisodePlayback(options: EpisodePlaybackOptions): EpisodePlay
     if (primary && Number.isFinite(primary.duration) && !windowFor(primaryCamera!)) setTime(primary.duration);
   }, [primaryCamera, windowFor, setPlaying, setTime]);
 
+  const onPlay = useCallback(() => {
+    // The element started without the button (a media key, the browser).
+    setPlaying(true);
+  }, [setPlaying]);
+
   const onPause = useCallback(() => {
     // Fired when the element stops for real — not when a new `src` resets it.
     const primary = primaryCamera ? videoRefs.current[primaryCamera] : null;
@@ -179,6 +194,11 @@ export function useEpisodePlayback(options: EpisodePlaybackOptions): EpisodePlay
     if (primary && primary.readyState === 0 && !primary.error) return;
     if (!primary || primary.paused) setPlaying(false);
   }, [primaryCamera, setPlaying]);
+
+  const onPlayingChange = useCallback((next: boolean) => {
+    if (next) onPlay();
+    else onPause();
+  }, [onPlay, onPause]);
 
   const onFailure = useCallback((camera: string) => {
     // The primary camera drives the clock; without it nothing is playing.
@@ -218,6 +238,6 @@ export function useEpisodePlayback(options: EpisodePlaybackOptions): EpisodePlay
 
   return {
     videoRefs, currentTime, duration, isPlaying, speed, setSpeed,
-    togglePlay, seek, onTimeUpdate, onLoadedMetadata, onEnded, onPause, onFailure,
+    togglePlay, seek, onTimeUpdate, onLoadedMetadata, onEnded, onPlay, onPause, onPlayingChange, onFailure,
   };
 }
