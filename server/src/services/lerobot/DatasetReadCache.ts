@@ -99,22 +99,44 @@ export function clearDatasetReadCaches(): void {
  * Run at most `limit` of the given tasks at once; the rest wait their turn in
  * order. A slot is handed straight to the next waiter, so the count never
  * exceeds the limit even when a task finishes and another arrives together.
+ *
+ * A task that has not settled after `maxHoldMs` gives its slot up and carries
+ * on outside the count. The storage client has no request timeout, so a call
+ * into a connection that went dead (a node that vanished mid-request) hangs
+ * for as long as the kernel keeps retransmitting; without this, `limit` such
+ * calls would hold every slot and no uncached read of any dataset could start
+ * until the process was restarted.
  */
-export function createGate(limit: number): <T>(task: () => Promise<T>) => Promise<T> {
+export function createGate(
+  limit: number,
+  maxHoldMs: number = Infinity,
+): <T>(task: () => Promise<T>) => Promise<T> {
   let active = 0;
   const waiting: Array<() => void> = [];
   return async (task) => {
     if (active >= limit) await new Promise<void>((resolve) => waiting.push(resolve));
     else active++;
-    try {
-      return await task();
-    } finally {
+    let held = true;
+    const release = () => {
+      if (!held) return;
+      held = false;
       const next = waiting.shift();
       if (next) next();
       else active--;
+    };
+    const overdue = Number.isFinite(maxHoldMs) ? setTimeout(release, maxHoldMs) : undefined;
+    overdue?.unref();
+    try {
+      return await task();
+    } finally {
+      clearTimeout(overdue);
+      release();
     }
   };
 }
+
+/** How long one uncached read may keep its slot; a healthy one takes well under a second. */
+const COLD_READ_MAX_HOLD_MS = 30_000;
 
 /**
  * Bounds reads that are NOT served from a cache. Each holds up to one row
@@ -122,7 +144,7 @@ export function createGate(limit: number): <T>(task: () => Promise<T>) => Promis
  * burst of first-time requests from being a burst of memory. Cache hits never
  * pass through here, and neither do requests waiting on a load already running.
  */
-export const coldReadGate = createGate(6);
+export const coldReadGate = createGate(6, COLD_READ_MAX_HOLD_MS);
 
 /** The dataset's episode table, read once per stored state and shared by concurrent callers. */
 export function cachedEpisodeTable(versionKey: string, load: () => Promise<EpisodeTable>): Promise<EpisodeTable> {

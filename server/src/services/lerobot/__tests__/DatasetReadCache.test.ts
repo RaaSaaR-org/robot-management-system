@@ -4,7 +4,7 @@
  * @feature datasets
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   cachedEpisodeTable,
   cachedLocation,
@@ -265,5 +265,37 @@ describe('createGate', () => {
     const gate = createGate(1);
     await expect(gate(async () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
     expect(await gate(async () => 'next')).toBe('next');
+  });
+
+  it('takes the slot back from a task that hangs, and does not free it twice when that task ends', async () => {
+    vi.useFakeTimers();
+    try {
+      const gate = createGate(1, 1000);
+      let finishHung!: (value: string) => void;
+      const hung = gate(() => new Promise<string>((resolve) => (finishHung = resolve)));
+      let running = 0;
+      let peak = 0;
+      const next = [1, 2].map((i) =>
+        gate(async () => {
+          peak = Math.max(peak, ++running);
+          await new Promise((r) => setTimeout(r, 10));
+          running--;
+          return i;
+        }),
+      );
+      // Both wait behind the hung read until its hold runs out.
+      await vi.advanceTimersByTimeAsync(999);
+      expect(running).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(running).toBe(1);
+      // The hung read ends late: its caller is answered, and no second slot appears.
+      finishHung('late');
+      expect(await hung).toBe('late');
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await Promise.all(next)).toEqual([1, 2]);
+      expect(peak).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -109,6 +109,9 @@ code; the pod's CPU limit is the queue.
   on a load already running do not pass the gate. The frames route fetches the
   episode table *before* taking a slot — otherwise six cold frame requests
   would hold every slot while waiting for the table load that needs one.
+  A read that has not settled after 30 s gives its slot up (review): the storage
+  client has no request timeout, so six calls into a dead connection would
+  otherwise hold every slot and stop all uncached reads until a restart.
 - **The event loop gets a turn.** Reads from memory resolve as microtasks, so a
   whole file would now decode in one uninterrupted stretch; the reader yields
   with `setImmediate` once decoding has run 8 ms.
