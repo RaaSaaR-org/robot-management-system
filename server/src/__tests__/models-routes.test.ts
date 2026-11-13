@@ -47,6 +47,17 @@ vi.mock('../repositories/index.js', () => ({
   modelVersionRepository: mockModelVersionRepository,
   skillDefinitionRepository: mockSkillDefinitionRepository,
   deploymentRepository: mockDeploymentRepository,
+  datasetRepository: { findById: vi.fn(async () => null) },
+}));
+
+// None of the models in this suite was uploaded to the instance (TASK-498):
+// nothing is stored for them, so nothing is removed and no storage is named.
+// What an uploaded one does is in routes/__tests__/model-uploads-routes.test.ts.
+vi.mock('../services/modelUpload/ModelUploadService.js', () => ({
+  modelUploadService: {
+    removeStoredFiles: vi.fn(async () => ({ removed: false, freedBytes: 0 })),
+    storageOf: vi.fn(async () => null),
+  },
 }));
 
 vi.mock('../services/buildAudit.js', () => ({ auditBuildAct: mockAudit }));

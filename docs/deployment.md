@@ -463,9 +463,11 @@ window (`RATE_LIMIT_WINDOW_MS`, one minute by default):
 | Dataset browsing | `RATE_LIMIT_MEDIA_MAX` | 3000 | `GET /api/datasets/:id/episodes…` (list, frames, video with Range), `/stats`, `/modality`, `POST …/video-ticket`, and what a dataset download reads: `GET /api/datasets/:id/files` and `…/files/content` |
 | Writes | `RATE_LIMIT_WRITE_MAX` | 300 | Every non-GET request, in addition to the general budget |
 
-The parts of a direct dataset upload (`PUT …/upload/files/:n/parts/:n`) are
-counted by none of them — a dataset is thousands of parts, and the upload
-service bounds them by concurrency instead ([Dataset upload](dataset-upload.md)).
+The parts of a direct dataset upload (`PUT …/upload/files/:n/parts/:n`) and of
+a direct model upload (`PUT /api/models/uploads/:id/files/:n/parts/:n`) are
+counted by none of them — a dataset is thousands of parts, a checkpoint
+hundreds, and the upload services bound them by concurrency instead
+([Dataset upload](dataset-upload.md), [Model upload](model-upload.md)).
 
 Credential endpoints (`/api/auth/login`, `/register`, password reset) keep
 their own limit of 5 per minute, and MFA code entry its own.

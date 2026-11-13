@@ -84,8 +84,9 @@ export type ModelDeploymentStatus = (typeof ModelDeploymentStatuses)[number];
 
 // Where a model came from (TASK-238). 'training' is one this server produced,
 // 'imported' one registered from outside it, 'derived' a fine-tune of another
-// registered model.
-export const ModelSourceKinds = ['training', 'imported', 'derived'] as const;
+// registered model, 'uploaded' one whose files were sent straight into this
+// instance's storage (TASK-498).
+export const ModelSourceKinds = ['training', 'imported', 'derived', 'uploaded'] as const;
 export type ModelSourceKind = (typeof ModelSourceKinds)[number];
 
 // ============================================================================
@@ -704,6 +705,15 @@ export interface ModelVersion {
   trainingMetrics: TrainingMetrics;
   validationMetrics: TrainingMetrics;
   deploymentStatus: ModelDeploymentStatus;
+  // What a model with no TrainingJob row here says about itself (TASK-498);
+  // a model this server trained reads the first two off `trainingJob`.
+  baseModel: BaseModel | null;
+  /** The dataset it was trained on — a plain id; the dataset may be gone. */
+  datasetId: string | null;
+  notes: string | null;
+  /** Bytes and files this server stores for the model; null when it only points elsewhere. */
+  artifactSizeBytes: number | null;
+  artifactFileCount: number | null;
   createdAt: Date;
   updatedAt: Date;
 
@@ -716,6 +726,8 @@ export interface ModelVersion {
 }
 
 export interface CreateModelVersionInput {
+  /** Set by a direct upload, whose ModelVersion takes the upload's id (TASK-498). */
+  id?: string;
   skillId: string | null;
   // Optional since TASK-238 — an imported model has no training job here.
   trainingJobId?: string | null;
@@ -729,6 +741,11 @@ export interface CreateModelVersionInput {
   trainingMetrics?: TrainingMetrics;
   validationMetrics?: TrainingMetrics;
   deploymentStatus?: ModelDeploymentStatus;
+  baseModel?: BaseModel | null;
+  datasetId?: string | null;
+  notes?: string | null;
+  artifactSizeBytes?: number | null;
+  artifactFileCount?: number | null;
 }
 
 export interface UpdateModelVersionInput {

@@ -945,10 +945,55 @@ describe('ModelVersionRepository', () => {
         trainingMetrics: JSON.stringify({}),
         validationMetrics: JSON.stringify({}),
         deploymentStatus: 'staging',
+        // TASK-498 columns: only a model with no TrainingJob row states these
+        // itself, and only an uploaded one has an artifact stored here.
+        baseModel: null,
+        datasetId: null,
+        notes: null,
+        artifactSizeBytes: null,
+        artifactFileCount: null,
       },
     });
     expect(result.id).toBe('mv-1');
     expect(result.checkpointUri).toBeUndefined();
+    expect(result.artifactSizeBytes).toBeNull();
+  });
+
+  it('create() takes the id, the stated origin and the stored size of a directly uploaded model (TASK-498)', async () => {
+    prismaMock.modelVersion.create.mockResolvedValue({
+      ...makeDbModelVersion(),
+      baseModel: 'groot_n1_7',
+      datasetId: 'ds-1',
+      notes: '5000 steps',
+      artifactSizeBytes: BigInt(6_918_209_810),
+      artifactFileCount: 15,
+    });
+    const result = await repo.create({
+      id: 'upload-1',
+      skillId: null,
+      sourceKind: 'uploaded',
+      version: 'g11-step-5000',
+      artifactUri: 's3://production-models/uploads/upload-1/',
+      baseModel: 'groot_n1_7',
+      datasetId: 'ds-1',
+      notes: '5000 steps',
+      artifactSizeBytes: 6_918_209_810,
+      artifactFileCount: 15,
+    });
+    expect(prismaMock.modelVersion.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        id: 'upload-1',
+        sourceKind: 'uploaded',
+        baseModel: 'groot_n1_7',
+        datasetId: 'ds-1',
+        artifactSizeBytes: BigInt(6_918_209_810),
+        artifactFileCount: 15,
+      }),
+    });
+    // A BigInt does not survive JSON.stringify: the domain row carries a number.
+    expect(result.artifactSizeBytes).toBe(6_918_209_810);
+    expect(result.baseModel).toBe('groot_n1_7');
+    expect(JSON.stringify(result)).toContain('"artifactSizeBytes":6918209810');
   });
 
   it('findById() maps a row', async () => {

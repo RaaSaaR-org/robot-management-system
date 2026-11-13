@@ -302,6 +302,14 @@ function dbModelVersionToDomain(db: PrismaModelVersion): ModelVersion {
     trainingMetrics: JSON.parse(db.trainingMetrics) as TrainingMetrics,
     validationMetrics: JSON.parse(db.validationMetrics) as TrainingMetrics,
     deploymentStatus: db.deploymentStatus as ModelDeploymentStatus,
+    baseModel: (db.baseModel as ModelVersion['baseModel']) ?? null,
+    datasetId: db.datasetId ?? null,
+    notes: db.notes ?? null,
+    // A BigInt does not survive JSON.stringify; no artifact is near 2^53 bytes.
+    artifactSizeBytes: db.artifactSizeBytes === null || db.artifactSizeBytes === undefined
+      ? null
+      : Number(db.artifactSizeBytes),
+    artifactFileCount: db.artifactFileCount ?? null,
     createdAt: db.createdAt,
     updatedAt: db.updatedAt,
   };
@@ -1065,6 +1073,7 @@ export class ModelVersionRepository {
   async create(input: CreateModelVersionInput): Promise<ModelVersion> {
     const modelVersion = await prisma.modelVersion.create({
       data: {
+        ...(input.id ? { id: input.id } : {}),
         skillId: input.skillId,
         trainingJobId: input.trainingJobId ?? null,
         name: input.name ?? null,
@@ -1077,6 +1086,13 @@ export class ModelVersionRepository {
         trainingMetrics: JSON.stringify(input.trainingMetrics ?? {}),
         validationMetrics: JSON.stringify(input.validationMetrics ?? {}),
         deploymentStatus: input.deploymentStatus ?? 'staging',
+        baseModel: input.baseModel ?? null,
+        datasetId: input.datasetId ?? null,
+        notes: input.notes ?? null,
+        artifactSizeBytes: input.artifactSizeBytes === null || input.artifactSizeBytes === undefined
+          ? null
+          : BigInt(input.artifactSizeBytes),
+        artifactFileCount: input.artifactFileCount ?? null,
       },
     });
     return dbModelVersionToDomain(modelVersion);

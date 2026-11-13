@@ -26,6 +26,8 @@ export const HARD_MAX_CHUNK_BYTES = 64 * MIB;
 export const DEFAULT_CHUNK_BYTES = 32 * MIB;
 export const DEFAULT_MAX_TOTAL_BYTES = 10 * GIB;
 export const DEFAULT_MAX_FILES = 20_000;
+export const DEFAULT_MODEL_MAX_TOTAL_BYTES = 64 * GIB;
+export const DEFAULT_MODEL_MAX_FILES = 2_000;
 export const DEFAULT_IDLE_MINUTES = 360;
 export const DEFAULT_MAX_CONCURRENT_PARTS = 4;
 /** S3's own ceiling on the parts of one multipart upload. */
@@ -51,8 +53,9 @@ export interface UploadLimits {
   maxConcurrentParts: number;
   /**
    * What the object store can hold in all, when the operator says
-   * (`DATASET_UPLOAD_STORE_CAPACITY_BYTES`). S3 reports no free space, so
-   * without it an upload into RustFS is checked against `maxTotalBytes` only.
+   * (`DATASET_UPLOAD_STORE_CAPACITY_BYTES`, read by every kind of upload). S3
+   * reports no free space, so without it an upload into RustFS is checked
+   * against `maxTotalBytes` only.
    */
   storeCapacityBytes: number | null;
 }
@@ -62,26 +65,57 @@ function positiveNumber(name: string, fallback: number, env: NodeJS.ProcessEnv):
   if (raw === undefined || raw.trim() === '') return fallback;
   const value = Number(raw);
   if (Number.isFinite(value) && value > 0) return value;
-  console.warn(`[DatasetUpload] ${name}=${raw} is not a positive number; using ${fallback}`);
+  console.warn(`[Upload] ${name}=${raw} is not a positive number; using ${fallback}`);
   return fallback;
 }
 
-/** The limits this process runs with, read from the environment on every call. */
-export function uploadLimits(env: NodeJS.ProcessEnv = process.env): UploadLimits {
-  const chunk = Math.floor(positiveNumber('DATASET_UPLOAD_CHUNK_BYTES', DEFAULT_CHUNK_BYTES, env));
+/** What differs between the kinds of upload: the variable prefix and two defaults. */
+interface LimitDefaults {
+  prefix: string;
+  maxTotalBytes: number;
+  maxFiles: number;
+}
+
+function readLimits(env: NodeJS.ProcessEnv, defaults: LimitDefaults): UploadLimits {
+  const name = (suffix: string): string => `${defaults.prefix}_${suffix}`;
+  const chunk = Math.floor(positiveNumber(name('CHUNK_BYTES'), DEFAULT_CHUNK_BYTES, env));
+  // One object store, one capacity: every kind of upload reads the same variable.
   const capacity = env.DATASET_UPLOAD_STORE_CAPACITY_BYTES?.trim()
     ? positiveNumber('DATASET_UPLOAD_STORE_CAPACITY_BYTES', 0, env)
     : 0;
   return {
     chunkBytes: Math.min(HARD_MAX_CHUNK_BYTES, Math.max(MIN_CHUNK_BYTES, chunk)),
-    maxTotalBytes: Math.floor(positiveNumber('DATASET_UPLOAD_MAX_BYTES', DEFAULT_MAX_TOTAL_BYTES, env)),
-    maxFiles: Math.floor(positiveNumber('DATASET_UPLOAD_MAX_FILES', DEFAULT_MAX_FILES, env)),
-    idleMs: positiveNumber('DATASET_UPLOAD_IDLE_MINUTES', DEFAULT_IDLE_MINUTES, env) * 60_000,
+    maxTotalBytes: Math.floor(positiveNumber(name('MAX_BYTES'), defaults.maxTotalBytes, env)),
+    maxFiles: Math.floor(positiveNumber(name('MAX_FILES'), defaults.maxFiles, env)),
+    idleMs: positiveNumber(name('IDLE_MINUTES'), DEFAULT_IDLE_MINUTES, env) * 60_000,
     maxConcurrentParts: Math.max(1, Math.floor(
-      positiveNumber('DATASET_UPLOAD_MAX_CONCURRENT_PARTS', DEFAULT_MAX_CONCURRENT_PARTS, env),
+      positiveNumber(name('MAX_CONCURRENT_PARTS'), DEFAULT_MAX_CONCURRENT_PARTS, env),
     )),
     storeCapacityBytes: capacity > 0 ? Math.floor(capacity) : null,
   };
+}
+
+/** The limits this process runs with, read from the environment on every call. */
+export function uploadLimits(env: NodeJS.ProcessEnv = process.env): UploadLimits {
+  return readLimits(env, {
+    prefix: 'DATASET_UPLOAD',
+    maxTotalBytes: DEFAULT_MAX_TOTAL_BYTES,
+    maxFiles: DEFAULT_MAX_FILES,
+  });
+}
+
+/**
+ * The limits of a model checkpoint upload (TASK-498): the same knobs under
+ * `MODEL_UPLOAD_*`. A checkpoint is few files and many bytes — a GR00T N1.7
+ * finetune is 6.5 GiB in a dozen files — so the size cap is higher and the
+ * file cap lower than a dataset's.
+ */
+export function modelUploadLimits(env: NodeJS.ProcessEnv = process.env): UploadLimits {
+  return readLimits(env, {
+    prefix: 'MODEL_UPLOAD',
+    maxTotalBytes: DEFAULT_MODEL_MAX_TOTAL_BYTES,
+    maxFiles: DEFAULT_MODEL_MAX_FILES,
+  });
 }
 
 /**
@@ -206,24 +240,30 @@ export function checkInfo(info: unknown): LeRobotInfoV3 {
   return info as unknown as LeRobotInfoV3;
 }
 
+/** One declared file that passed the path, size and checksum checks. */
+export interface DeclaredFile {
+  path: string;
+  size: number;
+  sha256?: string;
+}
+
+/** What an upload is called in a refusal, and which variable raises its size cap. */
+export interface ManifestNouns {
+  /** "dataset" / "model" */
+  thing: string;
+  maxBytesVariable: string;
+}
+
 /**
- * Check the declared files and split them into what will be uploaded and what
- * is left out.
+ * Read the declared `files` of a start request: every entry a safe relative
+ * path, a size and an optional sha256, no path twice.
  *
  * An unsafe path refuses the whole request — a client that sends `../x` is
- * wrong in a way worth stopping for. A safe path that a LeRobot tree does not
- * need (a README, a `.gitattributes`) is only listed as ignored, so a client
- * can declare a directory as it is. Which files a tree needs is the importer's
- * `selectRepoFiles`, so both ways in accept exactly the same tree.
+ * wrong in a way worth stopping for.
  */
-export function checkManifest(
-  declared: unknown,
-  info: LeRobotInfoV3,
-  chunkSize: number,
-  limits: UploadLimits,
-): ManifestCheck {
+export function parseDeclaredFiles(declared: unknown, limits: UploadLimits, nouns: ManifestNouns): DeclaredFile[] {
   if (!Array.isArray(declared) || declared.length === 0) {
-    throw new DatasetUploadError('INVALID_MANIFEST', 'files is required: an array of { path, size } for every file of the dataset');
+    throw new DatasetUploadError('INVALID_MANIFEST', `files is required: an array of { path, size } for every file of the ${nouns.thing}`);
   }
   if (declared.length > limits.maxFiles) {
     throw new DatasetUploadError(
@@ -235,8 +275,7 @@ export function checkManifest(
   }
 
   const seen = new Set<string>();
-  const accepted: Array<{ path: string; size: number; sha256?: string }> = [];
-  const ignored: IgnoredFile[] = [];
+  const out: DeclaredFile[] = [];
   for (const [index, raw] of declared.entries()) {
     if (!isRecord(raw)) {
       throw new DatasetUploadError('INVALID_MANIFEST', `files[${index}] must be an object with path and size`);
@@ -263,26 +302,95 @@ export function checkManifest(
         throw new DatasetUploadError('INVALID_MANIFEST', `files[${index}] (${path}): sha256 must be 64 hex characters`, 400, { path });
       }
     }
-    if (selectRepoFiles([{ path, size: raw.size }], true).length === 0) {
-      ignored.push({
-        path,
-        reason: 'not part of a LeRobot dataset tree (meta/**, data/**/*.parquet, videos/**/*.mp4, images/**)',
-      });
-      continue;
-    }
-    accepted.push({ path, size: raw.size, ...(sha256 ? { sha256 } : {}) });
+    out.push({ path, size: raw.size, ...(sha256 ? { sha256 } : {}) });
   }
+  return out;
+}
 
+/**
+ * Turn the files that will be uploaded into session entries: an id, a part
+ * count, and the checks that need the whole list — no path that is both a file
+ * and a directory, no file over S3's part ceiling, and the total under the cap.
+ *
+ * `declaredPaths` is every path the client declared, the ones left out
+ * included: a file the upload skips still cannot be a directory of one it takes.
+ */
+export function toUploadEntries(
+  accepted: DeclaredFile[],
+  declaredPaths: ReadonlySet<string>,
+  chunkSize: number,
+  limits: UploadLimits,
+  nouns: ManifestNouns,
+): { files: UploadFileEntry[]; totalBytes: number } {
   // `a/b` as a file and `a/b/c` under it cannot both exist on a disk.
   for (const { path } of accepted) {
     let slash = path.indexOf('/');
     while (slash !== -1) {
       const parent = path.slice(0, slash);
-      if (seen.has(parent)) {
+      if (declaredPaths.has(parent)) {
         throw new DatasetUploadError('INVALID_PATH', `${parent} is declared as a file and as a directory of ${path}`, 400, { path });
       }
       slash = path.indexOf('/', slash + 1);
     }
+  }
+
+  const files: UploadFileEntry[] = accepted.map((file, id) => ({
+    id,
+    ...file,
+    partCount: partCountOf(file.size, chunkSize),
+  }));
+  const tooManyParts = files.find((f) => f.partCount > MAX_PARTS_PER_FILE);
+  if (tooManyParts) {
+    throw new DatasetUploadError(
+      'FILE_TOO_LARGE',
+      `${tooManyParts.path} would need ${tooManyParts.partCount} parts of ${chunkSize} bytes; the limit is ${MAX_PARTS_PER_FILE}.`,
+      413,
+      { path: tooManyParts.path },
+    );
+  }
+
+  const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+  if (totalBytes > limits.maxTotalBytes) {
+    throw new DatasetUploadError(
+      'UPLOAD_TOO_LARGE',
+      `The ${nouns.thing} is ${totalBytes} bytes; this server accepts at most ${limits.maxTotalBytes} bytes per upload `
+        + `(${nouns.maxBytesVariable}).`,
+      413,
+      { totalBytes, maxTotalBytes: limits.maxTotalBytes },
+    );
+  }
+  return { files, totalBytes };
+}
+
+const DATASET_NOUNS: ManifestNouns = { thing: 'dataset', maxBytesVariable: 'DATASET_UPLOAD_MAX_BYTES' };
+
+/**
+ * Check the declared files and split them into what will be uploaded and what
+ * is left out.
+ *
+ * A safe path that a LeRobot tree does not need (a README, a `.gitattributes`)
+ * is only listed as ignored, so a client can declare a directory as it is.
+ * Which files a tree needs is the importer's `selectRepoFiles`, so both ways
+ * in accept exactly the same tree.
+ */
+export function checkManifest(
+  declared: unknown,
+  info: LeRobotInfoV3,
+  chunkSize: number,
+  limits: UploadLimits,
+): ManifestCheck {
+  const all = parseDeclaredFiles(declared, limits, DATASET_NOUNS);
+  const accepted: DeclaredFile[] = [];
+  const ignored: IgnoredFile[] = [];
+  for (const file of all) {
+    if (selectRepoFiles([{ path: file.path, size: file.size }], true).length === 0) {
+      ignored.push({
+        path: file.path,
+        reason: 'not part of a LeRobot dataset tree (meta/**, data/**/*.parquet, videos/**/*.mp4, images/**)',
+      });
+      continue;
+    }
+    accepted.push(file);
   }
 
   const has = (test: (path: string) => boolean): boolean => accepted.some((f) => test(f.path));
@@ -307,31 +415,9 @@ export function checkManifest(
     );
   }
 
-  const files: UploadFileEntry[] = accepted.map((file, id) => ({
-    id,
-    ...file,
-    partCount: partCountOf(file.size, chunkSize),
-  }));
-  const tooManyParts = files.find((f) => f.partCount > MAX_PARTS_PER_FILE);
-  if (tooManyParts) {
-    throw new DatasetUploadError(
-      'FILE_TOO_LARGE',
-      `${tooManyParts.path} would need ${tooManyParts.partCount} parts of ${chunkSize} bytes; the limit is ${MAX_PARTS_PER_FILE}.`,
-      413,
-      { path: tooManyParts.path },
-    );
-  }
-
-  const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
-  if (totalBytes > limits.maxTotalBytes) {
-    throw new DatasetUploadError(
-      'UPLOAD_TOO_LARGE',
-      `The dataset is ${totalBytes} bytes; this server accepts at most ${limits.maxTotalBytes} bytes per upload `
-        + '(DATASET_UPLOAD_MAX_BYTES).',
-      413,
-      { totalBytes, maxTotalBytes: limits.maxTotalBytes },
-    );
-  }
+  const { files, totalBytes } = toUploadEntries(
+    accepted, new Set(all.map((f) => f.path)), chunkSize, limits, DATASET_NOUNS,
+  );
 
   const importMode = has((p) => p.startsWith('videos/') || p.startsWith('images/')) ? 'full' : 'metadata';
   return { files, ignored, totalBytes, importMode };

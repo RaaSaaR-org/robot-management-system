@@ -15,7 +15,9 @@ import { cn, formatTimeAgo } from '@/shared/utils';
 import { useDeploymentStore, selectSkills } from '../store';
 import { MODEL_SOURCE_KIND_LABELS, ModelSourceKinds } from '../types';
 import type { ModelVersion } from '../types';
-import { getModelDisplayName, resolveSkillName, UNLINKED_SKILL_LABEL } from './models/modelDisplay';
+import {
+  formatArtifactSize, getBaseModelLabel, getModelDisplayName, getVersionLabel, resolveSkillName, UNLINKED_SKILL_LABEL,
+} from './models/modelDisplay';
 
 export interface ModelBrowserProps {
   modelVersions: ModelVersion[];
@@ -85,7 +87,9 @@ export function ModelBrowser({
       if (skill === UNLINKED_FILTER && v.skillId) return false;
       if (skill && skill !== UNLINKED_FILTER && v.skillId !== skill) return false;
       if (!q) return true;
-      const text = [getModelDisplayName(v), v.version, resolveSkillName(v, skillNamesById) ?? ''].join(' ');
+      const text = [
+        getModelDisplayName(v), v.version, resolveSkillName(v, skillNamesById) ?? '', getBaseModelLabel(v) ?? '',
+      ].join(' ');
       return text.toLowerCase().includes(q);
     });
   }, [modelVersions, query, status, source, skill, skillNamesById]);
@@ -111,7 +115,9 @@ export function ModelBrowser({
       cell: (v) => (
         <div className="min-w-0 max-w-[16rem] sm:max-w-sm">
           <div className="truncate font-medium text-ink-primary">{getModelDisplayName(v)}</div>
-          <div className="truncate text-[13px] text-ink-tertiary">v{v.version}</div>
+          <div className="truncate text-[13px] text-ink-tertiary">
+            {getVersionLabel(v.version)}{getBaseModelLabel(v) ? ` · ${getBaseModelLabel(v)}` : ''}
+          </div>
         </div>
       ),
     },
@@ -143,6 +149,14 @@ export function ModelBrowser({
         const name = parentName(v);
         return name ? <span className="text-ink-secondary">{name}</span> : null;
       },
+    },
+    {
+      // Only a model whose files this instance stores has a size; the rest point elsewhere.
+      key: 'size', header: 'Size', align: 'right', sortable: true, hideBelow: 'lg',
+      sortValue: (v) => v.artifactSizeBytes ?? null,
+      cell: (v) => (typeof v.artifactSizeBytes === 'number'
+        ? <span className="tabular-nums text-ink-secondary">{formatArtifactSize(v.artifactSizeBytes)}</span>
+        : null),
     },
     {
       key: 'createdAt', header: 'Created', align: 'right', sortable: true, hideBelow: 'md',
@@ -205,7 +219,7 @@ export function ModelBrowser({
               action={<Button variant="secondary" onClick={clearFilters}>Clear filters</Button>} />
           ) : (
             <EmptyState icon={<Boxes />} title="No models yet"
-              description="Models arrive from training runs, or register one trained elsewhere."
+              description="Models arrive from training runs. Send a checkpoint from your machine with “rmsctl models upload <dir> --version <v>”, or register one that is stored elsewhere."
               action={emptyAction} />
           )}
         />

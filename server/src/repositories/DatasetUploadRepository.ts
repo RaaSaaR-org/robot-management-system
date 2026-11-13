@@ -11,12 +11,10 @@
 
 import { prisma } from '../database/index.js';
 import type { UploadFileEntry } from '../services/datasetUpload/uploadManifest.js';
+import type { UploadState } from '../services/datasetUpload/uploadSession.js';
 
-/**
- * `cancelling` exists so a cancel that died halfway is finished by the reaper:
- * the row is the only record of which multipart uploads are still open.
- */
-export type DatasetUploadState = 'uploading' | 'processing' | 'completed' | 'failed' | 'cancelling';
+/** The states of an upload session — shared with the model upload (TASK-498). */
+export type DatasetUploadState = UploadState;
 
 export interface DatasetUploadSession {
   datasetId: string;

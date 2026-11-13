@@ -59,7 +59,16 @@ export interface UploadObjectStore {
   listAll(bucket: string, prefix?: string): AsyncGenerator<ObjectInfo>;
   delete(bucket: string, key: string): Promise<void>;
   deletePrefix(bucket: string, prefix: string): Promise<number>;
-  getStream(bucket: string, key: string): Promise<Readable>;
+  getStream(
+    bucket: string, key: string,
+    range?: { start: number; end: number },
+    options?: { signal?: AbortSignal },
+  ): Promise<Readable>;
+}
+
+export interface OpenFileOptions {
+  range?: { start: number; end: number };
+  signal?: AbortSignal;
 }
 
 /** A part the store has taken but the upload has not yet accepted. */
@@ -96,8 +105,12 @@ export interface UploadSink {
   received(files: UploadFileEntry[], chunkSize: number): Promise<Map<number, ReceivedFile>>;
   /** Join the parts of a multi-part file into the file at its final path. */
   assemble(file: UploadFileEntry, chunkSize: number): Promise<void>;
-  /** The bytes of a file at its final path, for the whole-file checksum. */
-  open(file: UploadFileEntry): Promise<Readable>;
+  /**
+   * The bytes of a file at its final path — all of them for the whole-file
+   * checksum, or the inclusive `range` a download asks for. The caller owns
+   * the stream; `signal` gives it back when a reader walks away.
+   */
+  open(file: UploadFileEntry, options?: OpenFileOptions): Promise<Readable>;
   /** Drop what only the upload itself needed, once every file is in place. */
   finalize(): Promise<void>;
   /** Remove everything this upload wrote: open multipart uploads, parts, files. */
@@ -283,8 +296,11 @@ export class RustFsUploadSink implements UploadSink {
     await this.store().completeMultipartUpload(this.bucket, key, uploadId, wanted);
   }
 
-  async open(file: UploadFileEntry): Promise<Readable> {
-    return this.store().getStream(this.bucket, this.key(file));
+  async open(file: UploadFileEntry, options: OpenFileOptions = {}): Promise<Readable> {
+    return this.store().getStream(
+      this.bucket, this.key(file), options.range,
+      options.signal ? { signal: options.signal } : undefined,
+    );
   }
 
   async finalize(): Promise<void> {
@@ -351,7 +367,11 @@ export class LocalUploadSink implements UploadSink {
   private readonly root: string;
   private readonly staging: string;
 
-  constructor(root: string) {
+  constructor(
+    root: string,
+    /** What is stored here and which variable moves it — for the sentence of a refusal. */
+    private readonly label: { what: string; variable: string } = { what: 'dataset', variable: 'DATASET_UPLOAD_DIR' },
+  ) {
     this.root = resolvePath(root);
     this.storagePath = `${this.root}/`;
     this.staging = localStagingDir(this.root);
@@ -361,7 +381,7 @@ export class LocalUploadSink implements UploadSink {
     const full = resolvePath(this.root, file.path);
     // The manifest check already refused such a path; this is the second lock.
     if (!full.startsWith(this.root + sep)) {
-      throw new DatasetUploadError('INVALID_PATH', `${file.path} would land outside the dataset root`);
+      throw new DatasetUploadError('INVALID_PATH', `${file.path} would land outside the ${this.label.what} root`);
     }
     return full;
   }
@@ -390,8 +410,8 @@ export class LocalUploadSink implements UploadSink {
       if (code === 'EACCES' || code === 'EROFS' || code === 'EPERM') {
         throw new DatasetUploadError(
           'STORAGE_UNAVAILABLE',
-          `Local dataset storage ${this.root} is not writable (${code}); `
-            + 'set DATASET_UPLOAD_DIR to a writable path or configure RustFS.',
+          `Local ${this.label.what} storage ${this.root} is not writable (${code}); `
+            + `set ${this.label.variable} to a writable path or configure RustFS.`,
           503,
         );
       }
@@ -487,8 +507,18 @@ export class LocalUploadSink implements UploadSink {
     await rm(join(this.staging, String(file.id)), { recursive: true, force: true });
   }
 
-  async open(file: UploadFileEntry): Promise<Readable> {
-    return createReadStream(this.finalPath(file));
+  async open(file: UploadFileEntry, options: OpenFileOptions = {}): Promise<Readable> {
+    const stream = createReadStream(this.finalPath(file), options.range ?? {});
+    const signal = options.signal;
+    if (signal) {
+      const release = (): void => { stream.destroy(); };
+      if (signal.aborted) release();
+      else {
+        signal.addEventListener('abort', release, { once: true });
+        stream.once('close', () => signal.removeEventListener('abort', release));
+      }
+    }
+    return stream;
   }
 
   async finalize(): Promise<void> {

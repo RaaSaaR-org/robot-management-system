@@ -11,7 +11,7 @@ import { cn, formatDate } from '@/shared/utils';
 import { useModelVersionFromStore } from '../hooks/useModelVersions';
 import { MODEL_SOURCE_KIND_LABELS } from '../types';
 import type { ModelVersion } from '../types';
-import { getModelDisplayName } from './models/modelDisplay';
+import { getModelDisplayName, getVersionLabel } from './models/modelDisplay';
 
 export interface ModelVersionCardProps {
   version: ModelVersion;
@@ -46,7 +46,7 @@ export function ModelVersionCard({ version, onClick, selected, compact = false, 
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-ink-primary">{getModelDisplayName(version)}</div>
-          <div className="truncate text-[13px] text-ink-tertiary">v{version.version}</div>
+          <div className="truncate text-[13px] text-ink-tertiary">{getVersionLabel(version.version)}</div>
         </div>
         <div className="flex flex-col items-end gap-1">
           <StatusTag status={version.deploymentStatus} size="sm" />

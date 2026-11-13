@@ -125,10 +125,10 @@ export class FakeObjectStore implements UploadObjectStore {
     return deleted;
   }
 
-  async getStream(bucket: string, key: string): Promise<Readable> {
+  async getStream(bucket: string, key: string, range?: { start: number; end: number }): Promise<Readable> {
     const data = this.objects.get(this.objectKey(bucket, key));
     if (!data) throw Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' });
-    return Readable.from([data]);
+    return Readable.from([range ? data.subarray(range.start, range.end + 1) : data]);
   }
 
   /** Keys of the objects in `bucket`, sorted. */

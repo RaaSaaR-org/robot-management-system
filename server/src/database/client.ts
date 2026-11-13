@@ -94,6 +94,8 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   // EXCEPTIONS in __tests__/tenantAllowlist.test.ts.
   'SkillDefinition',
   'SkillChain',
+  // TASK-498 direct model upload sessions
+  'ModelUpload',
 ]);
 
 const globalForPrisma = globalThis as unknown as {
