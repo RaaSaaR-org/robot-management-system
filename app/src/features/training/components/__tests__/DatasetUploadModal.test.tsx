@@ -1,190 +1,349 @@
 /**
  * @file DatasetUploadModal.test.tsx
- * @description What the wizard does while the server is still working, and what
- *              it says when it cannot find out.
+ * @description The upload dialog on the direct upload API (TASK-481): what it
+ *              shows about a folder before anything is sent, which folders it
+ *              refuses, how a server refusal reads, and what closing and
+ *              cancelling do to an upload that is running.
  * @feature training
- *
- * The modal had no tests. Every case here is one the TASK-217 review
- * reproduced against the running app: a successful upload reported as failed, a
- * poll that kept running after the modal was closed, a green tick painted over
- * sixty consecutive failed status queries, and a robot-types fetch whose
- * failure was swallowed.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { DatasetUploadModal } from '../DatasetUploadModal';
-import type { Dataset } from '../../types';
+import { UploadRefusal, type PartAck, type PartRequest } from '../../api/datasetUploadApi';
+import { resetDatasetUploadStore, useDatasetUploadStore } from '../../store/datasetUploadStore';
+import { useTrainingStore } from '../../store/trainingStore';
 
-const listRobotTypes = vi.fn();
-const createDataset = vi.fn();
-const initiateUpload = vi.fn();
-const completeUpload = vi.fn();
-const getDataset = vi.fn();
+const api = vi.hoisted(() => ({
+  start: vi.fn(), status: vi.fn(), finish: vi.fn(), cancel: vi.fn(), sendPart: vi.fn(),
+}));
+const training = vi.hoisted(() => ({ listRobotTypes: vi.fn(), getDataset: vi.fn() }));
+const confirmMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../api', () => ({
-  trainingApi: {
-    listRobotTypes: (...a: unknown[]) => listRobotTypes(...a),
-    createDataset: (...a: unknown[]) => createDataset(...a),
-    initiateUpload: (...a: unknown[]) => initiateUpload(...a),
-    completeUpload: (...a: unknown[]) => completeUpload(...a),
-    getDataset: (...a: unknown[]) => getDataset(...a),
-  },
+vi.mock('../../api/datasetUploadApi', async (original) => ({
+  ...(await original<typeof import('../../api/datasetUploadApi')>()),
+  datasetUploadApi: api,
+}));
+vi.mock('../../api/trainingApi', () => ({ trainingApi: training }));
+vi.mock('@/shared/components/ui', async (original) => ({
+  ...(await original<typeof import('@/shared/components/ui')>()),
+  confirm: confirmMock,
 }));
 
-// The PUT to the presigned URL. Not the subject here.
-class FakeXHR {
-  upload = { addEventListener: () => {} };
-  addEventListener(event: string, fn: () => void) { if (event === 'load') this.onload = fn; }
-  onload: (() => void) | null = null;
-  status = 200;
-  open() {}
-  setRequestHeader() {}
-  send() { queueMicrotask(() => this.onload?.()); }
+const CHUNK = 10;
+const INFO = {
+  codebase_version: 'v3.0', robot_type: 'unitree_g1_dex3', fps: 30,
+  total_episodes: 80, total_frames: 55695,
+  features: {
+    action: { dtype: 'float32', shape: [31] },
+    'observation.state': { dtype: 'float32', shape: [31] },
+    'observation.images.head': { dtype: 'video' },
+    'observation.images.wrist': { dtype: 'video' },
+  },
+};
+
+/** A file as a directory input hands it over, readable in jsdom. */
+function picked(relativePath: string, content: string, size = content.length): File {
+  const file = new File([content], relativePath.split('/').pop()!);
+  Object.defineProperties(file, {
+    webkitRelativePath: { value: relativePath },
+    size: { value: size },
+    text: { value: () => Promise.resolve(content) },
+    slice: { value: (start: number, end: number) => ({ arrayBuffer: () => Promise.resolve(new ArrayBuffer(end - start)) }) },
+  });
+  return file;
 }
 
-function ready(over: Partial<Dataset> = {}): Dataset {
+const DATASET = () => [
+  picked('bottles/README.md', 'read me'),
+  picked('bottles/meta/info.json', JSON.stringify(INFO)),
+  picked('bottles/meta/episodes/chunk-000/file-000.parquet', 'e'),
+  picked('bottles/data/chunk-000/file-000.parquet', 'd'),
+  picked('bottles/videos/observation.images.head/chunk-000/file-000.mp4', 'v', 25),
+];
+
+/** The start answer for `DATASET()`: ids in manifest order, parts of ten bytes. */
+function started() {
+  const files = [
+    { path: 'data/chunk-000/file-000.parquet', size: 1 },
+    { path: 'meta/episodes/chunk-000/file-000.parquet', size: 1 },
+    { path: 'meta/info.json', size: JSON.stringify(INFO).length },
+    { path: 'videos/observation.images.head/chunk-000/file-000.mp4', size: 25 },
+  ].map((f, id) => ({ ...f, id, partCount: Math.max(1, Math.ceil(f.size / CHUNK)) }));
   return {
-    id: 'ds1', name: 'Stub', robotTypeId: 'rt1', storagePath: '/x/',
-    lerobotVersion: 'v3.0', fps: 10.12, totalFrames: 1234, totalDuration: 121.9,
-    demonstrationCount: 1, qualityScore: 70,
-    infoJson: {} as Dataset['infoJson'], statsJson: {} as Dataset['statsJson'],
-    status: 'ready', createdAt: '2026-08-23T00:00:00.000Z', updatedAt: '2026-08-23T00:00:00.000Z',
-    ...over,
+    datasetId: 'ds1', status: 'uploading', state: 'uploading', robotTypeId: 'rt1', storage: 'rustfs',
+    chunkSize: CHUNK, totalBytes: files.reduce((n, f) => n + f.size, 0), files, ignored: [],
+    idleTimeoutSeconds: 21600, expiresAt: null,
   };
 }
 
-/** Fill step 1, pick the file, and press Upload. */
-async function startUpload(): Promise<void> {
-  await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
-  fireEvent.change(screen.getByPlaceholderText('e.g., pick-and-place-v1'), {
-    target: { value: 'Stub' },
-  });
-  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'rt1' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+const ack = (req: PartRequest): PartAck => ({
+  fileId: req.fileId, partNumber: req.partNumber, size: (req.body as ArrayBuffer).byteLength,
+});
 
-  const file = new File(['x'], 'probe.tar.gz', { type: 'application/gzip' });
-  const input = document.querySelector('input[type=file]') as HTMLInputElement;
-  Object.defineProperty(input, 'files', { value: [file], configurable: true });
-  fireEvent.change(input);
-  fireEvent.click(await screen.findByRole('button', { name: 'Upload' }));
+/** A part request that stays in flight until the upload is stopped. */
+const hang = (req: PartRequest) => new Promise<PartAck>((_resolve, reject) => {
+  req.signal?.addEventListener('abort', () => reject(new UploadRefusal({ status: 0, code: 'ABORTED', message: 'stopped' })));
+});
+
+function open(): void {
+  render(<DatasetUploadModal />);
+  act(() => useDatasetUploadStore.getState().openDialog());
+}
+
+async function pick(files: File[]): Promise<void> {
+  fireEvent.change(screen.getByTestId('upload-folder-input'), { target: { files } });
+  await waitFor(() => expect(screen.getByTestId('upload-folder-facts')).toBeInTheDocument());
 }
 
 beforeEach(() => {
-  // Installed here, not at module scope: the global test setup starts msw in a
-  // `beforeAll`, and msw's XHR interceptor wraps whatever `XMLHttpRequest` is
-  // global at that moment. A stub installed during import becomes that
-  // "original", and the interceptor then calls `getAllResponseHeaders()` on it.
-  // Stubbing after `server.listen()` replaces the interceptor's proxy outright,
-  // which is what this suite wants — the PUT never reaches msw at all.
-  vi.stubGlobal('XMLHttpRequest', FakeXHR);
   vi.clearAllMocks();
-  vi.useFakeTimers({ shouldAdvanceTime: true });
-  listRobotTypes.mockResolvedValue([{ id: 'rt1', name: 'G1 EDU', manufacturer: 'Unitree' }]);
-  createDataset.mockResolvedValue({ id: 'ds1', name: 'Stub', status: 'uploading' });
-  initiateUpload.mockResolvedValue({ uploadUrl: 'http://x/put', objectKey: 'k' });
-  completeUpload.mockResolvedValue(undefined);
+  resetDatasetUploadStore();
+  useTrainingStore.setState({ datasets: [] });
+  training.listRobotTypes.mockResolvedValue([{ id: 'rt1', name: 'Unitree G1 EDU (Dex3-1)', manufacturer: 'Unitree' }]);
+  training.getDataset.mockResolvedValue({ id: 'ds1', name: 'bottles', status: 'uploading' });
+  api.start.mockResolvedValue(started());
+  api.finish.mockResolvedValue({ datasetId: 'ds1', state: 'processing', status: 'uploading' });
+  api.status.mockResolvedValue({ datasetId: 'ds1', state: 'completed', status: 'ready', files: [], importError: null });
+  api.cancel.mockResolvedValue({ datasetId: 'ds1', status: 'cancelled' });
+  api.sendPart.mockImplementation(async (req: PartRequest) => ack(req));
+  confirmMock.mockResolvedValue(true);
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => resetDatasetUploadStore());
 
-describe('while the server is still working', () => {
-  it('does not report a failed upload when the completion request times out', async () => {
-    // `upload/complete` now downloads the archive, unpacks it and (without
-    // NATS) validates it inside the request. The shared axios client aborted at
-    // 30 s, and treating that rejection as a failed upload reported "Upload
-    // failed" for every upload big enough to be worth making — while the server
-    // finished the job and the row went `ready`.
-    completeUpload.mockRejectedValue(new Error('timeout of 30000ms exceeded'));
-    getDataset.mockResolvedValue(ready());
-
-    render(<DatasetUploadModal isOpen onClose={() => {}} />);
-    await startUpload();
-
-    expect(await screen.findByTestId('upload-complete')).toBeInTheDocument();
-    expect(screen.queryByText(/timeout of 30000ms/)).not.toBeInTheDocument();
-    expect(screen.getByText(/1 episode, 1,234 frames/)).toBeInTheDocument();
+describe('DatasetUploadModal', () => {
+  it('asks for a folder, not a file', () => {
+    open();
+    const input = screen.getByTestId('upload-folder-input');
+    expect(input).toHaveAttribute('webkitdirectory');
+    expect(screen.getByRole('button', { name: 'Choose folder' })).toBeInTheDocument();
+    // Nothing to upload yet.
+    expect(screen.getByTestId('upload-start')).toBeDisabled();
   });
 
-  it('says "1 episode", and formats the frame count in the UI locale', async () => {
-    // Was `${n} episodes` unconditionally, and a bare `toLocaleString()` — which
-    // on a de-DE machine renders 1234 as "1.234" inside an English sentence.
-    getDataset.mockResolvedValue(ready());
-    render(<DatasetUploadModal isOpen onClose={() => {}} />);
-    await startUpload();
-    expect(await screen.findByText(/1 episode, 1,234 frames/)).toBeInTheDocument();
+  it('shows what the folder holds before anything is sent', async () => {
+    open();
+    await pick(DATASET());
+
+    const facts = screen.getByTestId('upload-folder-facts');
+    expect(facts).toHaveTextContent('bottles');
+    expect(facts).toHaveTextContent('LeRobot v3.0');
+    expect(facts).toHaveTextContent('80');
+    expect(facts).toHaveTextContent('55,695');
+    expect(facts).toHaveTextContent('30 fps');
+    expect(facts).toHaveTextContent('2 (head, wrist)');
+    expect(screen.getByTestId('upload-folder-files')).toHaveTextContent('4 files to upload');
+    expect(screen.getByTestId('upload-folder-files')).toHaveTextContent('1 other file is not part of the dataset');
+    // The folder's name is the default dataset name; the robot type is detected.
+    expect(screen.getByTestId('upload-name')).toHaveValue('bottles');
+    expect(screen.getByTestId('upload-robot-type')).toHaveTextContent('Auto-detect (unitree_g1_dex3)');
+    expect(screen.getByTestId('upload-start')).toBeEnabled();
+
+    expect(api.start).not.toHaveBeenCalled();
+    expect(api.sendPart).not.toHaveBeenCalled();
   });
 
-  it('surfaces a completion failure when the row never left `uploading`', async () => {
-    // The one case that IS a failed upload: nothing on the server took the
-    // archive. Reported straight away rather than after the poll's full minute.
-    completeUpload.mockRejectedValue(new Error('unpack exploded'));
-    getDataset.mockResolvedValue(ready({ status: 'uploading' }));
+  it('flags a folder that is not a LeRobot dataset and does not let it be uploaded', async () => {
+    open();
+    await pick([picked('holiday/a.mp4', 'v'), picked('holiday/b.mp4', 'v')]);
 
-    render(<DatasetUploadModal isOpen onClose={() => {}} />);
-    await startUpload();
-
-    expect(await screen.findByText('unpack exploded')).toBeInTheDocument();
-    expect(screen.queryByTestId('upload-complete')).not.toBeInTheDocument();
-  });
-});
-
-describe('when the status cannot be read at all', () => {
-  it('does not paint the green tick over sixty failed queries', async () => {
-    // The catch returned `null`, `null` fell into the success branch, and the
-    // modal asserted "Still validating — it will finish in the background"
-    // without one successful reply to base it on.
-    getDataset.mockRejectedValue(new Error('status unavailable'));
-
-    render(<DatasetUploadModal isOpen onClose={() => {}} />);
-    await startUpload();
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
-
-    expect(await screen.findByTestId('upload-status-unknown')).toBeInTheDocument();
-    expect(screen.queryByTestId('upload-complete')).not.toBeInTheDocument();
-    expect(screen.getByText(/status unavailable/)).toBeInTheDocument();
-  });
-});
-
-describe('closing the modal mid-upload', () => {
-  it('stops the poll instead of writing its result into a closed modal', async () => {
-    // The loop had no cancellation link to the component, and `Modal` only
-    // returns null when closed — so the poll kept firing, then set
-    // `step: 'complete'`, and the NEXT open landed on the previous upload's
-    // result screen instead of the metadata form.
-    getDataset.mockResolvedValue(ready({ status: 'validating' }));
-    const onClose = vi.fn();
-
-    render(<DatasetUploadModal isOpen onClose={onClose} />);
-    await startUpload();
-    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
-    const during = getDataset.mock.calls.length;
-    expect(during).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
-
-    expect(onClose).toHaveBeenCalled();
-    expect(getDataset.mock.calls.length).toBe(during);
-  });
-});
-
-describe('the robot type select', () => {
-  it('says the fetch failed instead of leaving an empty required field', async () => {
-    // Swallowed with `.catch(() => setFetchedTypes([]))`, so the operator got
-    // "Please fill in all required fields" about a field with nothing in it.
-    listRobotTypes.mockRejectedValue(new Error('boom'));
-    render(<DatasetUploadModal isOpen onClose={() => {}} />);
-    expect(await screen.findByTestId('robot-types-error')).toHaveTextContent('boom');
+    expect(screen.getByTestId('upload-folder-problems')).toHaveTextContent('No meta/info.json in this folder');
+    expect(screen.getByTestId('upload-start')).toBeDisabled();
+    expect(screen.queryByTestId('upload-name')).not.toBeInTheDocument();
   });
 
-  it('distinguishes "none registered" from "could not load"', async () => {
-    listRobotTypes.mockResolvedValue([]);
-    render(<DatasetUploadModal isOpen onClose={() => {}} />);
-    expect(await screen.findByTestId('robot-types-empty')).toBeInTheDocument();
-    expect(screen.queryByTestId('robot-types-error')).not.toBeInTheDocument();
+  it('takes a folder dropped on it', async () => {
+    open();
+    const fileEntry = (file: File) => ({
+      isFile: true, isDirectory: false, name: file.name,
+      fullPath: `/${(file as File & { webkitRelativePath: string }).webkitRelativePath}`,
+      file: (ok: (f: File) => void) => ok(file),
+    });
+    const queue = [DATASET().map(fileEntry), []];
+    const folder = {
+      isFile: false, isDirectory: true, name: 'bottles', fullPath: '/bottles',
+      createReader: () => ({ readEntries: (ok: (entries: unknown[]) => void) => ok(queue.shift() ?? []) }),
+    };
+    fireEvent.drop(screen.getByTestId('upload-dropzone'), {
+      dataTransfer: { items: [{ kind: 'file', webkitGetAsEntry: () => folder }], files: [] },
+    });
+
+    await waitFor(() => expect(screen.getByTestId('upload-folder-facts')).toHaveTextContent('LeRobot v3.0'));
+    expect(screen.getByTestId('upload-folder-files')).toHaveTextContent('4 files to upload');
+  });
+
+  it('declares only the dataset files, with name, description and robot type', async () => {
+    api.sendPart.mockImplementation(hang);
+    open();
+    await pick(DATASET());
+    fireEvent.change(screen.getByTestId('upload-name'), { target: { value: 'bottle sorting' } });
+    fireEvent.change(screen.getByPlaceholderText('What was recorded, and how'), { target: { value: 'Sim, 80 episodes' } });
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Unitree G1 EDU (Dex3-1)' })).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('upload-robot-type'), { target: { value: 'rt1' } });
+    fireEvent.click(screen.getByTestId('upload-start'));
+
+    await waitFor(() => expect(api.start).toHaveBeenCalledTimes(1));
+    const input = api.start.mock.calls[0][0];
+    expect(input).toMatchObject({ name: 'bottle sorting', description: 'Sim, 80 episodes', robotTypeId: 'rt1', info: INFO });
+    expect(input.chunkSize).toBe(8 * 1024 * 1024);
+    expect(input.files.map((f: { path: string }) => f.path)).toEqual([
+      'data/chunk-000/file-000.parquet',
+      'meta/episodes/chunk-000/file-000.parquet',
+      'meta/info.json',
+      'videos/observation.images.head/chunk-000/file-000.mp4',
+    ]);
+  });
+
+  it('leaves the robot type to the server unless one is picked', async () => {
+    api.sendPart.mockImplementation(hang);
+    open();
+    await pick(DATASET());
+    fireEvent.click(screen.getByTestId('upload-start'));
+    await waitFor(() => expect(api.start).toHaveBeenCalledTimes(1));
+    expect(api.start.mock.calls[0][0].robotTypeId).toBeUndefined();
+  });
+
+  it('wants a name', async () => {
+    open();
+    await pick(DATASET());
+    fireEvent.change(screen.getByTestId('upload-name'), { target: { value: '  ' } });
+    fireEvent.click(screen.getByTestId('upload-start'));
+    expect(await screen.findByText('Give the dataset a name.')).toBeInTheDocument();
+    expect(api.start).not.toHaveBeenCalled();
+  });
+
+  it('shows a refused start with the server\'s sentence, code and context, and keeps the form', async () => {
+    api.start.mockRejectedValue(new UploadRefusal({
+      status: 413, code: 'UPLOAD_TOO_LARGE',
+      message: 'This upload declares 12.0 GB; the limit is 10.0 GB.',
+      context: { totalBytes: 12884901888, maxBytes: 10737418240 },
+    }));
+    open();
+    await pick(DATASET());
+    fireEvent.click(screen.getByTestId('upload-start'));
+
+    const block = await screen.findByTestId('upload-start-error');
+    expect(block).toHaveTextContent('This upload declares 12.0 GB; the limit is 10.0 GB.');
+    expect(block).toHaveTextContent('UPLOAD_TOO_LARGE (HTTP 413)');
+    expect(block).toHaveTextContent('Limit');
+    expect(block).toHaveTextContent('10737418240');
+    // Nothing was created, nothing is running, and the folder is still picked.
+    expect(useDatasetUploadStore.getState().job).toBeNull();
+    expect(screen.getByTestId('upload-name')).toHaveValue('bottles');
+    expect(api.sendPart).not.toHaveBeenCalled();
+  });
+
+  it('shows overall and per-file progress while it sends', async () => {
+    api.sendPart.mockImplementation(hang);
+    open();
+    await pick(DATASET());
+    fireEvent.click(screen.getByTestId('upload-start'));
+
+    await waitFor(() => expect(screen.getByTestId('upload-run')).toBeInTheDocument());
+    expect(screen.getByTestId('upload-overall')).toHaveTextContent('of 4 files');
+    expect(screen.getAllByTestId('upload-file')).toHaveLength(4);
+    expect(screen.getByTestId('upload-files')).toHaveTextContent('videos/observation.images.head/chunk-000/file-000.mp4');
+    // Never more than three requests at once, however many parts wait.
+    await waitFor(() => expect(api.sendPart).toHaveBeenCalledTimes(3));
+    expect(screen.getByTestId('upload-background-note')).toHaveTextContent('the upload keeps running');
+  });
+
+  it('sends every part, finishes, and hands over to the dataset\'s row', async () => {
+    // The verdict is still out when finish is accepted.
+    api.status.mockResolvedValue({ datasetId: 'ds1', state: 'completed', status: 'validating', files: [], importError: null });
+    training.getDataset.mockResolvedValue({ id: 'ds1', name: 'bottles', status: 'validating' });
+    open();
+    await pick(DATASET());
+    fireEvent.click(screen.getByTestId('upload-start'));
+
+    await waitFor(() => expect(api.finish).toHaveBeenCalledWith('ds1'));
+    // Every part of every file, once.
+    expect(api.sendPart).toHaveBeenCalledTimes(started().files.reduce((n, f) => n + f.partCount, 0));
+    const video = api.sendPart.mock.calls.map(([req]) => req as PartRequest).filter((req) => req.fileId === 3);
+    expect(video.map((req) => [req.partNumber, (req.body as ArrayBuffer).byteLength]).sort()).toEqual([[1, 10], [2, 10], [3, 5]]);
+
+    // The dialog gets out of the way; the row carries it from here.
+    await waitFor(() => expect(screen.queryByTestId('dataset-upload-modal')).not.toBeInTheDocument());
+    await waitFor(() => expect(useDatasetUploadStore.getState().job?.phase).toBe('validating'));
+    await waitFor(() => expect(useTrainingStore.getState().datasets.map((d) => d.id)).toEqual(['ds1']));
+  });
+
+  it('keeps uploading when the dialog is closed', async () => {
+    api.sendPart.mockImplementation(hang);
+    open();
+    await pick(DATASET());
+    fireEvent.click(screen.getByTestId('upload-start'));
+    await waitFor(() => expect(screen.getByTestId('upload-run')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('upload-background'));
+
+    await waitFor(() => expect(screen.queryByTestId('dataset-upload-modal')).not.toBeInTheDocument());
+    expect(useDatasetUploadStore.getState().job?.phase).toBe('uploading');
+    expect(api.cancel).not.toHaveBeenCalled();
+
+    // Opening it again shows the same upload, not an empty form.
+    act(() => useDatasetUploadStore.getState().openDialog());
+    expect(screen.getByTestId('upload-run')).toBeInTheDocument();
+    expect(screen.queryByTestId('upload-dropzone')).not.toBeInTheDocument();
+  });
+
+  it('cancels on the server only after asking, and leaves nothing behind', async () => {
+    api.sendPart.mockImplementation(hang);
+    useTrainingStore.setState({ datasets: [{ id: 'ds1', name: 'bottles' } as never] });
+    open();
+    await pick(DATASET());
+    fireEvent.click(screen.getByTestId('upload-start'));
+    await waitFor(() => expect(screen.getByTestId('upload-run')).toBeInTheDocument());
+
+    confirmMock.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByTestId('upload-cancel'));
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    expect(api.cancel).not.toHaveBeenCalled();
+    expect(useDatasetUploadStore.getState().job?.phase).toBe('uploading');
+
+    fireEvent.click(screen.getByTestId('upload-cancel'));
+    await waitFor(() => expect(api.cancel).toHaveBeenCalledWith('ds1'));
+    await waitFor(() => expect(useDatasetUploadStore.getState().job).toBeNull());
+    expect(screen.queryByTestId('dataset-upload-modal')).not.toBeInTheDocument();
+    expect(useTrainingStore.getState().datasets).toEqual([]);
+  });
+
+  it('shows why an upload stopped and resumes with only what the server does not hold', async () => {
+    api.sendPart.mockImplementation(async (req: PartRequest) => {
+      if (req.fileId === 3 && req.partNumber === 2) {
+        throw new UploadRefusal({
+          status: 400, code: 'PART_SIZE_MISMATCH',
+          message: 'Part 2 must be exactly 10 bytes.', context: { expectedSize: 10 },
+        });
+      }
+      return ack(req);
+    });
+    open();
+    await pick(DATASET());
+    fireEvent.click(screen.getByTestId('upload-start'));
+
+    const block = await screen.findByTestId('upload-error');
+    expect(block).toHaveTextContent('Part 2 must be exactly 10 bytes.');
+    expect(block).toHaveTextContent('PART_SIZE_MISMATCH (HTTP 400)');
+    expect(block).toHaveTextContent('Expected size');
+    expect(api.finish).not.toHaveBeenCalled();
+
+    // The server holds everything but that one part.
+    const files = started().files.map((f) => ({
+      ...f, complete: f.id !== 3, receivedParts: f.id === 3 ? [1, 3] : [],
+    }));
+    api.status
+      .mockResolvedValueOnce({ datasetId: 'ds1', state: 'uploading', status: 'uploading', chunkSize: CHUNK, files, importError: null })
+      .mockResolvedValue({ datasetId: 'ds1', state: 'completed', status: 'ready', files: [], importError: null });
+    api.sendPart.mockClear();
+    api.sendPart.mockImplementation(async (req: PartRequest) => ack(req));
+    fireEvent.click(screen.getByTestId('upload-resume'));
+
+    await waitFor(() => expect(api.finish).toHaveBeenCalledWith('ds1'));
+    expect(api.sendPart.mock.calls.map(([req]) => [(req as PartRequest).fileId, (req as PartRequest).partNumber])).toEqual([[3, 2]]);
+    // Ready: the upload is over and the dialog is gone.
+    await waitFor(() => expect(useDatasetUploadStore.getState().job).toBeNull());
+    expect(screen.queryByTestId('dataset-upload-modal')).not.toBeInTheDocument();
   });
 });

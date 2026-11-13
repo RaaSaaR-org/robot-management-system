@@ -46,7 +46,7 @@ import { formatDuration } from '../components/datasets/datasetFormat';
 import { formatNumber } from '@/shared/utils/format';
 import { datasetViewsApi, trainingApi } from '../api';
 import { useDatasetsAutoFetch, useTrainingJobs } from '../hooks';
-import { importToastId, useImportJobsStore, useTrainingStore } from '../store';
+import { importToastId, useDatasetUploadStore, useImportJobsStore, useTrainingStore } from '../store';
 import { isDatasetView } from '../types';
 import type {
   CreateDatasetViewInput,
@@ -56,7 +56,7 @@ import type {
   SubmitTrainingJobInput,
 } from '../types';
 
-type OpenModal = 'upload' | 'hf' | 'generate' | 'compat' | null;
+type OpenModal = 'hf' | 'generate' | 'compat' | null;
 
 /** "402 episodes (171,625 frames, 1h 35m of recording)" — what a delete takes away. */
 export function describeDatasetSize(d: Pick<Dataset, 'demonstrationCount' | 'totalFrames' | 'totalDuration'>): string {
@@ -138,6 +138,7 @@ function DatasetsHub() {
     }
   };
 
+  const openUpload = useDatasetUploadStore((state) => state.openDialog);
   const trackImport = useImportJobsStore((state) => state.track);
   const showImport = useImportJobsStore((state) => state.show);
   const followImport = useImportJobsStore((state) => state.follow);
@@ -251,7 +252,7 @@ function DatasetsHub() {
       label="New dataset"
       trigger={<Button leftIcon={<Plus className="h-4 w-4" />} rightIcon={<ChevronDown className="h-4 w-4" />}>New dataset</Button>}
       items={[
-        { label: 'Upload files', icon: <Upload />, onSelect: () => setModal('upload') },
+        { label: 'Upload a folder', icon: <Upload />, onSelect: openUpload },
         { label: 'Import from Hugging Face', icon: <Download />, onSelect: () => setModal('hf') },
         { label: 'Generate synthetic', icon: <Sparkles />, onSelect: () => setModal('generate') },
         { label: 'Check compatibility', icon: <Layers />, separatorBefore: true, onSelect: () => setModal('compat') },
@@ -304,7 +305,8 @@ function DatasetsHub() {
         />
       )}
 
-      <DatasetUploadModal isOpen={modal === 'upload'} onClose={() => setModal(null)} onSuccess={refresh} robotTypes={robotTypes} />
+      {/* Opened from the store, so the top-bar upload chip can bring it back (TASK-481). */}
+      <DatasetUploadModal robotTypes={robotTypes} />
       <HFDatasetBrowserModal isOpen={modal === 'hf'} onClose={() => setModal(null)} onSuccess={refresh} existingDatasets={datasets} />
       <GenerateSyntheticModal
         isOpen={modal === 'generate'}
