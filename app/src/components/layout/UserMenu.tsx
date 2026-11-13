@@ -4,13 +4,17 @@
  *              user's identity, links to the account and settings pages, and
  *              sign out. Settings moved here from the sidebar in TASK-279: it
  *              is about the person using the app, like everything else in this
- *              menu, not a place in the fleet.
+ *              menu, not a place in the fleet. On a server without sign-in
+ *              (TASK-483) there is no session to end: the menu says so in
+ *              place of Sign out, and leaves out the shared user's placeholder
+ *              address.
  * @feature layout
  */
 
 import { Link } from 'react-router-dom';
 import { ChevronDown, LogOut, Settings, UserRound } from 'lucide-react';
 import { useAuth } from '@/features/auth';
+import { useFeatures } from '@/shared/hooks/useFeatures';
 import { Badge } from '@/shared/components/ui/Badge';
 import { focusRing } from '@/shared/components/ui/styles';
 import { cn } from '@/shared/utils/cn';
@@ -28,7 +32,8 @@ export function UserMenu() {
 
   const initial = user?.name?.trim().charAt(0).toUpperCase() || 'U';
   const name = user?.name || 'User';
-  const email = user?.email || '';
+  const { signInRequired } = useFeatures();
+  const email = signInRequired ? user?.email || '' : '';
 
   const signOut = () => {
     logout();
@@ -98,12 +103,18 @@ export function UserMenu() {
             </Link>
           </div>
 
-          <div className="border-t border-line-subtle p-1">
-            <button type="button" role="menuitem" tabIndex={-1} onClick={signOut} className={cn(topBarMenuItem, 'h-9')}>
-              <LogOut strokeWidth={1.75} aria-hidden="true" />
-              <span>Sign out</span>
-            </button>
-          </div>
+          {signInRequired ? (
+            <div className="border-t border-line-subtle p-1">
+              <button type="button" role="menuitem" tabIndex={-1} onClick={signOut} className={cn(topBarMenuItem, 'h-9')}>
+                <LogOut strokeWidth={1.75} aria-hidden="true" />
+                <span>Sign out</span>
+              </button>
+            </div>
+          ) : (
+            <p className="border-t border-line-subtle px-3.5 py-2.5 text-xs leading-relaxed text-ink-tertiary">
+              Sign-in is turned off on this server. Everyone who opens it uses this shared account.
+            </p>
+          )}
         </div>
       )}
     </div>

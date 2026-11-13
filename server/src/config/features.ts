@@ -65,6 +65,21 @@ export function selfRegistrationEnabled(): boolean {
 }
 
 /**
+ * Whether a browser has to sign in before it can use the API (TASK-483).
+ *
+ * False only under `AUTH_DISABLED=true`, where every request without a service
+ * token runs as the one shared anonymous user. The app reads this before it
+ * has any session, to go straight into the requested page instead of showing
+ * a sign-in form that no credentials exist for. It says nothing a caller could
+ * not learn by calling any protected route without a token.
+ *
+ * Read per call, so tests see the current environment.
+ */
+export function signInRequired(): boolean {
+  return process.env.AUTH_DISABLED !== 'true';
+}
+
+/**
  * Snapshot of every feature flag — exposed via /api/config/features so
  * the frontend can decide which UI to render before login.
  */
@@ -73,6 +88,7 @@ export function getFeatureFlags(): Record<string, boolean> {
     multiTenancyEnabled: MULTI_TENANCY_ENABLED,
     controlLeasesEnabled: controlLeasesEnabled(),
     selfRegistrationEnabled: selfRegistrationEnabled(),
+    signInRequired: signInRequired(),
     natsEnabled: process.env.NATS_URL !== undefined,
     rustfsEnabled: process.env.RUSTFS_ENDPOINT !== undefined,
   };
