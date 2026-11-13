@@ -9,6 +9,7 @@ import type { ChangeEvent, MutableRefObject, ReactNode, SyntheticEvent } from 'r
 import { Pause, Play, VideoOff } from 'lucide-react';
 import { Button, EmptyState, Panel, SegmentedControl } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
+import { beginRateLimitWait, useRateLimitHint } from '@/api/rateLimitStatus';
 import { cameraLabel, formatClock } from './episodeFormat';
 import { canPlayVideoCodec, describeVideoCodec } from './videoCodec';
 
@@ -35,6 +36,15 @@ export interface EpisodeViewerProps {
    * is shown, and again by the Retry button.
    */
   onReload?: () => void;
+  /**
+   * Ask whether a video that failed to load was rate limited: resolves to the
+   * milliseconds to wait before loading it again, or null when the failure was
+   * something else. With it, a throttled video waits and reloads by itself
+   * instead of ending in "Couldn't load this video" (TASK-482).
+   */
+  probeThrottle?: (src: string) => Promise<number | null>;
+  /** The primary camera started or stopped playing, whoever caused it. */
+  onPlayingChange?: (playing: boolean) => void;
   primaryCamera: string | undefined;
   videoRefs: MutableRefObject<Record<string, HTMLVideoElement | null>>;
   onTimeUpdate: () => void;
@@ -60,6 +70,9 @@ const MEDIA_ERR_DECODE = 3;
 
 /** How long a silent reload may take before the failure is shown after all. */
 const RELOAD_GRACE_MS = 4000;
+
+/** How often a throttled video reloads by itself before the failure is shown. */
+const MAX_THROTTLE_RELOADS = 4;
 
 /** The URL without its ticket: the same video, whichever ticket fetched it. */
 function withoutTicket(src: string): string {
@@ -102,6 +115,8 @@ interface CameraCellProps {
   codec: string | undefined;
   ready: boolean;
   onReload?: () => void;
+  probeThrottle?: (src: string) => Promise<number | null>;
+  onPlayingChange?: (playing: boolean) => void;
   videoRefs: EpisodeViewerProps['videoRefs'];
   /** Playback events, wired on the primary camera only. */
   onTimeUpdate?: () => void;
@@ -119,7 +134,10 @@ interface CameraCellProps {
  *   is made at all, the notice names the codec and where it does play;
  * - the bytes arrive and do not decode → the same notice;
  * - the request fails (404, network, a refused or expired ticket) → one silent
- *   reload with fresh URLs, then "Couldn't load this video" with Retry.
+ *   reload with fresh URLs, then "Couldn't load this video" with Retry;
+ * - the request was rate limited (429) → the cell waits as long as the server
+ *   asked and loads the video again by itself, a few times over, saying so
+ *   only once the wait has lasted more than a moment (TASK-482).
  */
 function CameraCell(p: CameraCellProps) {
   const { camera, src, codec, onReload } = p;
@@ -131,6 +149,14 @@ function CameraCell(p: CameraCellProps) {
   const [reloading, setReloading] = useState<string | null>(null);
   // The video (ticket aside) that has already had its one silent reload.
   const reloaded = useRef<string | null>(null);
+  // A rate-limited load waiting to try again, and how long the server asked for.
+  const [throttle, setThrottle] = useState<{ src: string; attempt: number; waitMs: number } | null>(null);
+  // How many times the current video (ticket aside) has reloaded after a 429.
+  const throttleReloads = useRef<{ video: string; count: number }>({ video: '', count: 0 });
+  // What is on screen now, for an answer that arrives after the viewer moved on.
+  const current = useRef({ src, attempt });
+  current.current = { src, attempt };
+  const hintVisible = useRateLimitHint();
 
   const playable = useMemo(() => canPlayVideoCodec(codec), [codec]);
   // A failure belongs to the URL and attempt it happened on; a new episode, a
@@ -144,11 +170,22 @@ function CameraCell(p: CameraCellProps) {
     return () => clearTimeout(timer);
   }, [reloading, src, attempt]);
 
-  const handleError = (e: SyntheticEvent<HTMLVideoElement>) => {
-    if (e.currentTarget.error?.code === MEDIA_ERR_DECODE) {
-      setFailure({ src, attempt, kind: 'codec' });
-      return;
-    }
+  const throttled = throttle !== null && throttle.src === src && throttle.attempt === attempt;
+  const throttleWaitMs = throttled ? throttle.waitMs : null;
+
+  useEffect(() => {
+    if (throttleWaitMs === null) return;
+    // Counted as a rate-limit wait, so the shell's hint covers it too.
+    const endWait = beginRateLimitWait();
+    const timer = setTimeout(() => setAttempt((a) => a + 1), throttleWaitMs);
+    return () => {
+      clearTimeout(timer);
+      endWait();
+    };
+  }, [throttleWaitMs, src, attempt]);
+
+  /** A load failure that was not a rate limit: one silent reload, then say so. */
+  const settleLoadError = () => {
     const video = withoutTicket(src);
     if (onReload && reloaded.current !== video) {
       reloaded.current = video;
@@ -159,7 +196,35 @@ function CameraCell(p: CameraCellProps) {
     setFailure({ src, attempt, kind: 'load' });
   };
 
+  const handleError = (e: SyntheticEvent<HTMLVideoElement>) => {
+    if (e.currentTarget.error?.code === MEDIA_ERR_DECODE) {
+      setFailure({ src, attempt, kind: 'codec' });
+      return;
+    }
+    const probe = p.probeThrottle;
+    if (!probe) {
+      settleLoadError();
+      return;
+    }
+    const asked = { src, attempt };
+    void probe(src)
+      .catch(() => null)
+      .then((waitMs) => {
+        // The viewer picked another episode meanwhile: not this video's answer.
+        if (current.current.src !== asked.src || current.current.attempt !== asked.attempt) return;
+        const video = withoutTicket(asked.src);
+        if (throttleReloads.current.video !== video) throttleReloads.current = { video, count: 0 };
+        if (waitMs !== null && throttleReloads.current.count < MAX_THROTTLE_RELOADS) {
+          throttleReloads.current.count += 1;
+          setThrottle({ ...asked, waitMs });
+          return;
+        }
+        settleLoadError();
+      });
+  };
+
   const retry = () => {
+    throttleReloads.current = { video: '', count: 0 };
     setAttempt((a) => a + 1);
     setReloading(null);
     onReload?.();
@@ -186,6 +251,15 @@ function CameraCell(p: CameraCellProps) {
         {info && ` It is stored as ${info.label} — if it keeps failing, this browser may not be able to decode it.`}
       </PlayerNotice>
     );
+  } else if (throttled) {
+    // Quiet for the first moment; most waits end before anyone would read this.
+    body = hintVisible ? (
+      <PlayerNotice testId="video-throttled" title="Waiting for the server">
+        Too many requests at once, so the server asked us to slow down. This video loads by itself in a moment.
+      </PlayerNotice>
+    ) : (
+      <div className="aspect-video w-full" data-testid="video-pending" />
+    );
   } else if (!p.ready) {
     body = <div className="aspect-video w-full" data-testid="video-pending" />;
   } else {
@@ -197,6 +271,8 @@ function CameraCell(p: CameraCellProps) {
         onTimeUpdate={p.onTimeUpdate}
         onLoadedMetadata={p.onLoadedMetadata}
         onEnded={p.onEnded}
+        onPlay={p.onPlayingChange && (() => p.onPlayingChange?.(true))}
+        onPause={p.onPlayingChange && (() => p.onPlayingChange?.(false))}
         onError={handleError}
         className="aspect-video w-full"
         playsInline
@@ -239,6 +315,8 @@ export function EpisodeViewer(p: EpisodeViewerProps) {
             codec={p.codecFor?.(cam)}
             ready={p.ready ?? true}
             onReload={p.onReload}
+            probeThrottle={p.probeThrottle}
+            onPlayingChange={cam === p.primaryCamera ? p.onPlayingChange : undefined}
             videoRefs={p.videoRefs}
             onTimeUpdate={cam === p.primaryCamera ? p.onTimeUpdate : undefined}
             onLoadedMetadata={cam === p.primaryCamera ? p.onLoadedMetadata : undefined}

@@ -72,6 +72,28 @@ spec:
             - name: NODE_OPTIONS
               value: {{ . | quote }}
             {{- end }}
+            # Rate limits and the proxy hops the client address is read behind
+            # (TASK-482). Unset keeps the server's defaults.
+            {{- with .Values.server.env.trustProxy }}
+            - name: TRUST_PROXY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.server.env.rateLimitMax }}
+            - name: RATE_LIMIT_MAX
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.server.env.rateLimitMediaMax }}
+            - name: RATE_LIMIT_MEDIA_MAX
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.server.env.rateLimitWriteMax }}
+            - name: RATE_LIMIT_WRITE_MAX
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.server.env.rateLimitWindowMs }}
+            - name: RATE_LIMIT_WINDOW_MS
+              value: {{ . | quote }}
+            {{- end }}
             # Core configuration from ConfigMap
             - name: NODE_ENV
               valueFrom:

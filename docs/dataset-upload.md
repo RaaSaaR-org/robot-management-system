@@ -220,7 +220,7 @@ The body is the raw bytes: not JSON, not `multipart/form-data`, no encoding.
   again. (An earlier good copy of that same part is gone too — the status
   lists the part as missing until it is re-sent.) Without the header nothing is compared, but the `sha256` in the
   response lets the client compare.
-- Part requests are exempt from the general API rate limit. The server streams
+- Part requests are exempt from the API rate limits. The server streams
   at most `DATASET_UPLOAD_MAX_CONCURRENT_PARTS` (default 4) parts at once,
   across all uploads; one more is answered `503 UPLOAD_BUSY` with a
   `Retry-After: 2` header — wait and send the same part again.
@@ -360,9 +360,10 @@ Every refusal is JSON:
 ```
 
 Branch on `code` (or the status), never on the sentence. Besides the codes
-listed per endpoint: `401`/`403` from authentication, `429` from the general
-rate limit on the non-part endpoints (100 requests a minute per client in
-production), and `500 UPLOAD_ERROR` for an unexpected server fault (retry;
+listed per endpoint: `401`/`403` from authentication, `429` from the API
+rate limits on the non-part endpoints (in production 300 writes and 1200
+requests a minute per client, with `Retry-After`; see
+[Rate limiting](deployment.md#rate-limiting)), and `500 UPLOAD_ERROR` for an unexpected server fault (retry;
 nothing is half-applied).
 
 Worth retrying with a pause: `429`, `502 STORE_ERROR`, `503 UPLOAD_BUSY`,

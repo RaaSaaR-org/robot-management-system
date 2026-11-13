@@ -8,6 +8,7 @@
 
 import axios, { type AxiosInstance, type AxiosError, type InternalAxiosRequestConfig, type AxiosRequestConfig } from 'axios';
 import type { ApiError, ApiClientConfig, TokenStorage } from '@/shared/types/api.types';
+import { beginRateLimitWait } from './rateLimitStatus';
 
 // Extended request config to track refresh attempts
 interface ExtendedAxiosRequestConfig extends AxiosRequestConfig {
@@ -16,14 +17,34 @@ interface ExtendedAxiosRequestConfig extends AxiosRequestConfig {
   _rateLimitRetries?: number;
 }
 
-/** Longest a single 429 back-off may wait, whatever Retry-After says. */
+/** Longest a single 429 back-off may wait for a request that changes something. */
 const MAX_RATE_LIMIT_DELAY_MS = 10_000;
+
+/**
+ * Longest a single 429 back-off may wait for a read. A read is safe to repeat
+ * and nobody pressed a button for it, so it waits out the server's whole
+ * window (one minute) rather than give up and leave a panel empty (TASK-482).
+ */
+const MAX_READ_RATE_LIMIT_DELAY_MS = 65_000;
+
+/** Whether repeating the request cannot change anything on the server. */
+export function isIdempotentRead(method: string | undefined): boolean {
+  const verb = (method ?? 'get').toLowerCase();
+  return verb === 'get' || verb === 'head' || verb === 'options';
+}
 
 /**
  * Delay before retrying a 429: the server's `Retry-After` (seconds or an
  * HTTP date) when it sent one, else exponential back-off from `baseDelay`.
+ *
+ * @param maxDelay Upper bound, whatever the server asked for.
  */
-export function rateLimitDelayMs(retryAfter: unknown, attempt: number, baseDelay: number): number {
+export function rateLimitDelayMs(
+  retryAfter: unknown,
+  attempt: number,
+  baseDelay: number,
+  maxDelay: number = MAX_RATE_LIMIT_DELAY_MS
+): number {
   let ms: number | null = null;
   if (typeof retryAfter === 'string' && retryAfter.trim() !== '') {
     const seconds = Number(retryAfter);
@@ -34,7 +55,25 @@ export function rateLimitDelayMs(retryAfter: unknown, attempt: number, baseDelay
     }
   }
   if (ms === null || ms < 0) ms = baseDelay * 2 ** attempt;
-  return Math.min(ms, MAX_RATE_LIMIT_DELAY_MS);
+  return Math.min(ms, maxDelay);
+}
+
+/**
+ * How long one request waits before its next try after a 429: as long as the
+ * server asked, up to a full window for a read and ten seconds for a write.
+ */
+export function rateLimitWaitMs(
+  method: string | undefined,
+  retryAfter: unknown,
+  attempt: number,
+  baseDelay: number
+): number {
+  return rateLimitDelayMs(
+    retryAfter,
+    attempt,
+    baseDelay,
+    isIdempotentRead(method) ? MAX_READ_RATE_LIMIT_DELAY_MS : MAX_RATE_LIMIT_DELAY_MS
+  );
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -248,12 +287,26 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
       const originalRequest = error.config as ExtendedAxiosRequestConfig | undefined;
 
       // 429 Too Many Requests — back off and retry; never a reason to end the
-      // session (TASK-362).
+      // session (TASK-362). The server refused before doing anything, so the
+      // retry is safe for a write too; a read waits out the whole window
+      // (TASK-482).
       if (error.response?.status === 429 && originalRequest) {
         const attempt = originalRequest._rateLimitRetries ?? 0;
         if (attempt < maxRateLimitRetries) {
           originalRequest._rateLimitRetries = attempt + 1;
-          await sleep(rateLimitDelayMs(error.response.headers?.['retry-after'], attempt, rateLimitBaseDelay));
+          const delay = rateLimitWaitMs(
+            originalRequest.method,
+            error.response.headers?.['retry-after'],
+            attempt,
+            rateLimitBaseDelay
+          );
+          // Registered so the shell can say "retrying" if this takes a while.
+          const endWait = beginRateLimitWait();
+          try {
+            await sleep(delay);
+          } finally {
+            endWait();
+          }
           return client.request(originalRequest);
         }
         return Promise.reject(createApiError(error));

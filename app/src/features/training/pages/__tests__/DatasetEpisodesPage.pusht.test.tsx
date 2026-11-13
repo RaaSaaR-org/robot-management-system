@@ -39,6 +39,7 @@ vi.mock('../../api/datasetViewsApi', () => ({ datasetViewsApi: datasetViewsApiMo
 // The video ticket a <video> needs with sign-in on (TASK-478).
 vi.mock('../../api/datasetVideoApi', () => ({
   getDatasetVideoTicket: vi.fn(async (datasetId: string) => `tkt-${datasetId}`),
+  probeVideoThrottle: vi.fn(async () => null),
 }));
 vi.mock('@/features/evaluation/api/evaluationApi', () => ({
   evaluationApi: { listRewards },

@@ -8,6 +8,7 @@
 
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { useAuthStore } from '@/features/auth/store/authStore';
+import { useRateLimitHint } from '@/api/rateLimitStatus';
 import { Spinner } from '@/shared/components/ui';
 import type { User, UserRole, Permission } from '@/features/auth/types/auth.types';
 import { hasPermission, hasAnyPermission, hasAllPermissions } from '@/features/auth/types/auth.types';
@@ -88,6 +89,8 @@ export function AuthProvider({
   const isInitialized = useAuthStore((state) => state.isInitialized);
   const initialize = useAuthStore((state) => state.initialize);
   const devLogin = useAuthStore((state) => state.devLogin);
+  // True once a 429 back-off has lasted more than a moment (TASK-482).
+  const throttled = useRateLimitHint();
 
   // Initialize auth state on mount
   useEffect(() => {
@@ -144,6 +147,12 @@ export function AuthProvider({
         <div className="flex flex-col items-center gap-4">
           <Spinner size="lg" color="primary" />
           <p className="text-sm text-ink-secondary">Loading…</p>
+          {/* The toast host is not mounted yet, so the hint is said here. */}
+          {throttled && (
+            <p className="max-w-xs text-center text-xs text-ink-tertiary" data-testid="auth-rate-limit-hint">
+              The server asked us to slow down — retrying automatically.
+            </p>
+          )}
         </div>
       </div>
     );

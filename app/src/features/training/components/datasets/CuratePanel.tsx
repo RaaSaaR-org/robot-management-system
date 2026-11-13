@@ -10,7 +10,8 @@ import type { CurationSuggestion } from '../../types';
 
 export interface CuratePanelProps {
   episode: number;
-  frameCount: number;
+  /** Frames in THIS episode, or null while that is not known yet. */
+  frameCount: number | null;
   trimStart: number;
   trimEnd: number | '';
   onTrimStart: (v: number) => void;
@@ -55,7 +56,7 @@ export function CuratePanel(p: CuratePanelProps) {
               min={0}
               size="sm"
               className="w-28"
-              placeholder={String(p.frameCount)}
+              placeholder={p.frameCount === null ? '' : String(p.frameCount)}
               value={p.trimEnd}
               onChange={(e) => p.onTrimEnd(e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value, 10) || 0))}
             />
