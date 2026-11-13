@@ -21,6 +21,7 @@ import {
   type IncidentStatus,
   type IncidentClipPayload,
 } from '../types/incident.types.js';
+import { sendStream } from '../utils/streamResponse.js';
 
 export const incidentRoutes = Router();
 
@@ -659,13 +660,16 @@ incidentRoutes.get('/:id/clip', async (req: Request, res: Response) => {
     if (!stream) {
       return res.status(404).json({ error: 'Clip not available' });
     }
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `inline; filename="${req.params.id}-clip.json"`);
-    stream.on('error', () => {
-      if (!res.headersSent) res.status(502).json({ error: 'Failed to read clip bytes' });
-      else res.end();
+    // Through sendStream, so a client that left while the clip was being
+    // opened, or leaves mid-download, gives the store stream back (TASK-491).
+    await sendStream(res, stream, {
+      head: () => {
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', `inline; filename="${req.params.id}-clip.json"`);
+      },
+      headerNames: ['Content-Type', 'Content-Disposition'],
+      failure: { status: 502, body: { error: 'Failed to read clip bytes' } },
     });
-    stream.pipe(res);
   } catch (error) {
     console.error('Error streaming incident clip:', error);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to stream clip' });

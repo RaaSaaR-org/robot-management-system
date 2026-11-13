@@ -131,16 +131,20 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('RustFSClient constructor', () => {
-  it('builds an S3Client with path-style, default region, and credentials', () => {
+  it('builds its S3 clients with path-style, default region, and credentials', () => {
     new RustFSClient(cfg);
 
-    expect(h.s3ClientCtor).toHaveBeenCalledTimes(1);
-    expect(h.s3ClientCtor.mock.calls[0][0]).toEqual({
-      endpoint: 'http://localhost:9000',
-      credentials: { accessKeyId: 'AK', secretAccessKey: 'SK' },
-      region: 'us-east-1',
-      forcePathStyle: true,
-    });
+    // One for short calls and one for long-lived streams (TASK-491); the
+    // transport each is given is pinned in rustfs-client-transport.test.ts.
+    expect(h.s3ClientCtor).toHaveBeenCalledTimes(2);
+    for (const [config] of h.s3ClientCtor.mock.calls) {
+      expect(config).toMatchObject({
+        endpoint: 'http://localhost:9000',
+        credentials: { accessKeyId: 'AK', secretAccessKey: 'SK' },
+        region: 'us-east-1',
+        forcePathStyle: true,
+      });
+    }
   });
 
   it('honours an explicit region', () => {
@@ -402,7 +406,7 @@ describe('RustFSClient.delete', () => {
     await c.delete('b', 'k');
 
     expect(DeleteCmd.mock.calls[0][0]).toEqual({ Bucket: 'b', Key: 'k' });
-    expect(h.send).toHaveBeenCalledWith({ __cmd: 'DeleteObject', input: { Bucket: 'b', Key: 'k' } });
+    expect(h.send.mock.calls[0][0]).toEqual({ __cmd: 'DeleteObject', input: { Bucket: 'b', Key: 'k' } });
   });
 });
 

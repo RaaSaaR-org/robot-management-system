@@ -28,6 +28,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Upload } from '@aws-sdk/lib-storage';
 import type { Readable } from 'stream';
+import type { IncomingMessage } from 'http';
 
 // ============================================================================
 // TYPES
@@ -38,6 +39,75 @@ export interface RustFSConfig {
   accessKeyId: string;
   secretAccessKey: string;
   region?: string;
+  /** Timeouts and pool sizes; anything left out comes from the environment, then the defaults. */
+  transport?: Partial<RustFSTransport>;
+}
+
+/**
+ * How the client talks to the store (TASK-491).
+ *
+ * The SDK's defaults are one pool of 50 sockets and no timeout of any kind, so
+ * a call into a connection that went quiet — or a body nobody reads — holds
+ * its socket for the life of the process, and the fifty-first such call queues
+ * for ever. Every number here is a bound on that.
+ */
+export interface RustFSTransport {
+  /** Longest a TCP connect may take. `RUSTFS_CONNECT_TIMEOUT_MS`, default 5 s. */
+  connectTimeoutMs: number;
+  /**
+   * Longest the store may send or take no bytes before the call is ended: a
+   * stalled upload, a download or stream whose body stops arriving, and a
+   * stream nobody ever read. Never a transfer that is moving, however long
+   * that takes, and never a stream whose reader is the slow side — a paused
+   * player keeps its stream. `RUSTFS_SOCKET_TIMEOUT_MS`, default 120 s.
+   */
+  socketTimeoutMs: number;
+  /**
+   * Longest a call may wait for the store's answer to BEGIN — the wait for a
+   * free socket included. Not applied to calls that upload a body or make the
+   * store assemble or copy an object; those are bounded by the idle timeout.
+   * `RUSTFS_RESPONSE_TIMEOUT_MS`, default 15 s.
+   */
+  responseTimeoutMs: number;
+  /** Sockets for calls that return at once. `RUSTFS_MAX_SOCKETS`, default 64. */
+  maxSockets: number;
+  /**
+   * Sockets for {@link RustFSClient.getStream} — bodies that live as long as
+   * someone is watching. A pool of their own, so no number of open streams can
+   * keep a HEAD, a list or the health probe from getting a socket.
+   * `RUSTFS_MAX_STREAM_SOCKETS`, default 128.
+   */
+  maxStreamSockets: number;
+}
+
+export const DEFAULT_RUSTFS_TRANSPORT: RustFSTransport = {
+  connectTimeoutMs: 5_000,
+  socketTimeoutMs: 120_000,
+  responseTimeoutMs: 15_000,
+  maxSockets: 64,
+  maxStreamSockets: 128,
+};
+
+/** The transport settings the environment names; a missing or unusable value is the default. */
+export function rustFSTransportFromEnv(env: NodeJS.ProcessEnv = process.env): RustFSTransport {
+  const read = (name: string, fallback: number): number => {
+    const value = Number(env[name]);
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+  };
+  const d = DEFAULT_RUSTFS_TRANSPORT;
+  return {
+    connectTimeoutMs: read('RUSTFS_CONNECT_TIMEOUT_MS', d.connectTimeoutMs),
+    socketTimeoutMs: read('RUSTFS_SOCKET_TIMEOUT_MS', d.socketTimeoutMs),
+    responseTimeoutMs: read('RUSTFS_RESPONSE_TIMEOUT_MS', d.responseTimeoutMs),
+    maxSockets: read('RUSTFS_MAX_SOCKETS', d.maxSockets),
+    maxStreamSockets: read('RUSTFS_MAX_STREAM_SOCKETS', d.maxStreamSockets),
+  };
+}
+
+/** Options of a call that someone may stop waiting for. */
+export interface CallOptions {
+  /** Ends the call, and the body it returned, when the caller no longer wants it. */
+  signal?: AbortSignal;
 }
 
 export interface UploadOptions {
@@ -104,6 +174,22 @@ function uploadAbortedError(): Error {
   return Object.assign(new Error('Upload aborted.'), { name: 'AbortError' });
 }
 
+/**
+ * The store did not begin to answer within the deadline. Named and coded like
+ * the SDK's own timeouts, so {@link classifyS3Error} files it under
+ * `connectivity` and a route can tell "not now" from "broken".
+ */
+function storeTimeoutError(what: string, ms: number): Error {
+  return Object.assign(new Error(`RustFS did not answer ${what} within ${ms} ms`), {
+    name: 'TimeoutError',
+    code: 'ETIMEDOUT',
+  });
+}
+
+function callAbortedError(what: string): Error {
+  return Object.assign(new Error(`${what} was cancelled`), { name: 'AbortError' });
+}
+
 function isReadable(body: unknown): body is Readable {
   return typeof (body as Readable | null)?.destroy === 'function'
     && typeof (body as Readable | null)?.pipe === 'function';
@@ -118,19 +204,146 @@ function isReadable(body: unknown): body is Readable {
  */
 export class RustFSClient {
   private client: S3Client;
+  /** Carries only {@link getStream}: long-lived bodies on sockets of their own. */
+  private streamClient: S3Client;
   private config: RustFSConfig;
+  readonly transport: RustFSTransport;
 
   constructor(config: RustFSConfig) {
     this.config = config;
-    this.client = new S3Client({
-      endpoint: config.endpoint,
-      credentials: {
-        accessKeyId: config.accessKeyId,
-        secretAccessKey: config.secretAccessKey,
-      },
-      region: config.region ?? 'us-east-1',
-      forcePathStyle: true, // Required for S3-compatible storage
+    this.transport = { ...rustFSTransportFromEnv(), ...config.transport };
+    // `sdkIdleTimeout` is the SDK's own idle timer. It covers a request that
+    // is still being sent — an upload — and nothing after the answer began
+    // unless the answer took over three seconds, when it stays armed for the
+    // body and cuts a paused reader too. Response bodies are timed by
+    // `endWhenStalled` instead, so the stream client goes without it.
+    const build = (maxSockets: number, sdkIdleTimeout: boolean): S3Client =>
+      new S3Client({
+        endpoint: config.endpoint,
+        credentials: {
+          accessKeyId: config.accessKeyId,
+          secretAccessKey: config.secretAccessKey,
+        },
+        region: config.region ?? 'us-east-1',
+        forcePathStyle: true, // Required for S3-compatible storage
+        // Agent OPTIONS, not an Agent: the SDK then still gives a request that
+        // sends `Expect: 100-continue` — every upload — a connection of its
+        // own, so uploads never draw on these pools.
+        requestHandler: {
+          connectionTimeout: this.transport.connectTimeoutMs,
+          ...(sdkIdleTimeout ? { socketTimeout: this.transport.socketTimeoutMs } : {}),
+          httpAgent: { keepAlive: true, maxSockets },
+          httpsAgent: { keepAlive: true, maxSockets },
+        },
+      });
+    this.client = build(this.transport.maxSockets, true);
+    this.streamClient = build(this.transport.maxStreamSockets, false);
+  }
+
+  /**
+   * Run one store call under the response deadline and the caller's signal.
+   *
+   * `run` gets the signal to hand to the SDK, which ends the HTTP request —
+   * queued for a socket or already on one — when it fires. The promise settles
+   * when the signal fires even if `run` does not, and a body that still turns
+   * up afterwards is destroyed, so neither a caller nor a socket is left
+   * waiting on a call that was given up.
+   */
+  private async bounded<T>(
+    what: string,
+    run: (abortSignal: AbortSignal) => Promise<T>,
+    options: CallOptions & { deadlineMs?: number } = {},
+  ): Promise<T> {
+    const deadlineMs = options.deadlineMs ?? this.transport.responseTimeoutMs;
+    const outer = options.signal;
+    if (outer?.aborted) throw callAbortedError(what);
+
+    const controller = new AbortController();
+    let timedOut = false;
+    const forward = (): void => controller.abort();
+    outer?.addEventListener('abort', forward, { once: true });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, deadlineMs);
+    timer.unref?.();
+
+    const call = run(controller.signal);
+    const givenUp = new Promise<never>((_, reject) => {
+      controller.signal.addEventListener(
+        'abort',
+        () => {
+          call.then(
+            (late) => {
+              const body = (late as { Body?: unknown } | null | undefined)?.Body;
+              if (isReadable(body)) body.destroy();
+            },
+            () => undefined,
+          );
+          reject(timedOut ? storeTimeoutError(what, deadlineMs) : callAbortedError(what));
+        },
+        { once: true },
+      );
     });
+    try {
+      return await Promise.race([call, givenUp]);
+    } catch (error) {
+      // The SDK's own "Request aborted" for a deadline says the wrong thing.
+      if (timedOut) throw storeTimeoutError(what, deadlineMs);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      outer?.removeEventListener('abort', forward);
+    }
+  }
+
+  /**
+   * End a response body the store has stopped sending, or nobody ever read.
+   *
+   * The SDK's own `socketTimeout` does not do this: it arms its timer three
+   * seconds into a request and cancels it when the answer begins, so a store
+   * that answers at once and stalls halfway through the body was never timed
+   * at all — the read stayed pending for good, with its socket. This watches
+   * the body's socket for as long as the body is open.
+   *
+   * Quiet because the READER is slow is not a stall: bytes it has not taken
+   * yet (`readableLength`), or a body the store has finished sending, mean the
+   * store did its part, and a paused player keeps its stream. What is ended,
+   * with a `TimeoutError`, is a reader waiting on a silent store — and a body
+   * no reader was ever attached to, which is a leak and not a slow client.
+   *
+   * One look cannot tell slow from stalled: a slow reader that asks for more
+   * is, until the next bytes land, a reader with nothing buffered on a socket
+   * that has been quiet for as long as it was slow. So the socket is checked
+   * every half period, and the body is ended when two checks in a row find it
+   * waiting and not one byte arrived in between — `socketTimeoutMs` of silence
+   * at the least.
+   */
+  private endWhenStalled<T extends Readable>(body: T, what: string): T {
+    const idleMs = this.transport.socketTimeoutMs;
+    const checkMs = Math.max(1, Math.ceil(idleMs / 2));
+    const message = body as T & Partial<Pick<IncomingMessage, 'socket' | 'complete'>>;
+    const socket = message.socket;
+    if (!socket || typeof socket.setTimeout !== 'function' || body.destroyed) return body;
+    /** `socket.bytesRead` at the last check that found the body waiting. */
+    let waitingSince: number | undefined;
+    const onQuiet = (): void => {
+      if (body.destroyed) return;
+      const unread = body.readableFlowing === null;
+      const starved = body.readableLength === 0 && message.complete !== true;
+      if ((unread || starved) && waitingSince === socket.bytesRead) {
+        const why = unread ? `Nobody read ${what}` : `RustFS stopped sending ${what}`;
+        body.destroy(Object.assign(new Error(`${why} for ${idleMs} ms`), { name: 'TimeoutError', code: 'ETIMEDOUT' }));
+        return;
+      }
+      waitingSince = unread || starved ? socket.bytesRead : undefined;
+      // The timer does not start again by itself after it fired.
+      socket.setTimeout(checkMs);
+    };
+    socket.setTimeout(checkMs);
+    socket.on('timeout', onQuiet);
+    body.once('close', () => socket.removeListener('timeout', onQuiet));
+    return body;
   }
 
   /**
@@ -202,13 +415,16 @@ export class RustFSClient {
     let keyMarker: string | undefined;
     let uploadIdMarker: string | undefined;
     for (;;) {
-      const response = await this.client.send(
-        new ListMultipartUploadsCommand({
-          Bucket: bucket,
-          ...(prefix ? { Prefix: prefix } : {}),
-          KeyMarker: keyMarker,
-          UploadIdMarker: uploadIdMarker,
-        })
+      const response = await this.bounded(`ListMultipartUploads ${bucket}`, (abortSignal) =>
+        this.client.send(
+          new ListMultipartUploadsCommand({
+            Bucket: bucket,
+            ...(prefix ? { Prefix: prefix } : {}),
+            KeyMarker: keyMarker,
+            UploadIdMarker: uploadIdMarker,
+          }),
+          { abortSignal },
+        ),
       );
       for (const upload of response.Uploads ?? []) {
         if (!upload.Key || !upload.UploadId) continue;
@@ -224,8 +440,11 @@ export class RustFSClient {
 
   /** Abort one multipart upload, deleting the parts it stored. */
   async abortMultipartUpload(bucket: string, key: string, uploadId: string): Promise<void> {
-    await this.client.send(
-      new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: uploadId })
+    await this.bounded(`AbortMultipartUpload ${bucket}/${key}`, (abortSignal) =>
+      this.client.send(
+        new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: uploadId }),
+        { abortSignal },
+      ),
     );
   }
 
@@ -235,12 +454,15 @@ export class RustFSClient {
    * {@link completeMultipartUpload}; {@link abortMultipartUpload} removes it.
    */
   async createMultipartUpload(bucket: string, key: string, contentType?: string): Promise<string> {
-    const response = await this.client.send(
-      new CreateMultipartUploadCommand({
-        Bucket: bucket,
-        Key: key,
-        ContentType: contentType ?? 'application/octet-stream',
-      })
+    const response = await this.bounded(`CreateMultipartUpload ${bucket}/${key}`, (abortSignal) =>
+      this.client.send(
+        new CreateMultipartUploadCommand({
+          Bucket: bucket,
+          Key: key,
+          ContentType: contentType ?? 'application/octet-stream',
+        }),
+        { abortSignal },
+      ),
     );
     if (!response.UploadId) throw new Error(`Store returned no upload id for ${bucket}/${key}`);
     return response.UploadId;
@@ -282,8 +504,11 @@ export class RustFSClient {
     const parts: MultipartPartInfo[] = [];
     let marker: string | undefined;
     for (;;) {
-      const response = await this.client.send(
-        new ListPartsCommand({ Bucket: bucket, Key: key, UploadId: uploadId, PartNumberMarker: marker })
+      const response = await this.bounded(`ListParts ${bucket}/${key}`, (abortSignal) =>
+        this.client.send(
+          new ListPartsCommand({ Bucket: bucket, Key: key, UploadId: uploadId, PartNumberMarker: marker }),
+          { abortSignal },
+        ),
       );
       for (const part of response.Parts ?? []) {
         if (part.PartNumber === undefined) continue;
@@ -367,7 +592,9 @@ export class RustFSClient {
       Key: key,
     };
 
-    const response = await this.client.send(new GetObjectCommand(input));
+    const response = await this.bounded(`GetObject ${bucket}/${key}`, (abortSignal) =>
+      this.client.send(new GetObjectCommand(input), { abortSignal }),
+    );
 
     if (!response.Body) {
       throw new Error(`Empty response body for ${bucket}/${key}`);
@@ -375,7 +602,8 @@ export class RustFSClient {
 
     // Convert stream to buffer
     const chunks: Uint8Array[] = [];
-    for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+    const body = this.endWhenStalled(response.Body as Readable, `${bucket}/${key}`);
+    for await (const chunk of body as AsyncIterable<Uint8Array>) {
       chunks.push(chunk);
     }
     return Buffer.concat(chunks);
@@ -396,12 +624,15 @@ export class RustFSClient {
    */
   async downloadRange(bucket: string, key: string, start: number, length: number): Promise<Buffer> {
     if (length <= 0) return Buffer.alloc(0);
-    const response = await this.client.send(
-      new GetObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Range: `bytes=${start}-${start + length - 1}`,
-      })
+    const response = await this.bounded(`GetObject ${bucket}/${key}`, (abortSignal) =>
+      this.client.send(
+        new GetObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          Range: `bytes=${start}-${start + length - 1}`,
+        }),
+        { abortSignal },
+      ),
     );
 
     if (!response.Body) {
@@ -409,7 +640,8 @@ export class RustFSClient {
     }
 
     const chunks: Uint8Array[] = [];
-    for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+    const body = this.endWhenStalled(response.Body as Readable, `${bucket}/${key}`);
+    for await (const chunk of body as AsyncIterable<Uint8Array>) {
       chunks.push(chunk);
     }
     const buffer = Buffer.concat(chunks);
@@ -436,36 +668,64 @@ export class RustFSClient {
    * A ranged read that the store answered with the whole object (no `206`, no
    * `Content-Range`) throws: the caller is about to label the bytes as that
    * window, and a silently wrong window is worse than an error.
+   *
+   * **The caller owns the stream** and must read it to the end or `destroy()`
+   * it: until then it holds one socket of the stream pool. Pass `signal` for a
+   * reader that can walk away — an HTTP client — and both are done for it: a
+   * signal that fires while the store is being asked ends the request, one
+   * that fires later destroys the body, and one that has already fired asks
+   * the store nothing (TASK-491).
    */
-  async getStream(bucket: string, key: string, range?: { start: number; end: number }): Promise<Readable> {
+  async getStream(
+    bucket: string,
+    key: string,
+    range?: { start: number; end: number },
+    options?: CallOptions,
+  ): Promise<Readable> {
     const input: GetObjectCommandInput = {
       Bucket: bucket,
       Key: key,
       ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
     };
+    const signal = options?.signal;
 
-    const response = await this.client.send(new GetObjectCommand(input));
+    const response = await this.bounded(
+      `GetObject ${bucket}/${key}`,
+      (abortSignal) => this.streamClient.send(new GetObjectCommand(input), { abortSignal }),
+      { signal },
+    );
 
     if (!response.Body) {
       throw new Error(`Empty response body for ${bucket}/${key}`);
     }
+    const body = response.Body as Readable;
     if (range && !response.ContentRange && response.$metadata?.httpStatusCode !== 206) {
-      (response.Body as Readable).destroy?.();
+      body.destroy?.();
       throw new Error(`Store ignored the byte range for ${bucket}/${key}`);
     }
+    this.endWhenStalled(body, `${bucket}/${key}`);
+    if (signal) {
+      // Fired between the answer and here: nobody is going to read this.
+      if (signal.aborted) {
+        body.destroy?.();
+        throw callAbortedError(`GetObject ${bucket}/${key}`);
+      }
+      const release = (): void => {
+        body.destroy?.();
+      };
+      signal.addEventListener('abort', release, { once: true });
+      body.once?.('close', () => signal.removeEventListener('abort', release));
+    }
 
-    return response.Body as Readable;
+    return body;
   }
 
   /**
    * Delete an object
    */
   async delete(bucket: string, key: string): Promise<void> {
-    await this.client.send(
-      new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: key,
-      })
+    await this.bounded(`DeleteObject ${bucket}/${key}`, (abortSignal) =>
+      this.client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }), { abortSignal }),
     );
   }
 
@@ -499,11 +759,8 @@ export class RustFSClient {
    */
   async exists(bucket: string, key: string): Promise<boolean> {
     try {
-      await this.client.send(
-        new HeadObjectCommand({
-          Bucket: bucket,
-          Key: key,
-        })
+      await this.bounded(`HeadObject ${bucket}/${key}`, (abortSignal) =>
+        this.client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }), { abortSignal }),
       );
       return true;
     } catch (error: unknown) {
@@ -518,11 +775,8 @@ export class RustFSClient {
    * Get object metadata
    */
   async getMetadata(bucket: string, key: string): Promise<ObjectMetadata> {
-    const response = await this.client.send(
-      new HeadObjectCommand({
-        Bucket: bucket,
-        Key: key,
-      })
+    const response = await this.bounded(`HeadObject ${bucket}/${key}`, (abortSignal) =>
+      this.client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }), { abortSignal }),
     );
 
     return {
@@ -546,7 +800,9 @@ export class RustFSClient {
       Delimiter: options?.delimiter,
     };
 
-    const response = await this.client.send(new ListObjectsV2Command(input));
+    const response = await this.bounded(`ListObjectsV2 ${bucket}`, (abortSignal) =>
+      this.client.send(new ListObjectsV2Command(input), { abortSignal }),
+    );
 
     const objects: ObjectInfo[] = (response.Contents ?? []).map((obj: _Object) => ({
       key: obj.Key ?? '',
@@ -652,9 +908,13 @@ export class RustFSClient {
    */
   async headBucket(bucket: string, timeoutMs: number): Promise<void> {
     try {
-      await this.client.send(new HeadBucketCommand({ Bucket: bucket }), {
-        abortSignal: AbortSignal.timeout(timeoutMs),
-      });
+      // Through `bounded`, so a store that does not answer reads as a timeout
+      // (`connectivity` in /health) rather than as an unnamed abort (`unknown`).
+      await this.bounded(
+        `HeadBucket ${bucket}`,
+        (abortSignal) => this.client.send(new HeadBucketCommand({ Bucket: bucket }), { abortSignal }),
+        { deadlineMs: timeoutMs },
+      );
     } catch (err) {
       const { kind, detail } = classifyS3Error(err);
       throw new RustFSConnectionError(kind, detail, `RustFS at ${this.config.endpoint} did not answer HeadBucket ${bucket}: ${detail}`);
@@ -680,7 +940,9 @@ export class RustFSClient {
    */
   async checkConnection(): Promise<void> {
     try {
-      await this.client.send(new ListBucketsCommand({}));
+      await this.bounded('ListBuckets', (abortSignal) =>
+        this.client.send(new ListBucketsCommand({}), { abortSignal }),
+      );
     } catch (err) {
       const { kind, detail } = classifyS3Error(err);
       throw new RustFSConnectionError(

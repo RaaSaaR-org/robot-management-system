@@ -30,6 +30,7 @@ import type {
 } from '../types/twin.types.js';
 import { TwinZoneTypes, isTwinZoneType, isZonePolygon } from '../types/twin.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { sendStream } from '../utils/streamResponse.js';
 
 // ScanSessionService's own sentence (ScanSessionService.ts:166), matched by its
 // shape rather than by substring. Prisma's P2025 message also ends in "not
@@ -152,14 +153,16 @@ twinWorkerRoutes.get('/inputs/:scanId/download', async (req: Request, res: Respo
   try {
     const record = await sensorScanService.getScan(req.params.scanId);
     if (!record) return res.status(404).json({ error: 'Scan not found' });
-    const stream = await sensorScanService.openScanStream(record);
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${record.id}.pcd"`);
-    stream.on('error', () => {
-      if (!res.headersSent) res.status(502).json({ error: 'Failed to read scan bytes' });
-      else res.end();
+    // Through sendStream, so a worker that drops the download gives the store
+    // stream — and its socket — back (TASK-491).
+    await sendStream(res, () => sensorScanService.openScanStream(record), {
+      head: () => {
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', `attachment; filename="${record.id}.pcd"`);
+      },
+      headerNames: ['Content-Type', 'Content-Disposition'],
+      failure: { status: 502, body: { error: 'Failed to read scan bytes' } },
     });
-    stream.pipe(res);
   } catch (error) {
     console.error('[TwinWorker] input download error:', error);
     if (!res.headersSent) sendFailure(res, error, 'Failed to download scan input', 500);
@@ -330,14 +333,16 @@ async function streamArtifact(
     res.status(404).json({ error: 'Artifact not available' });
     return;
   }
-  const stream = await modelStorage.getTwinArtifactStream(key);
-  res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-  stream.on('error', () => {
-    if (!res.headersSent) res.status(502).json({ error: 'Failed to read artifact bytes' });
-    else res.end();
+  // Through sendStream, so a viewer that leaves mid-download gives the store
+  // stream — and its socket — back (TASK-491).
+  await sendStream(res, () => modelStorage.getTwinArtifactStream(key), {
+    head: () => {
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    },
+    headerNames: ['Content-Type', 'Content-Disposition'],
+    failure: { status: 502, body: { error: 'Failed to read artifact bytes' } },
   });
-  stream.pipe(res);
 }
 
 digitalTwinRoutes.get('/:id/cloud', async (req: Request, res: Response) => {

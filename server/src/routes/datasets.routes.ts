@@ -77,6 +77,7 @@ import { ownerOnly, type AuthenticatedRequest } from '../middleware/auth.middlew
 import { getTenantId } from '../middleware/tenantContext.js';
 import { signDatasetVideoTicket, DATASET_VIDEO_TICKET_TTL_MS } from '../security/datasetVideoTicket.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { clientGoneSignal, sendStream } from '../utils/streamResponse.js';
 import { parsePagination, parseIntegerParam } from '../utils/pagination.js';
 import { z } from 'zod';
 import {
@@ -174,53 +175,73 @@ export function parseByteRange(
   return { start, end };
 }
 
+/** A store call that ran out of time (the client's deadline or the SDK's own timeouts) rather than failed. */
+function isStoreTimeout(error: unknown): boolean {
+  return (error as { name?: unknown } | null)?.name === 'TimeoutError';
+}
+
+/** The headers a video answer sets, taken back off when the stream fails before its first byte. */
+const VIDEO_HEADERS = ['Content-Type', 'Accept-Ranges', 'Content-Range', 'Content-Length'];
+
 /**
  * Answer a video request for an object of `size` bytes: 206 with the window
  * `open` reads when the request carries a `Range`, 416 for one that cannot be
- * served, 200 with the whole object otherwise. `open` is called once.
+ * served, 200 with the whole object otherwise. `open` is called at most once,
+ * with the signal that fires when the client goes away — a player drops its
+ * request on every episode switch — and never for a HEAD, which is answered
+ * from `size` alone.
+ *
+ * Status and headers are set once the stream is in hand, so a failed open is
+ * answered by the route's own error body, not under a `Content-Range`.
  */
 async function sendVideo(
   req: Request,
   res: Response,
   size: number,
-  open: (range?: { start: number; end: number }) => Readable | Promise<Readable>,
+  open: (range: { start: number; end: number } | undefined, signal: AbortSignal) => Readable | Promise<Readable>,
 ): Promise<void> {
-  res.setHeader('Content-Type', 'video/mp4');
-  res.setHeader('Accept-Ranges', 'bytes');
   const header = req.headers.range;
-  if (!header) {
-    res.setHeader('Content-Length', size);
-    pipeStreamToResponse(await open(), res);
-    return;
-  }
-  const range = parseByteRange(header, size);
+  const range = header ? parseByteRange(header, size) : undefined;
   if (range === 'unsatisfiable') {
     res.status(416).setHeader('Content-Range', `bytes */${size}`);
     res.end();
     return;
   }
-  const stream = await open(range);
-  res.status(206);
-  res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
-  res.setHeader('Content-Length', range.end - range.start + 1);
-  pipeStreamToResponse(stream, res);
+  const head = (): void => {
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (range) {
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
+      res.setHeader('Content-Length', range.end - range.start + 1);
+    } else {
+      res.setHeader('Content-Length', size);
+    }
+  };
+  if (req.method === 'HEAD') {
+    head();
+    res.end();
+    return;
+  }
+  await pipeStreamToResponse(res, (signal) => open(range, signal), head);
 }
 
 /**
- * Pipe a readable to the response with error handling and abort cleanup.
- * A bare `stream.pipe(res)` leaves the read stream's 'error' unhandled (an I/O
- * error mid-stream then crashes the whole process) and leaks the fd when the
- * client aborts early (common with video Range scrubbing → eventual EMFILE).
+ * Pipe a video stream to the response and give it back however the request
+ * ends — see `utils/streamResponse.ts`. A stream that fails before its first
+ * byte is answered with a status and a body, never under the video's headers.
  */
-function pipeStreamToResponse(stream: Readable, res: Response): void {
-  const cleanup = () => stream.destroy();
-  stream.on('error', (err: Error) => {
-    res.removeListener('close', cleanup);
-    if (!res.headersSent) res.status(500).end();
-    else res.destroy(err);
+async function pipeStreamToResponse(
+  res: Response,
+  source: Readable | ((signal: AbortSignal) => Readable | Promise<Readable>),
+  head?: () => void,
+): Promise<void> {
+  await sendStream(res, source, {
+    head,
+    headerNames: VIDEO_HEADERS,
+    failure: { status: 500, body: { error: 'Failed to stream video' } },
+    onError: (error) => console.error('[DatasetRoutes] Video stream failed:', error.message),
   });
-  res.on('close', cleanup);
-  stream.pipe(res);
 }
 
 async function readLocalEpisodes(storagePath: string, fps: number): Promise<EpisodeMeta[] | null> {
@@ -1499,12 +1520,15 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
           return null;
         });
       } catch (err) {
+        // The store did not answer and there is nowhere else to get the video:
+        // that is "not now" (503 below), not the 404 the fall-through ends in.
+        if (isStoreTimeout(err) && !dataset.huggingFaceRepoId) throw err;
         // RustFS unreachable — fall through to the HF proxy.
         console.warn('[DatasetRoutes] RustFS video lookup failed:', err instanceof Error ? err.message : err);
       }
       if (found) {
         const { bucket, key, size } = found;
-        await sendVideo(req, res, size, (range) => rustfs.getStream(bucket, key, range));
+        await sendVideo(req, res, size, (range, signal) => rustfs.getStream(bucket, key, range, { signal }));
         return;
       }
     }
@@ -1518,9 +1542,11 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
 
     const revision = encodeURIComponent(dataset.sourceRevision || 'main');
     const hfUrl = `https://huggingface.co/datasets/${repoId}/resolve/${revision}/${videoPath}`;
+    // The player that asked may be gone before HuggingFace answers.
     const hfResponse = await fetch(hfUrl, {
       headers: req.headers.range ? { Range: req.headers.range } : {},
       redirect: 'follow',
+      signal: clientGoneSignal(res),
     });
 
     if (!hfResponse.ok) {
@@ -1537,13 +1563,31 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
     }
     res.setHeader('Accept-Ranges', 'bytes');
 
+    if (req.method === 'HEAD' || !hfResponse.body) {
+      void hfResponse.body?.cancel().catch(() => undefined);
+      res.end();
+      return;
+    }
     const { Readable: NodeReadable } = await import('stream');
     const nodeStream = NodeReadable.fromWeb(hfResponse.body as import('stream/web').ReadableStream);
-    pipeStreamToResponse(nodeStream, res);
+    await pipeStreamToResponse(res, nodeStream);
   } catch (error) {
+    // The client left: there is nobody to answer, and nothing went wrong.
+    if (res.destroyed || res.socket?.destroyed) return;
     console.error('[DatasetRoutes] Error streaming video:', error);
-    if (res.headersSent) res.destroy(error instanceof Error ? error : undefined);
-    else res.status(500).json({ error: 'Failed to stream video' });
+    if (res.headersSent) {
+      res.destroy(error instanceof Error ? error : undefined);
+      return;
+    }
+    for (const name of VIDEO_HEADERS) res.removeHeader(name);
+    if (isStoreTimeout(error)) {
+      // The store did not answer in time. Say "not now", so a player retries
+      // instead of concluding the video does not exist.
+      res.setHeader('Retry-After', '2');
+      res.status(503).json({ error: 'Object storage did not answer in time', code: 'STORAGE_TIMEOUT' });
+      return;
+    }
+    res.status(500).json({ error: 'Failed to stream video' });
   }
 });
 
