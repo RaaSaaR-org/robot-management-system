@@ -3,7 +3,7 @@ id: "TASK-492"
 aliases: []
 title: "The episode a viewer stops on loads at once however fast they went through the list, and the server drops the ones they passed"
 slug: "the-episode-a-viewer-stops-on-loads-at-once-however-fast"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
