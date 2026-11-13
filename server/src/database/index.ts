@@ -4,6 +4,7 @@
  */
 
 import { prisma } from './client.js';
+import { anonymousUserName } from '../config/anonymousUser.js';
 
 export { prisma } from './client.js';
 
@@ -23,14 +24,16 @@ export async function connectDatabase(): Promise<void> {
           id: 'dev-user-id',
           email: 'dev@neodem.local',
           passwordHash: 'disabled',
-          name: 'Dev User',
+          name: anonymousUserName(),
           // TASK-162: unified role model — dev user is super-admin so
           // the AUTH_DISABLED=true flow retains full access (matches
           // MOCK_USER in auth.middleware.ts).
           role: 'super-admin',
           forcePasswordChange: false,
         },
-        update: {},
+        // The display name follows the deployment (TASK-483), so a row seeded
+        // by an earlier boot picks up `ANONYMOUS_USER_NAME` too.
+        update: { name: anonymousUserName() },
       });
       console.log('[Database] Dev user seeded (AUTH_DISABLED=true)');
     }

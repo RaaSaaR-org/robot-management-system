@@ -10,6 +10,7 @@
 import { createStore } from '@/store';
 import { tokenStorage } from '@/api/client';
 import { getErrorStatus } from '@/shared/utils';
+import { useFeaturesStore } from '@/shared/hooks/useFeatures';
 import { authApi } from '../api/authApi';
 import { isMFAChallengeResponse } from '../types/auth.types';
 import type { AuthStore, User, AuthErrorCode } from '../types/auth.types';
@@ -53,6 +54,18 @@ const ERROR_MESSAGES: Record<AuthErrorCode, string> = {
 function isAuthRejection(error: unknown): boolean {
   const status = getErrorStatus(error);
   return status === 401 || status === 403;
+}
+
+/**
+ * Whether the server runs without sign-in (TASK-483). Asks the public feature
+ * snapshot and waits for the answer; anything but an explicit "not required"
+ * — an older server, an outage — counts as required, the state the app was in
+ * before it could ask.
+ */
+async function serverNeedsNoSignIn(): Promise<boolean> {
+  await useFeaturesStore.getState().fetch();
+  const { loaded, flags } = useFeaturesStore.getState();
+  return loaded && flags.signInRequired === false;
 }
 
 // ============================================================================
@@ -186,6 +199,38 @@ export const useAuthStore = createStore<AuthStore>(
       const accessToken = tokenStorage.getAccessToken();
 
       if (!accessToken) {
+        // TASK-483: a server without sign-in answers /me for anyone, as its one
+        // shared user. Ask it instead of demanding a token nobody can obtain.
+        if (await serverNeedsNoSignIn()) {
+          set((state) => {
+            state.isLoading = true;
+          });
+          try {
+            const user = await authApi.getCurrentUser();
+            set((state) => {
+              state.user = user;
+              state.isAuthenticated = true;
+              state.isLoading = false;
+              state.isInitialized = true;
+              state.mustChangePassword = false;
+            });
+          } catch {
+            // Unreachable or rate limited. Not signed out — there is nothing
+            // to sign in to — so the route guard offers a retry instead.
+            set((state) => {
+              state.user = null;
+              state.isAuthenticated = false;
+              state.isLoading = false;
+              state.isInitialized = true;
+            });
+          }
+          return;
+        }
+
+        // Sign-in is required, or the server could not say yet (see the
+        // feature-snapshot subscription below the store). A persisted session
+        // is left as it is: the dev server and the static demo build sign in
+        // their bundled user without a token.
         set((state) => {
           state.isInitialized = true;
         });
@@ -409,6 +454,18 @@ export const useAuthStore = createStore<AuthStore>(
     }),
   }
 );
+
+// TASK-483: the feature snapshot can arrive after the session was settled — it
+// failed while the app booted, so a token-less browser was taken for signed out,
+// and `useFeatures` fetched it again a few seconds later. If it then says that
+// no sign-in is needed, load the shared user right away; otherwise the visitor
+// sits on a retry screen for a server that is answering.
+useFeaturesStore.subscribe((features, previous) => {
+  if (!features.loaded || previous.loaded || features.flags.signInRequired !== false) return;
+  const auth = useAuthStore.getState();
+  if (!auth.isInitialized || auth.isAuthenticated || auth.isLoading) return;
+  void auth.initialize();
+});
 
 // ============================================================================
 // SELECTORS

@@ -7,7 +7,7 @@
 
 import { Suspense, lazy } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { ProtectedRoute } from './features/auth';
+import { ProtectedRoute, RequireSession } from './features/auth';
 import { useAuthStore, selectMustChangePassword, selectUserRole } from './features/auth/store/authStore';
 import type { UserRole } from './features/auth/types/auth.types';
 import { AppLayout } from './components/layout';
@@ -110,13 +110,7 @@ function ProtectedAppRoute({
     !requiresRole || (role !== null && requiresRole.includes(role));
 
   return (
-    <ProtectedRoute onUnauthenticated={() => {
-        if (import.meta.env.VITE_DEMO_MODE === 'true') {
-          window.location.href = import.meta.env.BASE_URL || '/';
-        } else {
-          window.location.href = '/login';
-        }
-      }}>
+    <RequireSession>
       {mustChangePassword && location.pathname !== '/set-password' ? (
         <Navigate to="/set-password" replace />
       ) : !roleAllowed ? (
@@ -133,7 +127,7 @@ function ProtectedAppRoute({
           </RouteErrorBoundary>
         </AppLayout>
       )}
-    </ProtectedRoute>
+    </RequireSession>
   );
 }
 
