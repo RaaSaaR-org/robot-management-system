@@ -25,6 +25,7 @@ import {
   isRustFSInitialized,
   type MultipartUploadInfo,
 } from '../storage/index.js';
+import { datasetUploadService } from '../services/datasetUpload/DatasetUploadService.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_AGE_HOURS = 24;
@@ -52,6 +53,12 @@ export interface MultipartSweepOptions {
   maxAgeMs?: () => number;
   intervalMs?: () => number;
   now?: () => number;
+  /**
+   * Key prefixes whose multipart uploads are open on purpose, whatever their
+   * age: a direct dataset upload (TASK-480) opens one per large file at start
+   * and may be resumed for days. Defaults to the uploads still running.
+   */
+  keepPrefixes?: () => Promise<string[]>;
 }
 
 /** A positive number of hours from `name`, or `fallback` when unset or invalid. */
@@ -90,6 +97,7 @@ export class MultipartUploadSweep {
   private readonly maxAgeMs: () => number;
   private readonly intervalMs: () => number;
   private readonly now: () => number;
+  private readonly keepPrefixes: () => Promise<string[]>;
 
   constructor(options: MultipartSweepOptions = {}) {
     this.store = options.store ?? getRustFSClient;
@@ -98,6 +106,7 @@ export class MultipartUploadSweep {
     this.maxAgeMs = options.maxAgeMs ?? multipartMaxAgeMs;
     this.intervalMs = options.intervalMs ?? multipartSweepIntervalMs;
     this.now = options.now ?? Date.now;
+    this.keepPrefixes = options.keepPrefixes ?? (() => datasetUploadService.openPrefixes());
   }
 
   /** One sweep over every bucket. Never throws; overlapping calls do nothing. */
@@ -108,8 +117,11 @@ export class MultipartUploadSweep {
     try {
       const store = this.store();
       const cutoff = this.now() - this.maxAgeMs();
+      // Asked first, and a failure to ask ends the sweep: aborting the parts of
+      // an upload somebody is still sending is worse than sweeping six hours late.
+      const keep = (await this.keepPrefixes()).filter((prefix) => prefix.length > 0);
       for (const bucket of this.buckets()) {
-        await this.sweepBucket(store, bucket, cutoff, result);
+        await this.sweepBucket(store, bucket, cutoff, keep, result);
       }
       if (result.aborted > 0 || result.errors.length > 0) {
         console.log(
@@ -131,6 +143,7 @@ export class MultipartUploadSweep {
     store: MultipartSweepStore,
     bucket: string,
     cutoff: number,
+    keep: string[],
     result: MultipartSweepResult,
   ): Promise<void> {
     let uploads: MultipartUploadInfo[];
@@ -145,6 +158,11 @@ export class MultipartUploadSweep {
     for (const upload of uploads) {
       // No start time means no age: never abort what might still be running.
       if (!upload.initiated || upload.initiated.getTime() > cutoff) {
+        result.kept++;
+        continue;
+      }
+      // Dataset prefixes are fresh uuids, so a match in another bucket cannot happen by accident.
+      if (keep.some((prefix) => upload.key.startsWith(prefix))) {
         result.kept++;
         continue;
       }

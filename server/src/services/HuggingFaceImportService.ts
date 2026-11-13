@@ -894,7 +894,7 @@ export class HuggingFaceImportService {
    * Resolve a robotTypeId from an explicit override or the HF info.json
    * robot_type field, creating a type only when nothing registered fits.
    */
-  private async resolveRobotTypeId(
+  async resolveRobotTypeId(
     requestedId: string | undefined,
     info: LeRobotInfoV3,
   ): Promise<string> {
@@ -1025,83 +1025,12 @@ export class HuggingFaceImportService {
         ...stored,
       });
 
-      // `importError: null`: during a rolling update the NEW pod's startup
-      // sweep can mark this row failed while this (old) pod is still finishing
-      // it (TASK-359). If it does finish, the stale reason must not outlive it.
-      await datasetRepository.update(datasetId, { status: 'validating', importError: null });
-      this.log(datasetId, 'info', `All ${files.length} files stored; validating the dataset`);
-
-      if (natsClient.isConnected()) {
-        const js = natsClient.getJetStream();
-        if (js) {
-          const payload = JSON.stringify({ datasetId, storagePath: sink.storagePath });
-          // The msgID is per ATTEMPT, not per dataset.
-          //
-          // `validate-${datasetId}` sat inside JetStream's dedup window, so the
-          // SECOND validation ever queued for a dataset was silently discarded
-          // by the server — acked as a duplicate, no error here, no consumer
-          // there. The row stays at `validating`, and `retryImport` refuses a
-          // `validating` row with IN_PROGRESS, so the dataset is wedged for
-          // good with no way out through the UI. Dedup is worth having for a
-          // publish that is genuinely repeated; a retry is a new attempt and
-          // must be allowed to queue its own work.
-          await js.publish(DATASET_VALIDATION_SUBJECT, new TextEncoder().encode(payload), {
-            msgID: `validate-${datasetId}-${uuidv4()}`,
-          });
-          console.log(`[HFImport] Queued validation job for ${datasetId}`);
-          this.log(datasetId, 'info', 'Validation queued for the validation worker');
-        }
-      } else {
-        // Run validation synchronously if NATS not available
-        const outcome = await datasetService.validateAndUpdateDataset(datasetId, sink.storagePath);
-        if (outcome === 'failed') {
-          // The download worked and the dataset did not: saying "completed"
-          // here is what left the operator with a green toast and a red card.
-          // Validation already marked the row and kept its report.
-          const error = 'Validation failed — open the dataset for the validation report';
-          this.log(datasetId, 'error', 'Validation failed — the files do not form a valid LeRobot dataset');
-          // The last frame says it stopped, so the backfill a reloaded page
-          // reads agrees with the event it missed.
-          this.emitProgress(datasetId, {
-            datasetId,
-            status: 'failed',
-            phase: 'validating',
-            progress: 90,
-            ...stored,
-            error,
-          });
-          datasetService.emit('dataset:event', {
-            type: 'dataset:import:failed',
-            datasetId,
-            error,
-            timestamp: new Date().toISOString(),
-          });
-          return;
-        }
-        this.log(
-          datasetId,
-          outcome === 'ready' ? 'info' : 'warn',
-          outcome === 'ready' ? 'Validation passed' : 'Storage unavailable — the dataset was not validated',
-        );
-      }
-
-      // Emit completion
-      this.emitProgress(datasetId, {
-        datasetId,
-        status: 'validating',
-        phase: 'validating',
-        progress: 95,
-        ...stored,
+      const outcome = await validateStoredDataset(datasetId, sink.storagePath, files.length, {
+        what: 'Import',
+        log: (level, message) => this.log(datasetId, level, message),
+        progress: (frame) => this.emitProgress(datasetId, { datasetId, phase: 'validating', ...stored, ...frame }),
       });
-
-      // The line before the event: a browser stops listening once it hears
-      // the import has ended, so anything said after that is never seen.
-      this.log(datasetId, 'info', 'Import finished');
-      datasetService.emit('dataset:event', {
-        type: 'dataset:import:completed',
-        datasetId,
-        timestamp: new Date().toISOString(),
-      });
+      if (outcome === 'failed') return;
 
       console.log(`[HFImport] Import completed for ${datasetId} (${repoId})`);
     } catch (error) {
@@ -1839,6 +1768,106 @@ export class HuggingFaceImportService {
       signal?.addEventListener('abort', wake, { once: true });
     });
   }
+}
+
+// ============================================================================
+// AFTER THE BYTES ARE STORED
+// ============================================================================
+
+/** How a stored dataset left {@link validateStoredDataset}. */
+export type StoredDatasetOutcome = 'queued' | 'ready' | 'failed' | 'unavailable';
+
+/** What the caller shows while a stored dataset is validated. */
+export interface StoredDatasetHooks {
+  /** Names the run in the last log line: "Import finished", "Upload finished". */
+  what: string;
+  log(level: ImportLogLevel, message: string): void;
+  /** A progress frame; the caller adds its own totals and the dataset id. */
+  progress(frame: Pick<HuggingFaceImportProgress, 'status' | 'progress' | 'error'>): void;
+}
+
+/**
+ * Everything that happens once every file of a dataset is in its store: the row
+ * goes to `validating`, the validation is queued (NATS) or run here, and the
+ * end is said on the log and on the wire.
+ *
+ * One function because there are two ways a tree gets stored — the Hub import
+ * and the direct upload (TASK-480) — and a dataset must end in the same state
+ * whichever one put it there. `failed` means validation ran here and rejected
+ * the dataset; the row and its report are already written.
+ */
+export async function validateStoredDataset(
+  datasetId: string,
+  storagePath: string,
+  fileCount: number,
+  hooks: StoredDatasetHooks,
+): Promise<StoredDatasetOutcome> {
+  // `importError: null`: during a rolling update the NEW pod's startup
+  // sweep can mark this row failed while this (old) pod is still finishing
+  // it (TASK-359). If it does finish, the stale reason must not outlive it.
+  await datasetRepository.update(datasetId, { status: 'validating', importError: null });
+  hooks.log('info', `All ${fileCount} files stored; validating the dataset`);
+
+  let result: StoredDatasetOutcome = 'queued';
+  if (natsClient.isConnected()) {
+    const js = natsClient.getJetStream();
+    if (js) {
+      const payload = JSON.stringify({ datasetId, storagePath });
+      // The msgID is per ATTEMPT, not per dataset.
+      //
+      // `validate-${datasetId}` sat inside JetStream's dedup window, so the
+      // SECOND validation ever queued for a dataset was silently discarded
+      // by the server — acked as a duplicate, no error here, no consumer
+      // there. The row stays at `validating`, and `retryImport` refuses a
+      // `validating` row with IN_PROGRESS, so the dataset is wedged for
+      // good with no way out through the UI. Dedup is worth having for a
+      // publish that is genuinely repeated; a retry is a new attempt and
+      // must be allowed to queue its own work.
+      await js.publish(DATASET_VALIDATION_SUBJECT, new TextEncoder().encode(payload), {
+        msgID: `validate-${datasetId}-${uuidv4()}`,
+      });
+      console.log(`[Datasets] Queued validation job for ${datasetId}`);
+      hooks.log('info', 'Validation queued for the validation worker');
+    }
+  } else {
+    // Run validation synchronously if NATS not available
+    const outcome = await datasetService.validateAndUpdateDataset(datasetId, storagePath);
+    if (outcome === 'failed') {
+      // The download worked and the dataset did not: saying "completed"
+      // here is what left the operator with a green toast and a red card.
+      // Validation already marked the row and kept its report.
+      const error = 'Validation failed — open the dataset for the validation report';
+      hooks.log('error', 'Validation failed — the files do not form a valid LeRobot dataset');
+      // The last frame says it stopped, so the backfill a reloaded page
+      // reads agrees with the event it missed.
+      hooks.progress({ status: 'failed', progress: 90, error });
+      datasetService.emit('dataset:event', {
+        type: 'dataset:import:failed',
+        datasetId,
+        error,
+        timestamp: new Date().toISOString(),
+      });
+      return 'failed';
+    }
+    result = outcome;
+    hooks.log(
+      outcome === 'ready' ? 'info' : 'warn',
+      outcome === 'ready' ? 'Validation passed' : 'Storage unavailable — the dataset was not validated',
+    );
+  }
+
+  // Emit completion
+  hooks.progress({ status: 'validating', progress: 95 });
+
+  // The line before the event: a browser stops listening once it hears
+  // the import has ended, so anything said after that is never seen.
+  hooks.log('info', `${hooks.what} finished`);
+  datasetService.emit('dataset:event', {
+    type: 'dataset:import:completed',
+    datasetId,
+    timestamp: new Date().toISOString(),
+  });
+  return result;
 }
 
 // ============================================================================
