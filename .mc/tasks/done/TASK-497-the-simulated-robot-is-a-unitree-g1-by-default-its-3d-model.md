@@ -3,7 +3,7 @@ id: "TASK-497"
 aliases: []
 title: "The simulated robot is a Unitree G1 by default, its 3D model loads compressed, and it stops showing Charging once it is full"
 slug: "the-simulated-robot-is-a-unitree-g1-by-default-its-3d-model"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
