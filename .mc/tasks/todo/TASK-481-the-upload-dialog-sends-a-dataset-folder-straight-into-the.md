@@ -132,15 +132,67 @@ request can leave a demo page and the MSW handlers need no upload routes.
 
 ## Acceptance Criteria
 
-- [ ] The dialog takes a LeRobot dataset folder through a directory picker and through drag-and-drop of a folder
-- [ ] Before anything is sent it shows version, episodes, frames, cameras, fps and size read from `meta/info.json`, and a folder that is not a LeRobot dataset is flagged and cannot be uploaded
-- [ ] Files go up in `File.slice` parts, at most three requests at once, re-sent with backoff only for the refusals the contract calls transient
-- [ ] Overall and per-file progress, rate and time left are shown while it runs
-- [ ] Cancel removes the upload on the server; closing the dialog keeps it running, visibly (dialog text, top-bar chip, the row)
-- [ ] After finish the dataset's row shows validation and then ready
-- [ ] Name, description and robot type can be set; a server refusal is shown with its sentence, code and context
-- [ ] The presigned-archive client code is gone from the app; the server endpoints are untouched
-- [ ] Demo build and its Playwright gate still pass
-- [ ] Real run against RustFS with the bottle dataset: ready, both camera videos play (see Notes)
+- [x] The dialog takes a LeRobot dataset folder through a directory picker and through drag-and-drop of a folder
+- [x] Before anything is sent it shows version, episodes, frames, cameras, fps and size read from `meta/info.json`, and a folder that is not a LeRobot dataset is flagged and cannot be uploaded
+- [x] Files go up in `File.slice` parts, at most three requests at once, re-sent with backoff only for the refusals the contract calls transient
+- [x] Overall and per-file progress, rate and time left are shown while it runs
+- [x] Cancel removes the upload on the server; closing the dialog keeps it running, visibly (dialog text, top-bar chip, the row)
+- [x] After finish the dataset's row shows validation and then ready
+- [x] Name, description and robot type can be set; a server refusal is shown with its sentence, code and context
+- [x] The presigned-archive client code is gone from the app; the server endpoints are untouched
+- [x] Demo build and its Playwright gate still pass
+- [x] Real run against RustFS with the bottle dataset: ready, both camera videos play (see Notes)
 
 ## Notes
+
+### Real run (2026-11-13)
+
+Throwaway `rustfs/rustfs:1.0.0` in docker with a hand-made `training-datasets` bucket,
+the server built from `main` (`NODE_ENV=production`, so the rate limit was on; SQLite;
+NATS unreachable, validation in-process), the app dev server proxying `/api` to it, and a
+Playwright script driving the dialog with
+`/mnt/data/rms-demo/g1-dex3-bottle-sorting-sim`. Between the app and the server sat a TCP
+proxy capping each connection at 8 MB/s, so the upload took about 20 s instead of 2 and
+the progress could be looked at.
+
+- **Folder check.** The dataset's `videos/` subfolder: "This folder cannot be uploaded —
+  No meta/info.json in this folder…", Upload disabled. The dataset folder: LeRobot v3.0,
+  80 episodes, 55,695 frames, 30 fps, 2 cameras (head, wrist), 425 MB (the app's binary
+  units; 446,100,758 bytes), 7 files to upload, `README.md` counted as staying behind.
+- **Upload.** 58 part requests of 8 MiB, never more than 3 in flight (counted from the
+  browser's own request events). Overall bar, rate and time left, per-file bars. "Continue
+  in background" closed the dialog; the row showed `11% · 51.0 MB / 425 MB` and the top
+  bar the same percentage; the chip reopened the dialog on the running upload.
+- **Verdict.** The dialog closed when finish was accepted; the row read "Verifying the
+  files", then `Ready` 1.8 s later: 80 episodes, 55,695 frames, robot type
+  `unitree_g1_dex3 (action 31, state 31)`, `validation.valid: true`, no errors, quality 85.
+  Bucket: exactly 7 objects, 446,100,758 bytes, 0 pending multipart uploads.
+- **Episode.** Opened from the row; both `<video>` elements (head, wrist; 640×480,
+  `readyState` 4) advanced `currentTime` by 3.0 s in 3 s of wall time.
+- **Cancel** at 122 MB of 425 MB: confirmed, the row disappeared, `GET /api/datasets`
+  empty, bucket 0 objects and 0 pending multipart uploads.
+- **A refusal from the real server.** Picking the seeded 43-wide "Unitree G1 EDU (Dex3-1)"
+  for the 31-wide dataset: "Robot type … expects action/state 43/43; dataset declares
+  31/31." with `ROBOT_DIMENSION_MISMATCH (HTTP 400)`, the form still filled in.
+- **Browsers.** The whole run passed in Playwright's Firefox and Chromium. WebKit could
+  not be launched on this machine (missing system libraries), so **Safari is untested**;
+  the dialog uses only `webkitdirectory`, `webkitGetAsEntry`, `File.slice`,
+  `XMLHttpRequest` and `crypto.subtle`, all of which Safari has. Dropping a folder is
+  covered by the component test with File-and-Directory-Entries stand-ins, not by a real
+  drag from a file manager.
+
+Also looked at: the dialog at 390 px and in the light theme.
+
+### Gates
+
+`npx tsc`, `npx vitest run` (299 files, 3,915 tests), `npm run build`, and
+`npx playwright test` — which builds with `VITE_DEMO_MODE=true` and runs the demo gate —
+275 passed. No server change.
+
+### Left for later
+
+- An upload interrupted by closing or reloading the tab cannot be resumed from the
+  browser (file handles do not survive); it stays as an `uploading` row until it is
+  deleted or the server's idle timeout (6 h) removes it. Re-picking the folder to resume
+  it would need the row to offer that.
+- One upload at a time per tab.
