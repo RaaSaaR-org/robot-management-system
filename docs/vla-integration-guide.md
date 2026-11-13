@@ -1,6 +1,8 @@
 # VLA Integration Guide
 
-This guide covers the Vision-Language-Action inference pipeline: how the SO-101 robot arm executes learned skills using camera input and natural language instructions.
+This guide covers the Vision-Language-Action inference pipeline: how a robot executes learned skills using camera input and natural language instructions.
+
+The walkthrough follows the SO-101 arm, the embodiment the pipeline was first built on, and notes where the Unitree G1 differs. Which models can be served, and how far each has been taken, is in [the platform → Models](platform.md#models).
 
 ## Overview
 

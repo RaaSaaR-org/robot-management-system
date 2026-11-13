@@ -2,8 +2,8 @@
 
 This guide covers integrating physical robots with NeoDEM:
 
-- **[SO-101](#so-101-overview)** — 6-DOF arm, serial sidecar. Production-tested.
-- **[Unitree G1 EDU (Dex3-1)](#unitree-g1-edu-dex3-1)** — 43-DOF humanoid, DDS sidecar. ⚠️ hardware-pending — see TASK-169 (`.mc/tasks/todo/TASK-169-lab-bringup-unitree-g1-edu-hardware.md`) for the safety-staged lab bring-up.
+- **[Unitree G1 EDU (Dex3-1)](#unitree-g1-edu-dex3-1)** — 43-DOF humanoid, DDS sidecar. The embodiment new work targets. Reading a real, powered G1 works; anything that moves one is simulated or gated behind explicit arming steps — [the platform → Readiness at a glance](platform.md#readiness-at-a-glance) is the statement of record, and [G1 EDU lab bring-up](g1-edu-lab-bringup.md) is the safety-staged log behind it (TASK-169, `.mc/tasks/todo/TASK-169-lab-bringup-unitree-g1-edu-hardware.md`).
+- **[SO-101](#so-101-overview)** — 6-DOF arm, serial sidecar. The arm the platform was bootstrapped on, run on real hardware, and still supported; its section comes first below because the G1 sidecar mirrors it.
 
 The pattern is the same for both: a Python **hardware sidecar** exposes a small HTTP API that the Node.js robot agent talks to (`HARDWARE_SIDECAR_URL`); only the underlying driver differs (serial vs. Unitree DDS).
 

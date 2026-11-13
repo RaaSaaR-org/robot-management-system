@@ -64,4 +64,23 @@ describe('DashboardPage request budget', () => {
     expect(counts.get('/api/digital-twins') ?? 0).toBe(1);
     expect(counts.get('/api/digital-twins/tw-1/zones') ?? 0).toBe(1);
   });
+
+  it('keeps the site map inside the panel body, not flush on its border (TASK-489)', async () => {
+    // A panel built from sections pads nothing itself. The map was a bare child
+    // beside Panel.Header, so the site picker, the map and the list of robots
+    // off the map all touched the panel's left edge.
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>
+    );
+    const picker = await screen.findByRole('combobox', { name: 'Site' });
+    let node: HTMLElement | null = picker;
+    let padded = false;
+    while (node && !padded) {
+      padded = node.classList.contains('p-5');
+      node = node.parentElement;
+    }
+    expect(padded).toBe(true);
+  });
 });

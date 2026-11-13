@@ -268,8 +268,16 @@ function SiteRobotList({ groups, compact }: { groups: SiteRobotGroups; compact: 
         note="not aligned — fence not enforcing"
         tone="warning"
         testId="site-map-unaligned"
+        compact={compact}
       />
-      <RobotGroup title="No site" robots={unbound} note="no site" tone="neutral" testId="site-map-unbound" />
+      <RobotGroup
+        title="No site"
+        robots={unbound}
+        note="no site"
+        tone="neutral"
+        testId="site-map-unbound"
+        compact={compact}
+      />
     </div>
   );
 }
@@ -280,24 +288,36 @@ function RobotGroup({
   note,
   tone,
   testId,
+  compact,
 }: {
   title: string;
   robots: Robot[];
   note: string;
   tone: 'warning' | 'neutral';
   testId: string;
+  /** Under the dashboard's map the list has the panel's width: one line a robot, in columns */
+  compact: boolean;
 }) {
   if (robots.length === 0) return null;
   return (
-    <section data-testid={testId} className="flex flex-col gap-1.5">
-      <h3 className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">{title}</h3>
-      <ul className="flex flex-col gap-1">
+    <section data-testid={testId} className="flex flex-col gap-2">
+      <h3 className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">
+        {title}
+        <span className="ml-1.5 tabular-nums text-ink-muted">{robots.length}</span>
+      </h3>
+      <ul className={cn(compact ? 'grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2' : 'flex flex-col gap-2')}>
         {robots.map((r) => (
-          <li key={r.id} className="flex min-w-0 flex-col items-start gap-1">
-            <Link to={`/robots/${r.id}`} className="max-w-full truncate text-ink-primary hover:underline">
+          <li
+            key={r.id}
+            className={cn(
+              'flex min-w-0',
+              compact ? 'items-center justify-between gap-3' : 'flex-col items-start gap-1',
+            )}
+          >
+            <Link to={`/robots/${r.id}`} className="min-w-0 max-w-full truncate text-ink-primary hover:underline">
               {r.name}
             </Link>
-            <StatusTag tone={tone} size="sm">
+            <StatusTag tone={tone} size="sm" className="shrink-0">
               {note}
             </StatusTag>
           </li>

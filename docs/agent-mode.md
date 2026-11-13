@@ -111,7 +111,8 @@ The keys you are most likely to touch, all in `.env.g1-edu-agent`:
 | `AGENT_OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Where Ollama listens |
 | `AGENT_STOP_WORDS` | `stopp,stop,halt` | Spoken words that stop the robot without touching the model |
 | `AGENT_RANGE_ENABLED` | `true` | Use the LiDAR cone query for distances instead of the vision model's guess |
-| `AGENT_MAP_ENABLED`, `AGENT_NAV_PLANNER` | `true`, `grid` | Build the occupancy map and plan `goto` on it |
+| `AGENT_MAP_ENABLED`, `AGENT_NAV_PLANNER` | `true` (follows `AGENT_RANGE_ENABLED` when unset), `grid` | Build the occupancy map and plan `goto` on it. Off, the Agent Mode map panel reads "This robot is not sharing a map of its surroundings." |
+| `AGENT_CLOUD_ENABLED` | follows `AGENT_MAP_ENABLED` when unset | Keep the 3-D point cloud behind the map panel's 3D view. Off, that view reads "This robot is not keeping a 3D view of its surroundings." |
 | `AGENT_WALK_SPEED_MPS`, `AGENT_TURN_SPEED_DPS` | `0.4`, `45` | Commanded speeds |
 | `PLACE_GRAPH_PATH` | the sim room | Named places, or fetched from the twin when unset |
 | `AGENT_HEARTBEAT_ENABLED` | `false` | Let the robot notice things while idle (see below) |

@@ -224,7 +224,15 @@ describe('RobotMapPanel', () => {
       robotMapError: 'occupancy map is disabled on this agent (AGENT_MAP_ENABLED)',
     });
     render(<RobotMapPanel robotId="r1" />);
-    expect(screen.getByTestId('agent-map-empty')).toHaveTextContent('does not publish a map (AGENT_MAP_ENABLED)');
+    const empty = screen.getByTestId('agent-map-empty');
+    expect(empty).toHaveTextContent('This robot is not sharing a map of its surroundings.');
+    // The setting's name is the operator's: folded under "For administrators",
+    // closed until asked for, and nowhere in the sentence a visitor reads (TASK-489).
+    const hint = screen.getByTestId('agent-map-admin-hint');
+    expect(hint.tagName).toBe('DETAILS');
+    expect(hint).not.toHaveAttribute('open');
+    expect(hint).toHaveTextContent('AGENT_MAP_ENABLED');
+    expect(empty.querySelector('p')).not.toHaveTextContent(/[A-Z]{3,}_[A-Z]{3,}/);
     expect(screen.queryByTestId('agent-map-canvas')).toBeNull();
   });
 
@@ -430,7 +438,13 @@ describe('RobotMapPanel export (TASK-210)', () => {
     act(() => {
       useAgentModeStore.setState({ robotCloudStatus: 'disabled', robotCloudError: 'world cloud is disabled on this agent (AGENT_CLOUD_ENABLED)' });
     });
-    expect(screen.getByTestId('agent-cloud-empty')).toHaveTextContent('does not keep a point cloud (AGENT_CLOUD_ENABLED)');
+    const cloudEmpty = screen.getByTestId('agent-cloud-empty');
+    expect(cloudEmpty).toHaveTextContent('This robot is not keeping a 3D view of its surroundings.');
+    const cloudHint = screen.getByTestId('agent-cloud-admin-hint');
+    expect(cloudHint.tagName).toBe('DETAILS');
+    expect(cloudHint).not.toHaveAttribute('open');
+    expect(cloudHint).toHaveTextContent('AGENT_CLOUD_ENABLED');
+    expect(cloudEmpty.querySelector('p')).not.toHaveTextContent(/[A-Z]{3,}_[A-Z]{3,}/);
     act(() => {
       useAgentModeStore.setState({ robotCloudStatus: 'disabled', robotCloudError: 'no cloud yet — nothing has been integrated' });
     });

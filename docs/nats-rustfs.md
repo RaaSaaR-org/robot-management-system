@@ -1,12 +1,12 @@
 # NATS JetStream + RustFS Implementation Guide
 
-## Complete Deployment for Robot Fleet Management System
+## Complete Deployment for NeoDEM
 
 ---
 
 ## Executive Summary
 
-This implementation guide covers the complete deployment of **NATS JetStream** (messaging, job queues, state management) and **RustFS** (S3-compatible distributed object storage) for the EmAI Robot Fleet Management System. The architecture replaces BullMQ/Redis with a unified NATS-based approach while leveraging RustFS's 2.3x performance advantage over MinIO for storing ML models, training datasets, and robot telemetry logs.
+This implementation guide covers the complete deployment of **NATS JetStream** (messaging, job queues, state management) and **RustFS** (S3-compatible distributed object storage) for NeoDEM. The architecture replaces BullMQ/Redis with a unified NATS-based approach while leveraging RustFS's 2.3x performance advantage over MinIO for storing ML models, training datasets, and robot telemetry logs.
 
 > ⚠️ **Important Note on RustFS**: RustFS explicitly states "Do NOT use in production environments!" as it's under rapid development (v1.0.0-alpha). This guide includes production-hardening strategies and fallback patterns. For mission-critical deployments, consider running RustFS alongside a proven backup solution until it reaches stable release.
 
