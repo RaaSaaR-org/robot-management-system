@@ -3,7 +3,7 @@ id: "TASK-491"
 aliases: []
 title: "Switching episodes quickly never takes dataset browsing down, and a stuck storage call clears on its own"
 slug: "switching-episodes-quickly-never-takes-dataset-browsing-down"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
