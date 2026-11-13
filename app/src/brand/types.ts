@@ -30,7 +30,7 @@ export interface BrandConfig {
   name: string;
   /** Expansion of the display name acronym (e.g., "Neo Data & Execution Management") */
   nameExpansion?: string;
-  /** Short tagline (e.g., "Robot Management System") */
+  /** Short product tagline, shown after the name in the browser title (default: "Open Physical AI Platform") */
   tagline: string;
   /** Short marketing slogan used on the landing hero (e.g., "Bringing Intelligence to Motion") */
   shortSlogan?: string;

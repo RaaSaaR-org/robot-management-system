@@ -37,7 +37,7 @@ vi.mock('@/shared/components/ui', async (importOriginal) => {
 import { confirm, toast } from '@/shared/components/ui';
 import { useTwinStore } from '@/features/digitaltwin/store/twinStore';
 import { useSafetyStore } from '@/features/safety/store/safetyStore';
-import { SiteMap, LAST_SITE_KEY, groupSiteRobots, plannedMarkerPositions, sitePoseOf } from '../SiteMap';
+import { SiteMap, LAST_SITE_KEY, MAP_LABEL_PX, groupSiteRobots, mapLabelSize, plannedMarkerPositions, sitePoseOf } from '../SiteMap';
 
 const BOUNDS = { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 10, maxZ: 3 };
 const twin = (id: string, name: string) =>
@@ -271,19 +271,79 @@ describe('expected robots on the site map (TASK-493)', () => {
     expect(g.unaligned.map((r) => r.id)).toEqual(['g2']);
   });
 
-  it('stacks the robots planned into one zone under its name instead of on top of each other', () => {
+  // At 100 px a metre DOCK is 300 px wide and its name sits at (300, 200).
+  const px = (p: { x: number; y: number }) => ({ x: p.x * 100, y: p.y * 100 });
+  const FAR: TwinZoneDTO = { ...DOCK, id: 'tz-far', points: DOCK.points.map((p) => ({ x: p.x + 10, y: p.y })) };
+
+  it('writes the robots planned into one zone on the lines around its name, not on top of each other', () => {
     const at = plannedMarkerPositions(
       [
         { robot: expected('a', 'tw-1', 'Dock'), zone: DOCK },
         { robot: expected('b', 'tw-1', 'Dock'), zone: DOCK },
-        { robot: expected('c', 'tw-1', 'Other'), zone: { ...DOCK, id: 'tz-other' } },
+        { robot: expected('c', 'tw-1', 'Far'), zone: FAR },
       ],
-      (p) => ({ x: p.x * 10, y: p.y * 10 }),
+      px,
     ).map((m) => m.at);
-    // Over the zone's name (drawn at the centroid, y = 20), going up.
-    expect(at[0]).toEqual({ x: 30, y: 4 });
-    expect(at[1]).toEqual({ x: 30, y: -14 });
-    expect(at[2]).toEqual(at[0]);
+    // The line over the zone's name, then the line under it.
+    expect(at[0]).toEqual({ x: 300, y: 184 });
+    expect(at[1]).toEqual({ x: 300, y: 218 });
+    // Another zone is another place: its first robot gets the first line again.
+    expect(at[2]).toEqual({ x: 1300, y: 184 });
+  });
+
+  it('keeps a planned label off the zone names on the map (TASK-495)', () => {
+    const planned = [{ robot: expected('a', 'tw-1', 'Dock'), zone: DOCK }];
+    // A neighbour's name where the line over "Dock" would be.
+    const neighbour = { x: 250, y: 174, w: 100, h: 12 };
+    expect(plannedMarkerPositions(planned, px, { obstacles: [neighbour] })[0]!.at).toEqual({ x: 300, y: 218 });
+    // One that is out of the way changes nothing.
+    expect(plannedMarkerPositions(planned, px, { obstacles: [{ ...neighbour, x: 600 }] })[0]!.at).toEqual({ x: 300, y: 184 });
+  });
+
+  it('lets the longest label of a zone pick its line first, and answers in the order asked', () => {
+    const long = { ...expected('g1', 'tw-1', 'Dock'), name: 'Unitree G1 with Dex3 hands' } as Robot;
+    const at = plannedMarkerPositions(
+      [
+        { robot: expected('a', 'tw-1', 'Dock'), zone: DOCK },
+        { robot: long, zone: DOCK },
+      ],
+      px,
+    );
+    expect(at.map((m) => m.robot.id)).toEqual(['a', 'g1']);
+    expect(at[1]!.at.y).toBe(184);
+    expect(at[0]!.at.y).toBe(218);
+  });
+
+  it('starts a label that is wider than its zone at the zone, so the ring stays over it', () => {
+    const narrow = (p: { x: number; y: number }) => ({ x: p.x * 10, y: p.y * 10 });
+    const [marker] = plannedMarkerPositions([{ robot: expected('a', 'tw-1', 'Dock'), zone: DOCK }], narrow);
+    // The zone is 10…40 px; the label is some 120 px wide and centred would start at −31.
+    const width = (marker!.at.x - 16) * 2;
+    expect(marker!.at.x - width / 2).toBe(16);
+    expect(width).toBeGreaterThan(100);
+  });
+
+  it('grows the labels with the font, so two lines never close up on a small map', () => {
+    const at = plannedMarkerPositions(
+      [
+        { robot: expected('a', 'tw-1', 'Dock'), zone: DOCK },
+        { robot: expected('b', 'tw-1', 'Dock'), zone: DOCK },
+      ],
+      px,
+      { fontSize: 24 },
+    ).map((m) => m.at.y);
+    expect(at).toEqual([168, 236]);
+  });
+
+  it('sizes map labels in screen px: larger in viewBox px the smaller the map is shown (TASK-495)', () => {
+    // The dashboard's map is 256 px tall for a 540-unit viewBox: 12 units were 5.7 px.
+    expect(mapLabelSize(MAP_LABEL_PX.compact, 540 / 256)).toBeCloseTo(23.2, 1);
+    expect(mapLabelSize(MAP_LABEL_PX.full, 540 / 448)).toBeCloseTo(14.46, 1);
+    // Never under the viewBox's own size, never so large that names outgrow the map.
+    expect(mapLabelSize(12, 0.5)).toBe(12);
+    expect(mapLabelSize(12, 10)).toBe(28);
+    // Not measured yet (and in jsdom): the viewBox's own size.
+    expect(mapLabelSize(12, undefined)).toBe(12);
   });
 
   it('draws a planned robot as planned — never among the live robots — and lists it as not connected', async () => {

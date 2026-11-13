@@ -4,6 +4,9 @@
  *   (twin bounds → live cloud XY → a 12 m square around the origin), the
  *   occupancy image or a faint cloud projection, and the zones as polygons
  *   coloured by type (keep-outs dashed and stronger so they read as walls).
+ *   Zone names are 12 viewBox px unless the caller says how large they should
+ *   be (`labelSize`); then a name too wide for a tall, narrow zone is written
+ *   up its length instead of across its neighbours.
  *   Shared by the zone editor (`ZoneAuthoringOverlay`) and the fleet site map;
  *   it imports no three.js, so the fleet chunk can use it.
  * @feature digitaltwin
@@ -114,6 +117,75 @@ export function makeTopDownTransform(bounds: WorldBounds, viewAspect?: number): 
   };
 }
 
+/** Size of a zone's name when the caller gives none, in viewBox px. */
+export const TOP_DOWN_LABEL_SIZE = 12;
+
+/** A label's footprint in viewBox px, for keeping labels off each other. */
+export interface LabelBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * About how wide a line of text is drawn, in the unit of `fontSize`. An
+ * estimate — `em` a character, 0.6 for zone names, which are mostly capitals:
+ * the layout runs before anything is rendered, and jsdom measures nothing.
+ */
+export function estimateTextWidth(text: string, fontSize: number, em = 0.6): number {
+  return text.length * fontSize * em;
+}
+
+/** Whether two label boxes overlap, or come closer than `gap`. */
+export function labelBoxesCollide(a: LabelBox, b: LabelBox, gap = 0): boolean {
+  return a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
+}
+
+/** Where a zone's name is written. */
+export interface ZoneLabel {
+  zoneId: string;
+  /** The zone's centroid: the middle of the name, and of its baseline when it is not rotated */
+  at: { x: number; y: number };
+  /** Written bottom-to-top, along a zone that is taller than the name is wide */
+  rotated: boolean;
+  box: LabelBox;
+}
+
+/**
+ * Where each zone's name goes: at the zone's centroid, across. With `fit`, a
+ * name wider than its zone is turned to read bottom-to-top when the zone is
+ * tall enough for it — on the site map an aisle 60 px wide carries "AISLE-1"
+ * next to "RACK-A" next to "AISLE-2", and across they ran into one another at
+ * any size a person can read.
+ */
+export function layoutZoneLabels(
+  zones: TwinZoneDTO[],
+  worldToScreen: (p: TwinPoint) => { x: number; y: number },
+  fontSize: number = TOP_DOWN_LABEL_SIZE,
+  fit = false,
+): ZoneLabel[] {
+  return zones
+    .filter((z) => z.points.length > 0)
+    .map((z) => {
+      const pts = z.points.map(worldToScreen);
+      const at = worldToScreen({
+        x: z.points.reduce((a, p) => a + p.x, 0) / z.points.length,
+        y: z.points.reduce((a, p) => a + p.y, 0) / z.points.length,
+      });
+      const xs = pts.map((p) => p.x);
+      const ys = pts.map((p) => p.y);
+      const zoneW = Math.max(...xs) - Math.min(...xs);
+      const zoneH = Math.max(...ys) - Math.min(...ys);
+      const w = estimateTextWidth(z.name, fontSize);
+      const rotated = fit && w > zoneW && zoneH > zoneW;
+      const box = rotated
+        ? { x: at.x - fontSize / 2, y: at.y - w / 2, w: fontSize, h: w }
+        : { x: at.x - w / 2, y: at.y - fontSize * 0.8, w, h: fontSize };
+      return { zoneId: z.id, at, rotated, box };
+    });
+}
+
 /** The colour a zone is drawn in: its own, else its type's. */
 export function twinZoneColor(zone: TwinZoneDTO, fallback: string): string {
   return zone.color || TWIN_ZONE_COLORS[zone.type] || fallback;
@@ -130,6 +202,12 @@ export interface TwinTopDownProps {
   fitZones?: boolean;
   /** Width / height of the element this is shown in; see {@link makeTopDownTransform} */
   viewAspect?: number;
+  /**
+   * Size of the zone names in viewBox px. Given by a caller that knows how
+   * large the SVG is shown (the site map, to keep names legible on a small
+   * map); names are then also fitted to their zones, see {@link layoutZoneLabels}.
+   */
+  labelSize?: number;
   selectedZoneId?: string | null;
   /** Makes zones clickable (and keyboard-reachable) */
   onZoneClick?: (zone: TwinZoneDTO, e: MouseEvent<SVGPolygonElement>) => void;
@@ -154,6 +232,7 @@ export function TwinTopDown({
   zones,
   fitZones = false,
   viewAspect,
+  labelSize,
   selectedZoneId,
   onZoneClick,
   onZoneDoubleClick,
@@ -174,6 +253,11 @@ export function TwinTopDown({
   const t = useMemo(() => makeTopDownTransform(bounds, viewAspect), [bounds, viewAspect]);
   const primary = useCssColor('--color-primary');
   const interactive = Boolean(onZoneClick);
+  const fontSize = labelSize ?? TOP_DOWN_LABEL_SIZE;
+  const labels = useMemo(
+    () => new Map(layoutZoneLabels(zones, t.worldToScreen, fontSize, labelSize !== undefined).map((l) => [l.zoneId, l])),
+    [zones, t, fontSize, labelSize],
+  );
 
   return (
     <svg
@@ -209,12 +293,7 @@ export function TwinTopDown({
         const selected = z.id === selectedZoneId;
         const keepout = z.type === 'keepout';
         const color = twinZoneColor(z, primary);
-        const centroid = z.points.length
-          ? t.worldToScreen({
-              x: z.points.reduce((a, p) => a + p.x, 0) / z.points.length,
-              y: z.points.reduce((a, p) => a + p.y, 0) / z.points.length,
-            })
-          : { x: 0, y: 0 };
+        const label = labels.get(z.id);
         return (
           <g key={z.id} data-zone-type={z.type}>
             <polygon
@@ -255,9 +334,21 @@ export function TwinTopDown({
                   : undefined
               }
             />
-            <text x={centroid.x} y={centroid.y} fontSize={12} fill={color} textAnchor="middle" pointerEvents="none">
-              {z.name}
-            </text>
+            {label && (
+              <text
+                x={label.at.x}
+                y={label.at.y}
+                fontSize={fontSize}
+                fill={color}
+                textAnchor="middle"
+                pointerEvents="none"
+                {...(label.rotated
+                  ? { dominantBaseline: 'central', transform: `rotate(-90 ${label.at.x} ${label.at.y})`, 'data-rotated': true }
+                  : {})}
+              >
+                {z.name}
+              </text>
+            )}
           </g>
         );
       })}

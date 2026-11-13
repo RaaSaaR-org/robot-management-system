@@ -11,7 +11,8 @@ const proxyTarget: string = process.env.VITE_PROXY_TARGET || 'http://localhost:3
 // White-label: resolve brand name for HTML title injection
 function brandHtmlPlugin(): Plugin {
   let brandName = 'NeoDEM';
-  let brandTagline = 'The Open Physical AI Platform';
+  // Keep in step with DEFAULT_BRAND.tagline (app/src/brand/defaults.ts); brand.test.ts checks it.
+  let brandTagline = 'Open Physical AI Platform';
   const brandConfigPath = path.resolve(__dirname, '../brand/brand.config.ts');
   if (fs.existsSync(brandConfigPath)) {
     const content = fs.readFileSync(brandConfigPath, 'utf-8');

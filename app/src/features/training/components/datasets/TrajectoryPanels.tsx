@@ -14,7 +14,7 @@ import { cn } from '@/shared/utils/cn';
 import { focusRing } from '@/shared/components/ui/styles';
 import type { EpisodeReward } from '@/features/evaluation/types/evaluation.types';
 import type { ChannelGroup, FrameData } from '../../types';
-import { channelSides, cursorFraction, groupLabel, mostActiveGroup, scoreTone, shortChannelNames } from './episodeFormat';
+import { channelSides, cursorFraction, fitAxis, groupLabel, mostActiveGroup, scoreTone, shortChannelNames } from './episodeFormat';
 
 /**
  * The size a chart assumes before its container is measured. Recharts' default
@@ -138,7 +138,10 @@ const tsFormat = (v: number) => v.toFixed(1);
 const labelFormat = (v: unknown) => `t = ${Number(v).toFixed(2)}s`;
 const valueFormat = (v: number | undefined, digits = 3) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '–');
 
-const TOOLTIP_TABLE = 'border-separate border-spacing-0 text-[11px] leading-[14px] tabular-nums';
+const TOOLTIP_TABLE = 'border-separate border-spacing-0 tabular-nums';
+/** Type of the tooltip that follows the pointer, and of the smaller one docked above a narrow plot. */
+const TOOLTIP_TYPE = 'text-[11px] leading-[14px]';
+const TOOLTIP_TYPE_DOCKED = 'text-[10px] leading-[13px]';
 const TOOLTIP_NUMBER = 'whitespace-nowrap pl-2 text-right';
 const TOOLTIP_HEAD = 'pl-2 text-right font-normal';
 
@@ -147,11 +150,13 @@ function TooltipSwatch({ color }: { color: string }) {
 }
 
 /**
- * From this chart width on, a left/right pair is one row of the tooltip. Under
- * it — the chart beside the video — four number columns do not fit, and the
- * plot is tall enough there for a row per channel.
+ * Under this chart width the tooltip does not follow the pointer: it is docked
+ * above the plot. Beside the video the plot is some 290 × 170 px, and fourteen
+ * joints with a state and an action each cannot be said in less than most of
+ * that — following the pointer, the tooltip hid the lines it was describing.
+ * Over the heading and the group buttons it hides nothing the pointer is on.
  */
-const PAIRED_TOOLTIP_FROM_PX = 360;
+export const DOCKED_TOOLTIP_UNDER_PX = 560;
 
 /** Rows of the tooltip that fit over the low, wide plot under the videos. */
 const TOOLTIP_ROWS = 8;
@@ -159,51 +164,57 @@ const TOOLTIP_ROWS = 8;
 const TOOLTIP_COLUMN_PX = 260;
 
 /**
- * How many columns the rows of the tooltip are laid out in. One beside the
- * video, where the plot is tall. On the wide plot under the videos fourteen
- * `arms[i]` rows in one column hung out of the panel and the last were cut
- * off: there they go side by side, as many columns as the chart has room for.
+ * How many columns the rows of the tooltip are laid out in, where a row is one
+ * channel (no left/right pairs to fold). More than eight rows go side by side:
+ * as many columns as the wide plot under the videos has room for, and two in
+ * the tooltip docked above the narrow plot beside them, where fourteen rows in
+ * one column were taller than the plot itself.
  */
 export function tooltipColumns(rows: number, chartWidth: number): number {
-  if (chartWidth < PAIRED_TOOLTIP_FROM_PX) return 1;
-  return Math.max(1, Math.min(Math.ceil(rows / TOOLTIP_ROWS), Math.floor(chartWidth / TOOLTIP_COLUMN_PX)));
+  const wanted = Math.max(1, Math.ceil(rows / TOOLTIP_ROWS));
+  if (chartWidth < DOCKED_TOOLTIP_UNDER_PX) return Math.min(wanted, 2);
+  return Math.max(1, Math.min(wanted, Math.floor(chartWidth / TOOLTIP_COLUMN_PX)));
 }
 
 /**
  * What the chart says under the pointer: a row per joint, its state and its
- * action side by side — and on a wide plot both sides of a left/right pair in
- * that one row, so two arms are seven rows that fit over a low plot. Recharts'
- * own list has a row per line with every digit of the float: twenty-eight.
+ * action side by side — and both sides of a left/right pair in that one row,
+ * so two arms are seven rows. Recharts' own list has a row per line with every
+ * digit of the float: twenty-eight.
  */
-function JointTooltip({ point, time, channels }: { point: Record<string, number>; time: unknown; channels: Channel[] }) {
-  const width = useChartWidth() ?? 0;
-  const wide = width >= PAIRED_TOOLTIP_FROM_PX;
-  const paired = wide && channels.length > 0 && channels.every((c) => c.side);
+function JointTooltip({ point, time, channels, width }: { point: Record<string, number>; time: unknown; channels: Channel[]; width: number }) {
+  const docked = width < DOCKED_TOOLTIP_UNDER_PX;
+  const paired = channels.length > 0 && channels.every((c) => c.side);
   const columns = paired ? 1 : tooltipColumns(channels.length, width);
   const perColumn = Math.ceil(channels.length / columns);
   const joints = paired ? [...new Set(channels.map((c) => c.entry))] : [];
-  const cells = (c: Channel | undefined, digits: number) => (
+  const table = cn(TOOLTIP_TABLE, docked ? TOOLTIP_TYPE_DOCKED : TOOLTIP_TYPE);
+  const timeLabel = <span style={{ color: chartTheme.tooltip.labelStyle.color }}>{labelFormat(time)}</span>;
+  const cells = (c: Channel | undefined) => (
     <>
       <td className={TOOLTIP_NUMBER}>
         {c && <TooltipSwatch color={c.color} />}
-        {c ? valueFormat(point[`obs_${c.name}`], digits) : ''}
+        {c ? valueFormat(point[`obs_${c.name}`], 2) : ''}
       </td>
-      <td className={TOOLTIP_NUMBER}>{c ? valueFormat(point[`action_${c.name}`], digits) : ''}</td>
+      <td className={TOOLTIP_NUMBER}>{c ? valueFormat(point[`action_${c.name}`], 2) : ''}</td>
     </>
   );
-  return (
-    <div style={chartTheme.tooltip.contentStyle} data-testid="joint-chart-tooltip">
-      <p style={chartTheme.tooltip.labelStyle}>{labelFormat(time)}</p>
+  const box = (
+    <div
+      style={{ ...chartTheme.tooltip.contentStyle, padding: docked ? '5px 8px' : chartTheme.tooltip.contentStyle.padding, maxWidth: docked ? width : undefined }}
+      data-testid="joint-chart-tooltip"
+      data-placement={docked ? 'above' : 'pointer'}
+    >
       {paired ? (
-        <table className={TOOLTIP_TABLE}>
+        <table className={table}>
           <thead className="text-ink-tertiary">
             <tr>
-              <th />
+              {/* The time takes the corner the two header rows leave empty: a line less. */}
+              <th rowSpan={2} className="whitespace-nowrap text-left align-top font-normal">{timeLabel}</th>
               <th colSpan={2} className={TOOLTIP_HEAD}>left</th>
               <th colSpan={2} className={TOOLTIP_HEAD}>right</th>
             </tr>
             <tr>
-              <th />
               <th className={TOOLTIP_HEAD}>state</th>
               <th className={TOOLTIP_HEAD}>action</th>
               <th className={TOOLTIP_HEAD}>state</th>
@@ -214,19 +225,19 @@ function JointTooltip({ point, time, channels }: { point: Record<string, number>
             {joints.map((joint) => (
               <tr key={joint}>
                 <th scope="row" className="whitespace-nowrap text-left font-normal">{joint}</th>
-                {cells(channels.find((c) => c.entry === joint && c.side === 'left'), 2)}
-                {cells(channels.find((c) => c.entry === joint && c.side === 'right'), 2)}
+                {cells(channels.find((c) => c.entry === joint && c.side === 'left'))}
+                {cells(channels.find((c) => c.entry === joint && c.side === 'right'))}
               </tr>
             ))}
           </tbody>
         </table>
       ) : (
-        <div className="flex items-start gap-4">
+        <div className={cn('flex items-start', docked ? 'gap-3' : 'gap-4')}>
           {Array.from({ length: columns }, (_, column) => (
-            <table key={column} className={TOOLTIP_TABLE}>
+            <table key={column} className={cn(table, 'min-w-0')}>
               <thead className="text-ink-tertiary">
                 <tr>
-                  <th />
+                  <th className="whitespace-nowrap text-left font-normal">{column === 0 && timeLabel}</th>
                   <th className={TOOLTIP_HEAD}>state</th>
                   <th className={TOOLTIP_HEAD}>action</th>
                 </tr>
@@ -234,12 +245,15 @@ function JointTooltip({ point, time, channels }: { point: Record<string, number>
               <tbody>
                 {channels.slice(column * perColumn, (column + 1) * perColumn).map((c) => (
                   <tr key={c.name}>
-                    <th scope="row" className="whitespace-nowrap text-left font-normal">
-                      <TooltipSwatch color={c.color} />
-                      {c.label}
+                    <th scope="row" className="text-left font-normal">
+                      {/* Docked, a column has half the chart: a long name gives way, the numbers do not. */}
+                      <span className={cn('block whitespace-nowrap', docked && columns > 1 && 'max-w-[4.5rem] truncate')} title={c.name}>
+                        <TooltipSwatch color={c.color} />
+                        {c.label}
+                      </span>
                     </th>
-                    <td className={TOOLTIP_NUMBER}>{valueFormat(point[`obs_${c.name}`])}</td>
-                    <td className={TOOLTIP_NUMBER}>{valueFormat(point[`action_${c.name}`])}</td>
+                    <td className={TOOLTIP_NUMBER}>{valueFormat(point[`obs_${c.name}`], docked ? 2 : 3)}</td>
+                    <td className={TOOLTIP_NUMBER}>{valueFormat(point[`action_${c.name}`], docked ? 2 : 3)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -249,11 +263,47 @@ function JointTooltip({ point, time, channels }: { point: Record<string, number>
       )}
     </div>
   );
+  if (!docked) return box;
+  // Recharts puts this 1 px strip on the top edge of the chart; the tooltip
+  // hangs off it upwards (4 px into the plot's empty top margin), its right
+  // edge on the chart's.
+  return (
+    <div className="relative h-px" style={{ width }}>
+      <div className="absolute -bottom-1 right-0">{box}</div>
+    </div>
+  );
 }
 
 const TOOLTIP_ESCAPE = { x: false, y: true } as const;
+const TOOLTIP_ESCAPE_DOCKED = { x: true, y: true } as const;
 const TOOLTIP_WRAPPER = { zIndex: 20 } as const;
 const TOOLTIP_POSITION = { y: 0 } as const;
+const TOOLTIP_POSITION_DOCKED = { x: 0, y: 0 } as const;
+
+/**
+ * The chart's tooltip. A component of its own because where it goes depends on
+ * the chart's width, which is only known inside the chart.
+ */
+function JointChartTooltip({ channels }: { channels: Channel[] }) {
+  const width = useChartWidth() ?? 0;
+  const docked = width < DOCKED_TOOLTIP_UNDER_PX;
+  return (
+    <Tooltip
+      cursor={chartTheme.tooltip.cursor}
+      allowEscapeViewBox={docked ? TOOLTIP_ESCAPE_DOCKED : TOOLTIP_ESCAPE}
+      wrapperStyle={TOOLTIP_WRAPPER}
+      isAnimationActive={false}
+      // Wide: from the top of the plot down, beside the pointer. Narrow: above the plot.
+      position={docked ? TOOLTIP_POSITION_DOCKED : TOOLTIP_POSITION}
+      content={({ active, payload, label }) => {
+        const point = payload?.[0]?.payload as Record<string, number> | undefined;
+        if (!active || !point) return null;
+        return <JointTooltip point={point} time={label} channels={channels} width={width} />;
+      }}
+    />
+  );
+}
+
 const ACTIVE_DOT = { r: 3, strokeWidth: 0 } as const;
 
 export function JointChartPanel({ frames, sampleCount, jointNames, groups, isLoading, currentTime, isPlaying = false, error, onRetry, className }: JointChartPanelProps) {
@@ -291,6 +341,20 @@ export function JointChartPanel({ frames, sampleCount, jointNames, groups, isLoa
     [frames, channels],
   );
 
+  // The y axis fits what this group does over the whole episode: every line of
+  // it, picked out or not, so the axis is the same for the whole stay on a group.
+  const axis = useMemo(() => {
+    function* drawn() {
+      for (const frame of frames) {
+        for (const { index } of channels) {
+          yield frame.action[index];
+          yield frame.observationState[index];
+        }
+      }
+    }
+    return fitAxis(drawn());
+  }, [frames, channels]);
+
   // The lines are drawn once per episode and group. The cursor is not part of
   // them: it moves several times a second, and redrawing fourteen 600-point
   // lines for each move made playback stutter.
@@ -300,20 +364,12 @@ export function JointChartPanel({ frames, sampleCount, jointNames, groups, isLoa
         <LineChart data={data} margin={PLOT_MARGIN}>
           <CartesianGrid {...chartTheme.grid} />
           <XAxis dataKey="timestamp" type="number" domain={['dataMin', 'dataMax']} tickFormatter={tsFormat} {...chartTheme.xAxis} height={X_AXIS_HEIGHT} />
-          <YAxis {...chartTheme.yAxis} width={Y_AXIS_WIDTH} />
-          <Tooltip
-            cursor={chartTheme.tooltip.cursor}
-            allowEscapeViewBox={TOOLTIP_ESCAPE}
-            wrapperStyle={TOOLTIP_WRAPPER}
-            isAnimationActive={false}
-            // From the top of the plot down: the panel cuts off what hangs below it.
-            position={TOOLTIP_POSITION}
-            content={({ active, payload, label }) => {
-              const point = payload?.[0]?.payload as Record<string, number> | undefined;
-              if (!active || !point) return null;
-              return <JointTooltip point={point} time={label} channels={focused ? channels.filter((c) => c.entry === focused) : channels} />;
-            }}
+          <YAxis
+            {...chartTheme.yAxis}
+            width={Y_AXIS_WIDTH}
+            {...(axis ? { domain: axis.domain, ticks: axis.ticks, tickFormatter: (v: number) => v.toFixed(axis.digits) } : {})}
           />
+          <JointChartTooltip channels={focused ? channels.filter((c) => c.entry === focused) : channels} />
           {channels.map(({ name, label, color, entry }) => (
             <Line key={`obs_${name}`} type="monotone" dataKey={`obs_${name}`} stroke={color} strokeOpacity={focused && focused !== entry ? DIMMED_OPACITY : 1} dot={false} activeDot={focused && focused !== entry ? false : ACTIVE_DOT} strokeWidth={focused === entry ? 2.25 : 1.5} name={`state:${label}`} isAnimationActive={false} />
           ))}
@@ -323,7 +379,7 @@ export function JointChartPanel({ frames, sampleCount, jointNames, groups, isLoa
         </LineChart>
       </ResponsiveContainer>
     ),
-    [data, channels, focused],
+    [data, channels, focused, axis],
   );
 
   // Always on the chart: at 0 it sits on the first sample, past the last
@@ -332,7 +388,12 @@ export function JointChartPanel({ frames, sampleCount, jointNames, groups, isLoa
   const hasChart = !isLoading && !error && data.length > 0;
 
   return (
-    <Panel padding="none" data-testid="joint-chart-panel" className={cn('flex flex-col lg:min-h-0', className)}>
+    <Panel
+      padding="none"
+      data-testid="joint-chart-panel"
+      // Not clipped: the tooltip docked above a narrow plot may reach over the panel's top edge.
+      className={cn('flex flex-col overflow-visible lg:min-h-0', className)}
+    >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pt-3">
         <h2 className="font-display text-base font-semibold tracking-[-0.01em] text-ink-primary">Joint trajectories</h2>
         {hasChart && (

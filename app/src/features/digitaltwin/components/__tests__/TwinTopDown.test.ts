@@ -13,6 +13,8 @@ import {
   TOP_DOWN_VIEW_H,
   TOP_DOWN_VIEW_W,
   deriveWorldBounds,
+  labelBoxesCollide,
+  layoutZoneLabels,
   makeTopDownTransform,
 } from '../TwinTopDown';
 import type { DigitalTwinDTO, TwinZoneDTO } from '../../types/twin.types';
@@ -80,5 +82,61 @@ describe('makeTopDownTransform', () => {
 
   it('ignores an element narrower than the viewBox: that one is letterboxed top and bottom', () => {
     expect(makeTopDownTransform(bounds, 0.6).scale).toBe(makeTopDownTransform(bounds).scale);
+  });
+});
+
+describe('layoutZoneLabels (TASK-495)', () => {
+  const rect = (id: string, name: string, x0: number, y0: number, x1: number, y1: number) =>
+    ({
+      id,
+      name,
+      type: 'place',
+      points: [
+        { x: x0, y: y0 },
+        { x: x1, y: y0 },
+        { x: x1, y: y1 },
+        { x: x0, y: y1 },
+      ],
+    }) as unknown as TwinZoneDTO;
+  const same = (p: { x: number; y: number }) => p;
+  const AISLE = rect('a', 'AISLE-1', 0, 0, 30, 200);
+  const HALL = rect('h', 'HALL', 100, 0, 400, 200);
+
+  it('writes a name across its zone, on the centroid', () => {
+    const [label] = layoutZoneLabels([HALL], same, 12, true);
+    expect(label).toMatchObject({ zoneId: 'h', at: { x: 250, y: 100 }, rotated: false });
+    expect(label!.box.x + label!.box.w / 2).toBeCloseTo(250);
+    expect(label!.box.h).toBe(12);
+  });
+
+  it('turns a name that is wider than its tall zone to run along it', () => {
+    const [label] = layoutZoneLabels([AISLE], same, 12, true);
+    expect(label!.rotated).toBe(true);
+    // Its footprint is then one line wide and the name long.
+    expect(label!.box.w).toBe(12);
+    expect(label!.box.h).toBeGreaterThan(30);
+    expect(label!.box.y + label!.box.h / 2).toBeCloseTo(100);
+  });
+
+  it('leaves every name across where the caller does not ask for a fit — the zone editor', () => {
+    expect(layoutZoneLabels([AISLE], same).map((l) => l.rotated)).toEqual([false]);
+  });
+
+  it('keeps a wide name across a zone that is no taller than wide, and skips a zone without points', () => {
+    const squat = rect('s', 'A-VERY-LONG-ZONE-NAME', 0, 0, 40, 30);
+    const empty = { ...HALL, id: 'e', points: [] } as TwinZoneDTO;
+    expect(layoutZoneLabels([squat, empty], same, 12, true)).toMatchObject([{ zoneId: 's', rotated: false }]);
+  });
+});
+
+describe('labelBoxesCollide (TASK-495)', () => {
+  const a = { x: 0, y: 0, w: 10, h: 10 };
+  it('is true for boxes that overlap and false for boxes that only touch', () => {
+    expect(labelBoxesCollide(a, { x: 5, y: 5, w: 10, h: 10 })).toBe(true);
+    expect(labelBoxesCollide(a, { x: 10, y: 0, w: 10, h: 10 })).toBe(false);
+    expect(labelBoxesCollide(a, { x: 0, y: 30, w: 10, h: 10 })).toBe(false);
+  });
+  it('counts a gap as a collision when asked to keep one', () => {
+    expect(labelBoxesCollide(a, { x: 12, y: 0, w: 10, h: 10 }, 3)).toBe(true);
   });
 });
