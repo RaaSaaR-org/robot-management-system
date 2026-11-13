@@ -9,6 +9,7 @@ import { MessageSquare } from 'lucide-react';
 import { Badge, KeyValueList, LinkButton, Panel, StatusTag } from '@/shared/components/ui';
 import { formatDateTime } from '@/shared/utils/format';
 import type { InfoTabProps } from './types';
+import { robotProvisioning } from '../../types/robots.types';
 import { SiteSelect } from './SiteSelect';
 import { SiteAlignment } from './SiteAlignment';
 
@@ -20,7 +21,12 @@ const METADATA_LABELS: Record<string, string> = {
   maxPayloadKg: 'Payload (kg)',
   powerSource: 'Power source',
   description: 'Description',
+  seededBy: 'Added by',
+  degreesOfFreedom: 'Degrees of freedom',
 };
+
+/** Shown by the status tag and the banner above, not as raw key/value pairs. */
+const HIDDEN_METADATA = new Set(['provisioning', 'provisioningNote']);
 
 function humanizeKey(key: string): string {
   const spaced = key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
@@ -37,6 +43,7 @@ function metadataValue(value: unknown): string | null {
 
 export function InfoTab({ robot }: InfoTabProps) {
   const metadata = Object.entries(robot.metadata ?? {})
+    .filter(([key]) => !HIDDEN_METADATA.has(key))
     .map(([key, value]) => ({ key, label: METADATA_LABELS[key] ?? humanizeKey(key), value: metadataValue(value) }))
     .filter((item): item is { key: string; label: string; value: string } => item.value !== null);
   const hasAgent = Boolean(robot.a2aEnabled || robot.a2aAgentUrl || robot.capabilities.includes('a2a'));
@@ -64,7 +71,8 @@ export function InfoTab({ robot }: InfoTabProps) {
                 : []),
               { label: 'Place', value: robot.location?.place ?? 'Place unknown' },
               {
-                label: 'Registered',
+                // An expected robot was put on the fleet; no agent has registered it.
+                label: robotProvisioning(robot) ? 'Added' : 'Registered',
                 value: formatDateTime(robot.createdAt, { year: 'numeric', month: 'short', day: 'numeric' }),
               },
               { label: 'Last updated', value: formatDateTime(robot.updatedAt) },

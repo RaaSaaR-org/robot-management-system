@@ -58,12 +58,34 @@ const FEATURED_DATASETS: FeaturedDataset[] = [
     tags: ['manipulation', 'pick-place', 'so-101'],
   },
   {
+    // Checked on the Hub 2026-11-13: public, ungated, apache-2.0, LeRobot v2.1,
+    // robot_type so101_follower, 6-wide state and action, 101 episodes at
+    // 30 fps, one H.264 front camera, 51 MB — the SO-101 Follower robot type.
+    repoId: 'Thytu/so101-object-in-box_v0.4-fixed',
+    displayName: 'SO-101 — Object in Box',
+    description: 'SO-101, 6-wide state and action, 101 episodes, one front camera, 51 MB.',
+    robotType: 'SO-101',
+    episodeCount: 101,
+    tags: ['manipulation', 'pick-place', 'so-101'],
+  },
+  {
     repoId: 'nvidia/GR00T-N1.7-AppleToPlate',
     displayName: 'GR00T N1.7 — Apple to Plate',
     description: 'Unitree G1, 43-wide state and action, 402 episodes, one ego-view camera.',
     robotType: 'Unitree G1',
     episodeCount: 402,
     tags: ['manipulation', 'g1', 'groot'],
+  },
+  {
+    // Our own recording of the same task and layout as the GR00T set above.
+    // Checked on the Hub 2026-11-13: public, ungated, LeRobot v2.1, robot_type
+    // unitree_g1, 260 episodes at 15 fps, one AV1 ego_view camera, 310 MB.
+    repoId: 'ycchen0106/g1-apple-to-plate',
+    displayName: 'G1 — Apple to Plate (our recording)',
+    description: 'Unitree G1, 43-wide state and action, 260 episodes at 15 fps, one ego-view camera, 310 MB.',
+    robotType: 'Unitree G1',
+    episodeCount: 260,
+    tags: ['manipulation', 'g1', 'own-recording'],
   },
   {
     repoId: 'unitreerobotics/g1_dex3_agilex_dual_arm_pick_place',

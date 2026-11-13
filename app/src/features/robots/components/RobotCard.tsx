@@ -12,7 +12,7 @@ import { cn } from '@/shared/utils/cn';
 import { formatTimeAgo } from '@/shared/utils/format';
 import { RobotStatusTag } from './common/RobotStatusTag';
 import { Readout, type ReadoutTone } from './common/Readout';
-import type { Robot } from '../types/robots.types';
+import { robotProvisioning, type Robot } from '../types/robots.types';
 
 export interface RobotCardProps {
   /** Robot data */
@@ -28,6 +28,10 @@ export interface RobotCardProps {
   /** Additional class names */
   className?: string;
 }
+
+/** What unregistering does to an expected robot: there is no agent URL to register again. */
+export const UNREGISTER_EXPECTED_DESCRIPTION =
+  'It has no agent connected, so nothing stops. The robot is only taken off the fleet list.';
 
 /** Place and floor, or "Place unknown". */
 export function robotPlace(robot: Robot): string {
@@ -45,18 +49,19 @@ export function robotBattery(robot: Robot): {
   tone?: ReadoutTone;
   hint?: string;
 } {
-  if (robot.batteryLevel === null || robot.metadata?.powerSource === 'ac_powered') {
-    return { value: 'AC', hint: 'Mains powered' };
-  }
+  if (robot.metadata?.powerSource === 'ac_powered') return { value: 'AC', hint: 'Mains powered' };
+  // An expected robot has reported nothing: its empty battery is "unknown", not "AC".
+  if (robotProvisioning(robot)) return { value: null, hint: 'Not reported yet' };
+  if (robot.batteryLevel === null) return { value: 'AC', hint: 'Mains powered' };
   const level = Math.round(robot.batteryLevel);
   if (robot.status === 'offline') return { value: String(level), unit: '%', hint: 'Last reported' };
   const tone: ReadoutTone | undefined = level < 10 ? 'stopped' : level < 20 ? 'estimated' : undefined;
   return { value: String(level), unit: '%', tone };
 }
 
-/** Last seen as relative time, or "—". */
+/** Last seen as relative time, or "—" (also for a robot that never connected). */
 export function robotLastSeen(robot: Robot): string {
-  if (!robot.lastSeen) return '—';
+  if (!robot.lastSeen || robotProvisioning(robot)) return '—';
   const ago = formatTimeAgo(robot.lastSeen);
   return ago === 'Just now' ? 'just now' : ago;
 }
@@ -64,6 +69,7 @@ export function robotLastSeen(robot: Robot): string {
 /** A robot in the fleet list grid. */
 export function RobotCard({ robot, onClick, actions, selected = false, compact = false, className }: RobotCardProps) {
   const battery = robotBattery(robot);
+  const provisioning = robotProvisioning(robot);
   const stop = (e: MouseEvent) => e.stopPropagation();
 
   return (
@@ -92,7 +98,7 @@ export function RobotCard({ robot, onClick, actions, selected = false, compact =
       </div>
 
       <div className="flex items-end justify-between gap-3">
-        <RobotStatusTag status={robot.status} />
+        <RobotStatusTag status={robot.status} provisioning={provisioning?.state} />
         {!compact && (
           <Readout
             label="Battery"
@@ -104,7 +110,20 @@ export function RobotCard({ robot, onClick, actions, selected = false, compact =
         )}
       </div>
 
-      {!compact && (
+      {!compact && provisioning && (
+        // Never seen and in no place: say why instead of "Place unknown · Seen just now".
+        <div
+          className="border-t border-line-subtle pt-3 text-[13px] text-ink-tertiary"
+          data-testid="robot-card-provisioning"
+        >
+          <span className="line-clamp-2" title={provisioning.note}>
+            {provisioning.note ??
+              (provisioning.state === 'arriving' ? 'Not delivered yet' : 'Never connected')}
+          </span>
+        </div>
+      )}
+
+      {!compact && !provisioning && (
         <div className="flex flex-col gap-1 border-t border-line-subtle pt-3 text-[13px] text-ink-tertiary">
           <div className="flex items-center justify-between gap-3">
             <span className="truncate">{robotPlace(robot)}</span>

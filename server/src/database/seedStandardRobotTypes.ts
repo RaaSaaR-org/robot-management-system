@@ -55,6 +55,18 @@ export const STANDARD_ROBOT_TYPES: readonly StandardRobotType[] = [
     actionDim: 6,
     proprioceptionDim: 6,
   },
+  {
+    // Pollen Robotics / Hugging Face Microduck (TASK-477): a 25 cm biped driven
+    // by fifteen servos from RL policies. No LeRobot dataset of one exists yet,
+    // so the widths are the one thing the maker states — one value per servo —
+    // not a recorded layout. The create-only rule above means a correction
+    // lands as a new name, not an edit.
+    name: 'Microduck',
+    manufacturer: 'Pollen Robotics',
+    model: 'microduck',
+    actionDim: 15,
+    proprioceptionDim: 15,
+  },
 ];
 
 /** The subset of the Prisma client the seed touches — injectable for tests. */

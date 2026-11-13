@@ -16,6 +16,7 @@ import { agentServiceAuthHeaders } from '../services/agentServiceAuth.js';
 import { signCameraTicket, CAMERA_TICKET_TTL_MS } from '../security/cameraTicket.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parseExpectedRobotRequest } from '../services/expectedRobot.js';
 
 export const robotRoutes = Router();
 
@@ -152,6 +153,34 @@ robotRoutes.patch('/:id', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error updating robot site:', error);
     res.status(500).json({ error: 'Failed to update robot' });
+  }
+});
+
+/** The 409 body when the id already belongs to a robot that is not an expected one. */
+export const NOT_AN_EXPECTED_ROBOT_ERROR =
+  'A robot with this id is already registered and is not an expected robot. It was left unchanged.';
+
+/**
+ * PUT /:id/expected - Put a robot on the fleet before its agent exists (TASK-477)
+ *
+ * Body `{ name, model, provisioning?: 'awaiting_agent' | 'arriving', note?,
+ * serialNumber?, capabilities?: string[], metadata?: { [key]: string | number | boolean } }`.
+ * The robot is listed as offline with no agent; the app shows it as
+ * "Not connected" or "Arriving". Idempotent: 201 when the row is created, 200
+ * when an expected robot under this id was updated, 409 — nothing written —
+ * when the id belongs to a robot an agent has registered. Once an agent
+ * registers under this id the row is that agent's and this route refuses it.
+ * Remove one with `DELETE /:id`.
+ */
+robotRoutes.put('/:id/expected', async (req: Request, res: Response) => {
+  try {
+    const parsed = parseExpectedRobotRequest(req.params.id, req.body);
+    if (typeof parsed === 'string') return res.status(400).json({ error: parsed });
+    const result = await robotManager.putExpectedRobot(parsed);
+    if (!result) return res.status(409).json({ error: NOT_AN_EXPECTED_ROBOT_ERROR });
+    res.status(result.created ? 201 : 200).json(result);
+  } catch (error) {
+    sendFailure(res, error, 'Failed to save expected robot', 500);
   }
 });
 

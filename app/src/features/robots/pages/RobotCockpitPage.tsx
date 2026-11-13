@@ -21,7 +21,7 @@ import {
   CockpitCommandDock,
 } from '../components/cockpit';
 import { ProvenanceTag, RobotStatusTag, provenanceOf } from '../components/common';
-import { isRobotAvailable, type Robot } from '../types/robots.types';
+import { isRobotAvailable, robotProvisioning, type Robot } from '../types/robots.types';
 import { isG1Family, pickCockpitRobot, resolveRobotType } from './cockpitPick';
 
 const DESCRIPTION = 'Live view and controls for one robot.';
@@ -159,7 +159,7 @@ function RobotCockpitPageInner() {
         description={DESCRIPTION}
         meta={
           <>
-            <RobotStatusTag status={robot.status} />
+            <RobotStatusTag status={robot.status} provisioning={robotProvisioning(robot)?.state} />
             <ProvenanceTag source={provenance} />
           </>
         }

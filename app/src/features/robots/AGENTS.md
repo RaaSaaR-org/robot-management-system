@@ -52,6 +52,10 @@ robots/
 
 Robots without a running agent are the normal case in dev. Offline copy: "{name} is offline. Start its robot agent to see live telemetry and send commands." Empty values show "—", unknown places "Place unknown". Offline must look deliberate, not broken.
 
+### Expected robots (TASK-477)
+
+A robot can be on the fleet before its agent has ever registered (`PUT /api/robots/:id/expected`, `docs/demo-fleet.md`). It is `offline` with `metadata.provisioning` = `awaiting_agent` or `arriving`; read it with `robotProvisioning(robot)` and pass `provisioning` to `RobotStatusTag` / `RobotOfflineBanner`. Such a robot reads "Not connected" or "Arriving", never "Offline", and shows no invented reading: battery "—" (not "AC"), no "Seen …", no "Place unknown". A robot that is not offline is never treated as expected, whatever its metadata says.
+
 ## Tests
 
 `npx vitest run src/features/robots` — keep `data-testid`s (`robot-card`, `motion-*`, `voice-*`, `vr-*`) and the `a[href*="/robots/"]` name link on each card; e2e specs depend on them.

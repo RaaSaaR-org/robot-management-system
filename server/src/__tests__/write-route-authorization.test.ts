@@ -69,7 +69,8 @@ const app = createApp();
 // and /:id/quest/open (memberOrAbove).
 // TASK-478 adds one on the guarded /api/datasets mount: POST /:id/video-ticket,
 // a POST-shaped read (it mints the ticket a `<video>` is read with).
-const EXPECTED_WRITE_ROUTES = 386;
+// TASK-477 adds one on the guarded /api/robots mount: PUT /:id/expected.
+const EXPECTED_WRITE_ROUTES = 387;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;

@@ -198,6 +198,7 @@ server/src/
 | GET    | `/api/robots/:id`             | Get single robot       |
 | POST   | `/api/robots/register`        | Register robot by URL  |
 | DELETE | `/api/robots/:id`             | Unregister robot       |
+| PUT    | `/api/robots/:id/expected`    | Put a robot on the fleet before its agent exists (TASK-477; `npm run seed:demo-fleet`, `docs/demo-fleet.md`) |
 | POST   | `/api/robots/:id/command`     | Send command to robot  |
 | GET    | `/api/robots/:id/telemetry`   | Get robot telemetry    |
 

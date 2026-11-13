@@ -25,7 +25,7 @@ import {
   VoiceTab,
   ChatTab,
 } from './tabs';
-import type { Robot, RobotTelemetry, RobotCommand } from '../types/robots.types';
+import { robotProvisioning, type Robot, type RobotTelemetry, type RobotCommand } from '../types/robots.types';
 import type { Process } from '@/features/processes/types';
 import type { WebSocketStatus } from '@/shared/types/api.types';
 
@@ -140,7 +140,12 @@ export const RobotControlCenter = memo(function RobotControlCenter({
       />
 
       {robot.status === 'offline' && (
-        <RobotOfflineBanner robotName={robot.name} lastSeen={robot.lastSeen} robotId={robot.id} />
+        <RobotOfflineBanner
+          robotName={robot.name}
+          lastSeen={robot.lastSeen}
+          robotId={robot.id}
+          provisioning={robotProvisioning(robot)}
+        />
       )}
 
       {tab === 'overview' && (
