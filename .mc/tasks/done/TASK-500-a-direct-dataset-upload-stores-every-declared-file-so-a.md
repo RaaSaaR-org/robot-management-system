@@ -3,7 +3,7 @@ id: "TASK-500"
 aliases: []
 title: "A direct dataset upload stores every declared file, so a dataset uploaded and deleted locally comes back whole"
 slug: "a-direct-dataset-upload-stores-every-declared-file-so-a"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
