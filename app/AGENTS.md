@@ -237,7 +237,7 @@ Concretely, when adding anything to this page:
   `unconfirmed`). "It may still be moving — use the hardware E-Stop" is an instruction,
   not an explanation.
 - **Safety controls are never behind a disclosure, a tab, a hover or a drawer**, and keep
-  their ≥44px coarse-pointer targets: STOPP, Reset E-Stop, and the recovered-acknowledge
+  their ≥44px coarse-pointer targets: Emergency stop, Reset E-Stop, and the recovered-acknowledge
   button.
 - **Never render "unknown" as a confident value.** An unknown place is `Place unknown` in
   a dashed chip, so it *looks* different rather than merely saying something different;

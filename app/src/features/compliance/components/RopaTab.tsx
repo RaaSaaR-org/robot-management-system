@@ -16,6 +16,7 @@ import { useComplianceStore } from '../store';
 import type { RopaEntry } from '../types';
 import { LEGAL_BASIS_OPTIONS, RopaFormModal, legalBasisLabel } from './RopaFormModal';
 import { formatDateTime, formatRelative } from './complianceFormat';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface RopaTabProps {
   className?: string;
@@ -70,7 +71,7 @@ function ReportModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
               columns={3}
               items={[
                 { label: 'Organization', value: ropaReport.organizationName },
-                { label: 'Activities', value: ropaReport.totalProcessingActivities.toLocaleString() },
+                { label: 'Activities', value: ropaReport.totalProcessingActivities.toLocaleString(UI_DATE_LOCALE) },
                 { label: 'Generated', value: formatDateTime(ropaReport.generatedAt) },
               ]}
             />

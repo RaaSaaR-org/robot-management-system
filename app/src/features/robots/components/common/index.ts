@@ -9,3 +9,4 @@ export * from './ProvenanceTag';
 export * from './Readout';
 export * from './ViewerUnavailable';
 export * from './readCssColor';
+export * from './AwaitingAgentState';

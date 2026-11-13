@@ -13,6 +13,7 @@ import {
 import { useComplianceStore } from '../store';
 import type { ComplianceSeverity, EventTypeMetrics } from '../types';
 import { SEVERITIES, eventTypeLabel, formatDate, formatRelative, humanize } from './complianceFormat';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 const SEVERITY_BAR: Record<ComplianceSeverity, 'error' | 'warning' | 'info' | 'default'> = {
   critical: 'error',
@@ -24,7 +25,7 @@ const SEVERITY_BAR: Record<ComplianceSeverity, 'error' | 'warning' | 'info' | 'd
 
 const EVENT_COLUMNS: DataTableColumn<EventTypeMetrics>[] = [
   { key: 'eventType', header: 'Event type', sortable: true, cell: (m) => eventTypeLabel(m.eventType) },
-  { key: 'count', header: 'Entries', align: 'right', sortable: true, cell: (m) => m.count.toLocaleString() },
+  { key: 'count', header: 'Entries', align: 'right', sortable: true, cell: (m) => m.count.toLocaleString(UI_DATE_LOCALE) },
   { key: 'lastOccurrence', header: 'Last entry', align: 'right', hideBelow: 'sm', sortable: true,
     sortValue: (m) => (m.lastOccurrence ? new Date(m.lastOccurrence) : null),
     cell: (m) => <span className="text-[13px] text-ink-tertiary">{formatRelative(m.lastOccurrence)}</span> },
@@ -54,12 +55,12 @@ export function AuditMetricsPanel() {
   return (
     <div className="flex flex-col gap-4">
       <StatRow columns={4}>
-        <StatTile label="Entries" value={metrics.totalLogs.toLocaleString()} icon={<FileText />} hint={range} />
-        <StatTile label="Sessions" value={metrics.uniqueSessions.toLocaleString()} icon={<Activity />} hint="Distinct robot sessions" />
-        <StatTile label="Robots" value={metrics.uniqueRobots.toLocaleString()} icon={<Bot />} hint="That wrote to the log" />
+        <StatTile label="Entries" value={metrics.totalLogs.toLocaleString(UI_DATE_LOCALE)} icon={<FileText />} hint={range} />
+        <StatTile label="Sessions" value={metrics.uniqueSessions.toLocaleString(UI_DATE_LOCALE)} icon={<Activity />} hint="Distinct robot sessions" />
+        <StatTile label="Robots" value={metrics.uniqueRobots.toLocaleString(UI_DATE_LOCALE)} icon={<Bot />} hint="That wrote to the log" />
         <StatTile
           label="Critical and errors"
-          value={critical.toLocaleString()}
+          value={critical.toLocaleString(UI_DATE_LOCALE)}
           icon={<Siren />}
           tone={critical > 0 ? 'stopped' : 'live'}
           hint={`${Math.round((critical / total) * 100)} % of all entries`}
@@ -89,7 +90,7 @@ export function AuditMetricsPanel() {
                 value={metrics.severityCounts[s] ?? 0}
                 max={total}
                 variant={SEVERITY_BAR[s]}
-                label={`${humanize(s)} · ${(metrics.severityCounts[s] ?? 0).toLocaleString()}`}
+                label={`${humanize(s)} · ${(metrics.severityCounts[s] ?? 0).toLocaleString(UI_DATE_LOCALE)}`}
               />
             ))}
           </Panel.Body>

@@ -21,6 +21,14 @@ interface ConversationPanelProps {
   chatMode?: A2AChatMode;
   className?: string;
   onNewConversation?: () => void;
+  /**
+   * Create the conversation when the first message is sent (TASK-485). With
+   * it, a panel without a conversation shows the composer instead of "No
+   * conversation open", and nothing is created on the server until the person
+   * actually writes. Resolves the new conversation's id, or null when it could
+   * not be created (the caller shows why).
+   */
+  ensureConversation?: () => Promise<string | null>;
   activeTasks?: A2ATask[];
 }
 
@@ -35,12 +43,15 @@ export const ConversationPanel = memo(function ConversationPanel({
   chatMode = 'direct',
   className,
   onNewConversation,
+  ensureConversation,
   activeTasks = [],
 }: ConversationPanelProps) {
   const { messages, isLoading, isSending, error, sendMessage } = useConversation(conversationId);
   const pendingMessages = useA2AStore(selectPendingMessages);
 
   const [inputValue, setInputValue] = useState('');
+  /** The first message is creating its conversation. */
+  const [isOpening, setIsOpening] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -106,12 +117,27 @@ export const ConversationPanel = memo(function ConversationPanel({
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const text = inputValue.trim();
-    if (!text || isSending || !canSend) return;
+    if (!text || isSending || isOpening || !canSend) return;
+    let intoConversationId: string | undefined;
+    if (!conversationId) {
+      if (!ensureConversation) return;
+      setIsOpening(true);
+      try {
+        // On failure the text stays in the composer, ready to send again.
+        const created = await ensureConversation();
+        if (!created) return;
+        intoConversationId = created;
+      } catch {
+        return;
+      } finally {
+        setIsOpening(false);
+      }
+    }
     setInputValue('');
     if (inputRef.current) inputRef.current.style.height = 'auto';
     startOrchestration();
     try {
-      await sendMessage(text, targetAgent?.url);
+      await sendMessage(text, targetAgent?.url, intoConversationId);
     } catch {
       // the hook keeps the error
     }
@@ -124,7 +150,7 @@ export const ConversationPanel = memo(function ConversationPanel({
     }
   };
 
-  if (!conversationId) {
+  if (!conversationId && !ensureConversation) {
     return (
       <div className={cn('flex h-full items-center justify-center p-6', className)}>
         <EmptyState
@@ -216,15 +242,15 @@ export const ConversationPanel = memo(function ConversationPanel({
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             aria-label="Message"
-            disabled={isSending || !canSend}
+            disabled={isSending || isOpening || !canSend}
             className="max-h-32 min-h-[38px] flex-1 resize-none"
           />
           <Button
             type="submit"
             iconOnly
             aria-label="Send message"
-            isLoading={isSending}
-            disabled={!inputValue.trim() || isSending || !canSend}
+            isLoading={isSending || isOpening}
+            disabled={!inputValue.trim() || isSending || isOpening || !canSend}
           >
             <SendHorizontal className="h-4 w-4" strokeWidth={1.75} />
           </Button>

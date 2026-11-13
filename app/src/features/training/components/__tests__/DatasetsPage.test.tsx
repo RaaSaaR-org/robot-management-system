@@ -196,8 +196,8 @@ describe('when a delete or a retry is refused', () => {
     page();
     await rowAction('Ready dataset', 'Delete');
     const dialog = await screen.findByRole('alertdialog');
-    expect(dialog).toHaveTextContent('Delete Ready dataset?');
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(dialog).toHaveTextContent('Delete “Ready dataset”?');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete dataset' }));
 
     expect(await screen.findByText("Couldn't delete dataset")).toBeInTheDocument();
     expect(screen.getByText(/member of 2 training jobs \(job-a, job-b\)/)).toBeInTheDocument();
@@ -215,5 +215,67 @@ describe('when a delete or a retry is refused', () => {
 
     expect(await screen.findByText("Couldn't restart the import")).toBeInTheDocument();
     expect(screen.getByText('An import of this dataset is already running')).toBeInTheDocument();
+  });
+});
+
+// ===========================================================================
+// TASK-486 — the row menu says what it does
+// ===========================================================================
+
+describe('the row menu', () => {
+  const imported = dataset({
+    id: 'ds-apple',
+    name: 'Apple to Plate — NVIDIA GR00T reference',
+    huggingFaceRepoId: 'nvidia/GR00T-N1.7-AppleToPlate',
+    demonstrationCount: 402,
+    totalFrames: 171625,
+    totalDuration: 5720,
+  });
+
+  beforeEach(() => {
+    listDatasets.mockResolvedValue({
+      datasets: [imported],
+      pagination: { page: 1, pageSize: 20, total: 1, totalPages: 1 },
+    });
+  });
+
+  const openMenu = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: `Actions for ${imported.name}` }));
+    return screen.findByRole('menu');
+  };
+
+  it('keeps the import log reachable once the import is done', async () => {
+    page();
+    await openMenu();
+    expect(screen.getByRole('menuitem', { name: 'Import log' })).toBeInTheDocument();
+  });
+
+  it('does not call a link to the episodes page "Create view"', async () => {
+    page();
+    await openMenu();
+    expect(screen.queryByRole('menuitem', { name: 'Create view' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Select episodes for a view' })).toBeInTheDocument();
+  });
+
+  it('sets Delete apart from Publish with a rule, as the last item', async () => {
+    page();
+    const menu = await openMenu();
+    const children = Array.from(menu.querySelectorAll('[role="menuitem"], [role="separator"]'));
+    const del = children.findIndex((el) => el.textContent === 'Delete');
+    expect(del).toBe(children.length - 1);
+    expect(children[del - 1].getAttribute('role')).toBe('separator');
+  });
+
+  it('names the dataset and how much goes with it before deleting', async () => {
+    page();
+    await rowAction(imported.name, 'Delete');
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Delete “Apple to Plate — NVIDIA GR00T reference”?');
+    expect(dialog).toHaveTextContent('402 episodes (171,625 frames, 1h 35m of recording)');
+    expect(dialog).toHaveTextContent('cannot be undone');
+    // The confirm button says what it deletes; nothing is deleted until it is pressed.
+    expect(trainingApiMock.deleteDataset).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete dataset' }));
+    await waitFor(() => expect(trainingApiMock.deleteDataset).toHaveBeenCalledWith('ds-apple'));
   });
 });

@@ -9,7 +9,7 @@ import { Search, UserCheck, UserCog, UserX, Users } from 'lucide-react';
 import {
   Button, DataTable, EmptyState, Panel, SearchInput, Select, StatusTag, Toolbar, confirm, toast, type DataTableColumn,
 } from '@/shared/components/ui';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { formatDate } from '@/shared/utils/format';
 import { useTeamStore } from '../store/teamStore';
 import type { TeamMember } from '../types/team.types';
 import { ChangeRoleModal } from './ChangeRoleModal';
@@ -63,7 +63,7 @@ export function MembersSection({ addAction }: { addAction: ReactNode }) {
       m.isActive ? <StatusTag tone="live" dot>Active</StatusTag> : <StatusTag tone="neutral" dot>Deactivated</StatusTag> },
     { key: 'lastLoginAt', header: 'Last sign-in', align: 'right', sortable: true, hideBelow: 'md',
       sortValue: (m) => (m.lastLoginAt ? new Date(m.lastLoginAt) : null),
-      cell: (m) => (m.lastLoginAt ? new Date(m.lastLoginAt).toLocaleDateString(UI_DATE_LOCALE) : 'Never') },
+      cell: (m) => (m.lastLoginAt ? formatDate(m.lastLoginAt) : 'Never') },
   ];
 
   const hasFilters = Boolean(query || role);

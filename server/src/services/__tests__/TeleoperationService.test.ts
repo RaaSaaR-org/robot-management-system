@@ -203,6 +203,43 @@ describe('TeleoperationService', () => {
   });
 
   // --------------------------------------------------------------------------
+  // WHICH ROBOT TYPE A SESSION'S DATASET IS FILED UNDER (TASK-485)
+  // --------------------------------------------------------------------------
+
+  describe('resolveRobotTypeIdFromSession', () => {
+    const DUCK_TYPE = { id: 'rt-duck', name: 'Microduck', manufacturer: 'Pollen Robotics', model: 'microduck', actionDim: 15, proprioceptionDim: 15 };
+
+    it('uses the registered type whose name is part of the model, instead of inventing a 0-wide one', async () => {
+      mockRobotTypeRepository.findAll.mockResolvedValue([DUCK_TYPE]);
+      mockPrisma.robot.findUnique.mockResolvedValue({ id: 'demo-microduck', model: 'Pollen Robotics Microduck', metadata: null });
+
+      expect(await service.resolveRobotTypeIdFromSession('demo-microduck')).toBe('rt-duck');
+      expect(mockRobotTypeRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('lets the type the robot states in its metadata win over what its model suggests', async () => {
+      mockRobotTypeRepository.findAll.mockResolvedValue([
+        { id: 'rt-so101', name: 'SO-101 Follower', manufacturer: 'TheRobotStudio', model: 'so101_follower', actionDim: 6, proprioceptionDim: 6 },
+        DUCK_TYPE,
+      ]);
+      // The column is a JSON string.
+      mockPrisma.robot.findUnique.mockResolvedValue({
+        id: 'r', model: 'SO-101', metadata: JSON.stringify({ robotTypeName: 'Microduck' }),
+      });
+
+      expect(await service.resolveRobotTypeIdFromSession('r')).toBe('rt-duck');
+    });
+
+    it('still creates a type for a model nothing registered matches', async () => {
+      mockRobotTypeRepository.findAll.mockResolvedValue([DUCK_TYPE]);
+      mockPrisma.robot.findUnique.mockResolvedValue({ id: 'r', model: 'Acme Walker 9', metadata: null });
+
+      expect(await service.resolveRobotTypeIdFromSession('r')).toBe('rt-new-id');
+      expect(mockRobotTypeRepository.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Acme Walker 9' }));
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // EXPORT TO LEROBOT — DATASET CREATION
   // --------------------------------------------------------------------------
 

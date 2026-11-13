@@ -10,7 +10,7 @@
 import { memo } from 'react';
 import { Eye } from 'lucide-react';
 import { cn } from '@/shared/utils';
-import { formatTimeAgo } from '@/shared/utils/format';
+import { formatTimeAgo, UI_DATE_LOCALE } from '@/shared/utils/format';
 import { EmptyState } from '@/shared/components/ui';
 import { Tooltip } from '@/shared/components/ui/Tooltip';
 import { useAgentModeStore, selectScene, selectMapSummary } from '../store/agentmodeStore';
@@ -199,7 +199,7 @@ export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: Scen
             <span>Map</span>
           </Tooltip>
           <span className="ml-auto tabular-nums">
-            {mapSummary.knownCells.toLocaleString()} known · {mapSummary.occupiedCells.toLocaleString()}{' '}
+            {mapSummary.knownCells.toLocaleString(UI_DATE_LOCALE)} known · {mapSummary.occupiedCells.toLocaleString(UI_DATE_LOCALE)}{' '}
             occupied
             {mapSummary.lastIntegratedAt
               ? ` · ${formatTimeAgo(mapSummary.lastIntegratedAt)}`

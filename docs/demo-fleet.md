@@ -10,6 +10,8 @@ Three robots a demo instance should show even when none of them is running:
 
 The robot types are seeded by the server at start (`server/src/database/seedStandardRobotTypes.ts`). The robots are put on an instance with one command.
 
+Each robot states its robot type in `metadata.robotTypeName`. That is the link the server reads (`GET /api/robots/:id/robot-type`, shown as **Robot type** on the robot's Details tab, and used when a recording session picks the type of its dataset): the model string alone does not say it — "Pollen Robotics Microduck" is not the type name "Microduck". A robot without that key is matched on its model: equal to a type's name, or containing it as whole words. An instance seeded before this key existed gets it by running the seed again (the three rows are reported `updated`).
+
 ## Put the robots on an instance
 
 From `server/`, against any running instance:
@@ -48,7 +50,20 @@ A robot normally joins the fleet when its agent registers (`POST /api/robots/reg
 | `awaiting_agent` | The hardware exists; its agent has never connected to this instance. | Not connected | "Never connected"; the page says it goes live when its agent registers. |
 | `arriving` | The hardware has not been delivered. | Arriving | The note, e.g. where it is on order from; the page says there is nothing to connect yet. |
 
-Nothing is invented for it: no battery level, no "last seen", no place. It cannot be commanded, because it is offline.
+Nothing is invented for it: no battery level, no "last seen", no place. It cannot be commanded, because it has no agent — so the app offers nothing that needs one:
+
+| Where | An expected robot shows |
+| ----- | ----------------------- |
+| Robot page header | No Emergency stop, and a menu with **Unregister** only. |
+| Overview | The 3D model when the viewer has one, and one "Controls" panel saying that skills and quick actions become available when the agent connects. |
+| Telemetry | "Not connected yet" — never "Last seen", which would be the moment the row was written. |
+| Teleop, Chat, Activity | One sentence each; no Connect button, no readiness list, no command bar, and no conversation is created. |
+| Agent Mode | It is listed as "Not connected" / "Arriving" and never picked by default. Picking it binds nothing and calls no agent endpoint. |
+| Dashboard | "Robots online" counts against the robots that have an agent, and names the expected ones beside it ("3 more expected, not connected yet"). |
+
+No telemetry is requested for it, and nothing opens a socket for it.
+
+What a *connected* robot is offered follows what it reports about itself (`app/src/features/robots/utils/robotTraits.ts`), not its name: a robot on mains power (`powerSource: ac_powered`, e.g. an SO-101 arm) gets no **Send to charge**, and the readiness list asks after hands only for an embodiment that carries them or an agent that reports hand health.
 
 ```bash
 curl -X PUT https://neodem.example.org/api/robots/lab-g1-02/expected \
@@ -61,6 +76,37 @@ curl -X PUT https://neodem.example.org/api/robots/lab-g1-02/expected \
 **When the real robot connects.** Give its agent the same robot id (`ROBOT_ID=demo-g1-dex3`) and it takes the row over on registration: name, model and capabilities become what the agent reports, the provisioning state is dropped, and the robot is health-checked like any other. Its site binding and anything recorded against the id stay. From then on it is not an expected robot, and neither the route nor the script will change it.
 
 Remove an expected robot with **Unregister** in the app, or `DELETE /api/robots/:id`.
+
+## Removing a robot type nobody uses
+
+An import creates a robot type when no registered one fits, and such a type then shows in every robot-type picker. One that nothing uses any more can be removed, by an owner:
+
+```bash
+# from server/
+npm run remove:robot-type -- --base-url https://neodem.example.org --name Unitree_G1
+```
+
+| Option | Effect |
+| ------ | ------ |
+| `--base-url <url>` | The instance. Default `http://localhost:3001`. |
+| `--name <name>` | The type's exact name (or `--id <uuid>`). |
+| `--dry-run` | Print what would be removed and write nothing. |
+| `--token <jwt>` | Bearer token for an instance with auth on (or `NEODEM_TOKEN`). The account needs `owner`. |
+
+The line it prints is `removed`, `would-remove`, `absent` (no type of that name — also the answer on a second run) or `refused`, with the server's reason; `refused` exits 1.
+
+The script is two calls to the public API: `GET /api/datasets/robot-types`, then
+
+```bash
+curl -X DELETE https://neodem.example.org/api/datasets/robot-types/<id>
+```
+
+The server refuses with **409** and deletes nothing when
+
+- a dataset, an embodiment or a skill still points at the type (`code: ROBOT_TYPE_IN_USE`). The message names them — `Robot type "Unitree_G1" is still in use by 2 datasets ("a", "b"). …` — and `references` lists `datasets`, `embodiments` and `skills` with their ids. Move the datasets to another robot type (the dataset page's robot-type switch) or delete them, then run it again;
+- the type is one of the standard types seeded at start (`code: ROBOT_TYPE_STANDARD`).
+
+An unknown id is a 404 (`ROBOT_TYPE_NOT_FOUND`). A removal is written to the compliance log as `robot-type.delete`.
 
 ## The MicroDuck
 

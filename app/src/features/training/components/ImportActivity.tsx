@@ -357,6 +357,9 @@ function ImportLog({ job }: { job: ImportJob }) {
         </p>
       )}
       {job.dropped > 0 && <p className="text-xs text-ink-tertiary">… {job.dropped} earlier lines not kept</p>}
+      {/* A log the server no longer has will never fill: no empty box promising
+          lines under the sentence that says they are gone (TASK-486). */}
+      {(job.logRetained || count > 0) && (
       <ol
         ref={boxRef}
         data-testid="import-job-log"
@@ -377,6 +380,7 @@ function ImportLog({ job }: { job: ImportJob }) {
           </li>
         ))}
       </ol>
+      )}
     </div>
   );
 }

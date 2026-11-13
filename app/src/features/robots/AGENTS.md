@@ -56,6 +56,29 @@ Robots without a running agent are the normal case in dev. Offline copy: "{name}
 
 A robot can be on the fleet before its agent has ever registered (`PUT /api/robots/:id/expected`, `docs/demo-fleet.md`). It is `offline` with `metadata.provisioning` = `awaiting_agent` or `arriving`; read it with `robotProvisioning(robot)` and pass `provisioning` to `RobotStatusTag` / `RobotOfflineBanner`. Such a robot reads "Not connected" or "Arriving", never "Offline", and shows no invented reading: battery "—" (not "AC"), no "Seen …", no "Place unknown". A robot that is not offline is never treated as expected, whatever its metadata says.
 
+**It has no agent, so nothing on its page may need one (TASK-485).** Decide with `robotTraits(robot, telemetry)` (`utils/robotTraits.ts`) — never with the robot's name or model:
+
+| Trait | Read from | Gates |
+|-------|-----------|-------|
+| `hasAgent` | `robotProvisioning` is null | Emergency stop, Send to charge / Return home, the Teleop, Chat and command panels (`AwaitingAgentState` stands in for them) |
+| `connected` | `status !== 'offline'` | telemetry and point-cloud requests (`useTelemetryStream(id, { enabled })`) |
+| `canCharge` | `powerSource` (telemetry, else metadata) is not `ac_powered` | "Send to charge" / "Charge": a mains-powered arm has no dock |
+| `hasHands` | the embodiment key (`robotType`) | the two hand rows of the readiness list, unless the agent reports hand health itself |
+
+An expected robot's tab says "Not connected yet" / "Not arrived yet" plus one sentence from `awaitingAgentSentence()`; it never prints `lastSeen` (the moment the row was written) and never "Offline" / "Robot offline".
+
+## Telemetry transport
+
+`useTelemetryStream` and `usePointCloudStream` open no socket. Live frames arrive on the app-wide event socket (`useRobotWebSocket`, `getWebSocketUrl()` — the API base or the page origin) and land in the robots store; while none is fresh the hook polls the API server. The server has no per-robot telemetry or point-cloud socket, so do not add a URL for one. Pass `enabled: false` for a robot without a connected agent.
+
+## Chat
+
+Opening the Chat tab creates nothing. `RobotChatPanel` finds the robot's conversation if there is one and hands `ConversationPanel` an `ensureConversation` that creates it when the first message is sent.
+
+## Robot type
+
+The **Robot type** on the Details tab is the dataset configuration the robot is one of, resolved by the server (`GET /api/robots/:id/robot-type`: `metadata.robotTypeName` first, the model string second). `metadata.robotType` is a different thing — the embodiment key that picks the 3D model — and is labelled "Embodiment".
+
 ## Tests
 
 `npx vitest run src/features/robots` — keep `data-testid`s (`robot-card`, `motion-*`, `voice-*`, `vr-*`) and the `a[href*="/robots/"]` name link on each card; e2e specs depend on them.

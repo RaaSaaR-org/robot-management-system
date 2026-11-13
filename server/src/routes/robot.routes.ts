@@ -7,7 +7,8 @@ import { Router, type Request, type Response } from 'express';
 import { robotManager } from '../services/RobotManager.js';
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from '../services/HttpClient.js';
 import { sensorScanService } from '../services/SensorScanService.js';
-import { robotRepository, digitalTwinRepository } from '../repositories/index.js';
+import { robotRepository, digitalTwinRepository, robotTypeRepository } from '../repositories/index.js';
+import { linkRobotToType, parseRobotMetadata } from '../services/robotTypeLink.js';
 import { twinPlaceGraphService } from '../services/TwinPlaceGraphService.js';
 import { frameRegistrationService, parseRegistrationRequest } from '../services/FrameRegistrationService.js';
 import { prisma } from '../database/index.js';
@@ -124,6 +125,34 @@ robotRoutes.get('/:id', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error getting robot:', error);
     res.status(500).json({ error: 'Failed to get robot' });
+  }
+});
+
+/**
+ * GET /:id/robot-type - The robot type this robot is one of (TASK-485)
+ *
+ * `{ robotType, linkedBy }`: the dataset configuration (state / action widths)
+ * the robot belongs to, and whether its metadata names it (`explicit`) or it
+ * was read off the model string (`model`). `robotType: null` when nothing says
+ * so unambiguously — see `services/robotTypeLink.ts`.
+ */
+robotRoutes.get('/:id/robot-type', async (req: Request, res: Response) => {
+  try {
+    const robot = await robotManager.getRobot(req.params.id);
+    if (!robot) return res.status(404).json({ error: 'Robot not found' });
+    const link = linkRobotToType(
+      { model: robot.model, metadata: parseRobotMetadata(robot.metadata) },
+      await robotTypeRepository.findAll(),
+    );
+    if (!link) return res.json({ robotType: null, linkedBy: null });
+    const { id, name, manufacturer, model, actionDim, proprioceptionDim } = link.robotType;
+    res.json({
+      robotType: { id, name, manufacturer, model, actionDim, proprioceptionDim },
+      linkedBy: link.linkedBy,
+    });
+  } catch (error) {
+    console.error('Error resolving robot type:', error);
+    res.status(500).json({ error: 'Failed to resolve robot type' });
   }
 });
 

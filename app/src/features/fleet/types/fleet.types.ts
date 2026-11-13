@@ -16,6 +16,12 @@ import type { AlertSeverity } from '@/features/alerts/types';
 export interface FleetStatus {
   /** Total number of robots in fleet */
   totalRobots: number;
+  /**
+   * Of those, expected robots (TASK-477): listed before their agent has ever
+   * connected. They are awaited, not down, so "online" is counted against the
+   * robots that have an agent (TASK-485). Absent = none.
+   */
+  expectedRobots?: number;
   /** Count of robots by status */
   robotsByStatus: Record<RobotStatus, number>;
   /** Average battery level across fleet (0-100) */

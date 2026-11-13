@@ -13,7 +13,7 @@ import { Panel, ProgressBar, RowActions, Spinner, StatusTag, type StatusTagTone 
 import type { Site, TwinStatus } from '../types/twin.types';
 import { twinDimensions } from '../types/twin.types';
 import { useOccupancyImage, type OccupancyImage } from '../utils/occupancy';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { UI_DATE_LOCALE, formatDate } from '@/shared/utils/format';
 
 export interface SiteCardProps {
   site: Site;
@@ -92,7 +92,7 @@ export const SiteCard = memo(function SiteCard({ site, robotName, buildProgress,
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold text-ink-primary">{site.name}</h3>
           <p className="truncate text-[13px] text-ink-tertiary">
-            {robotName || site.robotId || 'No robot'} · {new Date(site.createdAt).toLocaleDateString(UI_DATE_LOCALE)}
+            {robotName || site.robotId || 'No robot'} · {formatDate(site.createdAt)}
           </p>
         </div>
         <RowActions

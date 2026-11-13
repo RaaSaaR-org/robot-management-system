@@ -1,14 +1,16 @@
 /**
  * @file useTelemetryStream.ts
- * @description Hook for real-time robot telemetry via WebSocket with polling fallback
+ * @description Hook for real-time robot telemetry: the app-wide event socket's
+ *              `robot_telemetry` broadcast, with HTTP polling of the API server
+ *              while no broadcast frame is fresh. It opens no socket of its own
+ *              and asks nothing for a robot without a connected agent.
  * @feature robots
- * @dependencies @/shared/hooks/useWebSocket, @/features/robots/types, @/features/robots/api
+ * @dependencies @/features/robots/types, @/features/robots/api
  * @stateAccess useRobotsStore (write)
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useWebSocket, type UseWebSocketOptions } from '@/shared/hooks/useWebSocket';
-import type { WebSocketStatus, WebSocketMessage } from '@/shared/types/api.types';
+import type { WebSocketStatus } from '@/shared/types/api.types';
 import type { RobotTelemetry } from '../types/robots.types';
 import { useRobotsStore } from '../store/robotsStore';
 import { robotsApi } from '../api/robotsApi';
@@ -20,6 +22,13 @@ import { robotsApi } from '../api/robotsApi';
 export interface UseTelemetryStreamOptions {
   /** Auto-connect on mount (default: true) */
   autoConnect?: boolean;
+  /**
+   * Whether there is anything to stream (default: true). Pass false for a robot
+   * with no connected agent — offline, or expected and never connected
+   * (TASK-485): nothing is requested, the status stays `disconnected`, and
+   * the stream starts by itself when this turns true.
+   */
+  enabled?: boolean;
   /** Update interval in ms for polling mode (default: 5000) */
   updateInterval?: number;
   /** Callback when telemetry is received */
@@ -35,7 +44,7 @@ export interface UseTelemetryStreamReturn {
   status: WebSocketStatus;
   /** Whether connected (via WebSocket or polling) */
   isConnected: boolean;
-  /** Whether using polling mode (vs WebSocket) */
+  /** Whether frames come from HTTP polling (vs the event socket's broadcast) */
   isPolling: boolean;
   /** Last update timestamp */
   lastUpdate: Date | null;
@@ -70,7 +79,13 @@ const WS_FRESHNESS_WINDOW = 10_000;
 
 /**
  * Hook for streaming real-time telemetry data from a robot.
- * In development mode, simulates WebSocket with periodic mock data updates.
+ *
+ * There is one transport in every build (TASK-485): frames the server
+ * broadcasts on the app-wide event socket (`useRobotWebSocket`, same origin as
+ * the API) land in the robots store and are preferred; while none is fresh the
+ * hook polls `GET /api/robots/:id/telemetry`. The production build used to open
+ * a second socket to a hardcoded host that no deployment serves, which failed
+ * on every robot page.
  *
  * @param robotId - The robot ID to stream telemetry for
  * @param options - Configuration options
@@ -89,7 +104,7 @@ const WS_FRESHNESS_WINDOW = 10_000;
  *     <div>
  *       <BatteryGauge level={telemetry?.batteryLevel ?? 0} />
  *       <SensorGrid sensors={telemetry?.sensors ?? {}} />
- *       <span>Last update: {lastUpdate?.toLocaleTimeString()}</span>
+ *       <span>Last update: {formatTime(lastUpdate)}</span>
  *     </div>
  *   );
  * }
@@ -101,10 +116,14 @@ export function useTelemetryStream(
 ): UseTelemetryStreamReturn {
   const {
     autoConnect = true,
+    enabled: enabledOption = true,
     updateInterval = 5000,
     onTelemetry,
     onStatusChange,
   } = options;
+
+  // No robot, no stream: callers pass '' while they have nothing to follow.
+  const enabled = enabledOption && robotId !== '';
 
   const [telemetry, setTelemetry] = useState<RobotTelemetry | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
@@ -151,12 +170,6 @@ export function useTelemetryStream(
     initialCacheFrameRef.current = cachedFrame;
   }
 
-  // Check if we're in development or demo mode (both use HTTP polling instead of WebSocket)
-  const isDev = import.meta.env.DEV || import.meta.env.VITE_DEMO_MODE === 'true';
-
-  // WebSocket URL for production
-  const wsUrl = `wss://api.neodem.io/telemetry/${robotId}`;
-
   // Handle incoming telemetry (both real and simulated)
   const handleTelemetry = useCallback(
     (data: RobotTelemetry) => {
@@ -202,41 +215,11 @@ export function useTelemetryStream(
     }, WS_FRESHNESS_WINDOW);
   }, [cachedFrame]);
 
-  // Production WebSocket configuration
-  const wsOptions: UseWebSocketOptions<RobotTelemetry> = useMemo(
-    () => ({
-      autoConnect: !isDev && autoConnect,
-      reconnect: true,
-      maxReconnectAttempts: 10,
-      reconnectInterval: 5000,
-      onMessage: (message: WebSocketMessage<RobotTelemetry>) => {
-        if (message.payload) {
-          handleTelemetry(message.payload);
-        }
-      },
-      onConnect: () => {
-        onStatusChange?.('connected');
-      },
-      onDisconnect: () => {
-        onStatusChange?.('disconnected');
-      },
-      onError: () => {
-        onStatusChange?.('error');
-      },
-    }),
-    [isDev, autoConnect, handleTelemetry, onStatusChange]
-  );
-
-  // Production WebSocket connection
-  const ws = useWebSocket<RobotTelemetry>(wsUrl, wsOptions);
-
   // Polling mode: fetch telemetry from server periodically.
   // Uses a recursive setTimeout loop guarded by a generation token so a stale
   // connect can never leave an orphaned timer behind, and so the delay can
   // stretch to FAILURE_BACKOFF_INTERVAL after repeated failures.
   const startPolling = useCallback(async () => {
-    if (!isDev) return;
-
     // Invalidate any in-flight startPolling / poll loop, then take ownership.
     const gen = ++generationRef.current;
     if (timerRef.current) {
@@ -299,7 +282,7 @@ export function useTelemetryStream(
     };
 
     await poll();
-  }, [isDev, robotId, handleTelemetry, updateInterval, onStatusChange]);
+  }, [robotId, handleTelemetry, updateInterval, onStatusChange]);
 
   const stopPolling = useCallback(() => {
     // Invalidate any in-flight startPolling so it can't install a timer later.
@@ -313,23 +296,14 @@ export function useTelemetryStream(
     onStatusChange?.('disconnected');
   }, [onStatusChange]);
 
-  // Connect function
+  // Connect function (also the Telemetry tab's Retry). A disabled stream stays idle.
   const connect = useCallback(() => {
-    if (isDev) {
-      startPolling();
-    } else {
-      ws.connect();
-    }
-  }, [isDev, startPolling, ws]);
+    if (!enabled) return;
+    void startPolling();
+  }, [enabled, startPolling]);
 
   // Disconnect function
-  const disconnect = useCallback(() => {
-    if (isDev) {
-      stopPolling();
-    } else {
-      ws.disconnect();
-    }
-  }, [isDev, stopPolling, ws]);
+  const disconnect = stopPolling;
 
   // Auto-connect on mount
   useEffect(() => {
@@ -343,8 +317,12 @@ export function useTelemetryStream(
     selfFrameRef.current = null;
     wsFreshUntilRef.current = 0;
 
-    if (autoConnect) {
-      connect();
+    if (enabled) {
+      if (autoConnect) connect();
+    } else {
+      // Nothing to ask: say "disconnected", never "connecting" or "error".
+      setDevStatus('disconnected');
+      setIsDevConnected(false);
     }
 
     return () => {
@@ -353,22 +331,20 @@ export function useTelemetryStream(
         clearTimeout(wsExpiryTimerRef.current);
         wsExpiryTimerRef.current = null;
       }
-      if (isDev) {
-        // Invalidate any in-flight startPolling (it re-checks the generation
-        // after every await) and drop the pending timer.
-        generationRef.current += 1;
-        if (timerRef.current) {
-          clearTimeout(timerRef.current);
-          timerRef.current = null;
-        }
+      // Invalidate any in-flight startPolling (it re-checks the generation
+      // after every await) and drop the pending timer.
+      generationRef.current += 1;
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
       }
     };
-  }, [robotId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [robotId, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Determine current status and connection state. WS broadcast frames count
   // as connected regardless of which transport the fallback path uses.
-  const status = isWsLive ? 'connected' : isDev ? devStatus : ws.status;
-  const isConnected = isWsLive || (isDev ? isDevConnected : ws.status === 'connected');
+  const status = isWsLive ? 'connected' : devStatus;
+  const isConnected = isWsLive || isDevConnected;
 
   return useMemo(
     () => ({
@@ -376,12 +352,12 @@ export function useTelemetryStream(
       status,
       isConnected,
       // Only "polling" while the WS broadcast is not delivering frames.
-      isPolling: isDev && !isWsLive,
+      isPolling: enabled && !isWsLive,
       lastUpdate,
       connect,
       disconnect,
     }),
-    [telemetry, status, isConnected, isDev, isWsLive, lastUpdate, connect, disconnect]
+    [telemetry, status, isConnected, enabled, isWsLive, lastUpdate, connect, disconnect]
   );
 }
 

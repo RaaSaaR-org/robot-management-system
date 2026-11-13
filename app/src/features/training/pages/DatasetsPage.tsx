@@ -42,6 +42,8 @@ import { GenerateSyntheticModal } from '../components/GenerateSyntheticModal';
 import { CreateViewModal } from '../components/CreateViewModal';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
 import { CompatibilityModal } from '../components/datasets/CompatibilityModal';
+import { formatDuration } from '../components/datasets/datasetFormat';
+import { formatNumber } from '@/shared/utils/format';
 import { datasetViewsApi, trainingApi } from '../api';
 import { useDatasetsAutoFetch, useTrainingJobs } from '../hooks';
 import { importToastId, useImportJobsStore, useTrainingStore } from '../store';
@@ -56,6 +58,14 @@ import type {
 
 type OpenModal = 'upload' | 'hf' | 'generate' | 'compat' | null;
 
+/** "402 episodes (171,625 frames, 1h 35m of recording)" — what a delete takes away. */
+export function describeDatasetSize(d: Pick<Dataset, 'demonstrationCount' | 'totalFrames' | 'totalDuration'>): string {
+  const episodes = `${formatNumber(d.demonstrationCount)} episode${d.demonstrationCount === 1 ? '' : 's'}`;
+  const frames = `${formatNumber(d.totalFrames)} frame${d.totalFrames === 1 ? '' : 's'}`;
+  const duration = d.totalDuration > 0 ? `, ${formatDuration(d.totalDuration)} of recording` : '';
+  return `${episodes} (${frames}${duration})`;
+}
+
 export function DatasetsPage() {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     return (
@@ -69,7 +79,7 @@ export function DatasetsPage() {
           'Annotate and label robot trajectories',
           'Export datasets for training pipelines',
         ]}
-        docsSlug="VLA-integration-guide"
+        docsSlug="vla-integration-guide"
       />
     );
   }
@@ -112,10 +122,11 @@ function DatasetsHub() {
   const askDelete = async (d: Dataset) => {
     const view = isDatasetView(d);
     const ok = await confirm({
-      title: `Delete ${d.name}?`,
+      title: `Delete “${d.name}”?`,
       description: view
-        ? 'The view is removed. The dataset it selects from is kept.'
-        : 'Its files and episodes are removed. Training jobs that used it keep their results.',
+        ? `The view “${d.name}” is removed. The dataset it selects from is kept.`
+        : `“${d.name}” and its ${describeDatasetSize(d)} are removed for good — this cannot be undone. Training jobs that used it keep their results.`,
+      confirmLabel: view ? 'Delete view' : 'Delete dataset',
       tone: 'danger',
     });
     if (!ok) return;
@@ -177,14 +188,18 @@ function DatasetsHub() {
         { label: 'Train a model', icon: <Layers />, onSelect: () => setWizardMixture([d.id]) },
         frozen
           ? { label: 'Duplicate view', icon: <Copy />, onSelect: () => duplicate(d) }
-          : { label: 'Create view', icon: <GitFork />, onSelect: () => navigate(`/datasets/${d.id}/episodes`) },
+          // A view is made from episodes ticked on the episodes page, so that is
+          // where this goes — and what it says (TASK-486).
+          : { label: 'Select episodes for a view', icon: <GitFork />, onSelect: () => navigate(`/datasets/${d.id}/episodes`) },
         { label: 'Publish to Hugging Face', icon: <CloudUpload />, onSelect: () => setPushDataset(d) },
       );
     }
     if (d.status === 'failed' && d.huggingFaceRepoId) {
       items.push({ label: 'Retry import', icon: <RotateCw />, onSelect: () => void retry(d) });
     }
-    if (d.huggingFaceRepoId && d.status !== 'ready') {
+    // Kept on a ready dataset too: what the import did is still worth reading
+    // after it finished (TASK-486).
+    if (d.huggingFaceRepoId) {
       items.push({
         label: 'Import log',
         icon: <ScrollText />,
@@ -196,6 +211,7 @@ function DatasetsHub() {
         label: 'Delete',
         icon: <Trash2 />,
         tone: 'danger',
+        // Always under its own rule, never directly below "Publish".
         separatorBefore: items.length > 0,
         onSelect: () => void askDelete(d),
       });

@@ -17,7 +17,7 @@ import {
   chartColors,
   chartTheme,
 } from '@/shared/components/ui';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { formatDate } from '@/shared/utils/format';
 import { METRICS_PERIOD_LABELS, type AIPerformanceMetrics } from '../types';
 
 export interface PerformanceDashboardProps {
@@ -51,7 +51,7 @@ export function PerformanceDashboard({ metrics, isLoading, error, onRetry }: Per
     );
   }
 
-  const range = `${new Date(metrics.startDate).toLocaleDateString(UI_DATE_LOCALE)} – ${new Date(metrics.endDate).toLocaleDateString(UI_DATE_LOCALE)}`;
+  const range = `${formatDate(metrics.startDate)} – ${formatDate(metrics.endDate)}`;
   const none = metrics.totalDecisions === 0;
   const safety = [
     { name: 'Safe', value: metrics.safetyDistribution.safe, color: chartColors.measured },

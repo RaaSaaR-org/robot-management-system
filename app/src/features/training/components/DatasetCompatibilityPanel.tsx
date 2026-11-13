@@ -6,6 +6,12 @@
  * The report is a comparison, so it is drawn as one: an axis per row, a dataset
  * per column, the differing cell visible without reading a sentence about it.
  *
+ * The per-axis verdict sits directly after the axis, ahead of the dataset
+ * columns, and both stay pinned while the dataset columns scroll: with three
+ * datasets the verdict column used to be 300 px off the right edge of the
+ * dialog (TASK-486). Dataset names are cut with an ellipsis and keep the full
+ * name in `title`.
+ *
  * The verdict is not a severity scale. `multi_embodiment` means the datasets
  * have different action spaces and must be trained as a mixture with
  * per-embodiment projectors rather than concatenated — a supported way to
@@ -50,6 +56,16 @@ const AXIS: Record<AxisVerdict, { tone: StatusTagTone; label: string }> = {
   differs: { tone: 'info', label: 'Differs' },
   blocking: { tone: 'danger', label: 'Blocking' },
 };
+
+// The axis and its verdict are pinned to the left edge; the dataset columns
+// scroll under them. Widths are fixed so the second pin knows where to sit.
+const HEAD_CELL = 'border-b border-line px-3 py-2 text-xs font-medium';
+const BODY_CELL = 'border-b border-line-subtle px-3 py-2';
+const STICKY_AXIS = 'sticky left-0 z-10 w-44';
+const STICKY_VERDICT = 'sticky left-44 z-10 w-24 border-r border-r-line-subtle';
+/** w-44 + w-24, and the least a dataset column is squeezed to before the table scrolls. */
+const PINNED_REM = 17;
+const DATASET_COLUMN_REM = 9;
 
 export function DatasetCompatibilityPanel({ datasetIds, onReport, className }: DatasetCompatibilityPanelProps) {
   const [report, setReport] = useState<CompatibilityReport | null>(null);
@@ -126,35 +142,43 @@ export function DatasetCompatibilityPanel({ datasetIds, onReport, className }: D
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-panel border border-line">
-        <table className="w-full min-w-[32rem] border-collapse text-sm">
+      <div className="overflow-x-auto rounded-panel border border-line" data-testid="compatibility-table-scroll">
+        {/* Fixed layout: the dataset columns share what is left of the dialog, so
+            three of them fit a 1280 px screen without scrolling; from there each
+            added dataset is guaranteed DATASET_COLUMN_REM and the table scrolls. */}
+        <table
+          className="w-full table-fixed border-separate border-spacing-0 text-sm"
+          style={{ minWidth: `${PINNED_REM + columns.length * DATASET_COLUMN_REM}rem` }}
+        >
           <thead>
-            <tr className="border-b border-line bg-inset text-left">
-              <th scope="col" className="px-3 py-2 text-xs font-medium text-ink-tertiary">Axis</th>
+            <tr className="text-left">
+              <th scope="col" className={cn(HEAD_CELL, STICKY_AXIS, 'bg-inset text-ink-tertiary')}>Axis</th>
+              <th scope="col" className={cn(HEAD_CELL, STICKY_VERDICT, 'bg-inset text-ink-tertiary')}>Verdict</th>
               {columns.map((c) => (
-                <th key={c.datasetId} scope="col" className="px-3 py-2 text-xs font-medium text-ink-primary">{c.datasetName}</th>
+                <th key={c.datasetId} scope="col" title={c.datasetName} className={cn(HEAD_CELL, 'bg-inset text-ink-primary')}>
+                  <span className="block truncate">{c.datasetName}</span>
+                </th>
               ))}
-              <th scope="col" className="px-3 py-2 text-xs font-medium text-ink-tertiary">Verdict</th>
             </tr>
           </thead>
           <tbody>
             {report.axes.map((axis) => (
-              <tr key={axis.axis} data-testid={`compatibility-axis-${axis.axis}`} className="border-b border-line-subtle align-top last:border-0">
-                <th scope="row" className="px-3 py-2 text-left font-normal text-ink-secondary">
+              <tr key={axis.axis} data-testid={`compatibility-axis-${axis.axis}`} className="align-top [&:last-child>*]:border-b-0">
+                <th scope="row" className={cn(BODY_CELL, STICKY_AXIS, 'bg-raised text-left font-normal text-ink-secondary')}>
                   {axis.label}
                   <p className="mt-0.5 text-xs text-ink-tertiary">{axis.note}</p>
                 </th>
+                <td className={cn(BODY_CELL, STICKY_VERDICT, 'bg-raised')} data-testid={`compatibility-axis-verdict-${axis.axis}`}>
+                  <StatusTag tone={AXIS[axis.verdict].tone} size="sm">{AXIS[axis.verdict].label}</StatusTag>
+                </td>
                 {columns.map((c) => {
                   const cell = axis.values.find((v) => v.datasetId === c.datasetId);
                   return (
-                    <td key={c.datasetId} className={cn('px-3 py-2 tabular-nums', axis.verdict === 'match' ? 'text-ink-secondary' : 'font-medium text-ink-primary')}>
+                    <td key={c.datasetId} className={cn(BODY_CELL, 'tabular-nums [overflow-wrap:anywhere]', axis.verdict === 'match' ? 'text-ink-secondary' : 'font-medium text-ink-primary')}>
                       {cell ? cell.value : '—'}
                     </td>
                   );
                 })}
-                <td className="px-3 py-2">
-                  <StatusTag tone={AXIS[axis.verdict].tone} size="sm">{AXIS[axis.verdict].label}</StatusTag>
-                </td>
               </tr>
             ))}
           </tbody>

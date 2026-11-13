@@ -576,6 +576,25 @@ export const DEFAULT_FILTERS: RobotFilters = {};
 // ============================================================================
 
 /**
+ * The robot type a fleet robot is one of (TASK-485): the dataset configuration
+ * its recordings are checked against. `GET /api/robots/:id/robot-type`.
+ */
+export interface RobotTypeLink {
+  robotType: {
+    id: string;
+    name: string;
+    manufacturer: string;
+    model: string;
+    /** Width of `action`. */
+    actionDim: number;
+    /** Width of `observation.state`. */
+    proprioceptionDim: number;
+  } | null;
+  /** `explicit`: named in the robot's metadata. `model`: read off its model string. */
+  linkedBy: 'explicit' | 'model' | null;
+}
+
+/**
  * An expected robot (TASK-477): on the fleet before its agent has ever
  * registered. `awaiting_agent` — the hardware exists, nothing is connected;
  * `arriving` — it has not been delivered yet.

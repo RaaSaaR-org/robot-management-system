@@ -6,10 +6,12 @@
  *              sidebar rows to 10 safe (TASK-273): a page that lost its row did
  *              not lose its way in.
  *
- *              Navigation only, on purpose: no robots, datasets or deployments
- *              by name. Searching entities needs a server-side index across 83
- *              Prisma models; this dialog reads the model already in the
- *              browser and makes no request at all.
+ *              Pages first, and with an empty field pages only. Once
+ *              something is typed it also finds datasets and robots by name
+ *              (TASK-486) — the two lists a person looks for by name, each
+ *              small and fetched once per opening by `paletteEntities.ts`.
+ *              Everything else stays navigation: a general entity search
+ *              would need a server-side index across 83 Prisma models.
  * @feature layout
  */
 
@@ -34,6 +36,7 @@ import { EmptyState } from '@/shared/components/ui/EmptyState';
 import { Input } from '@/shared/components/ui/Input';
 import { Modal } from '@/shared/components/ui/Modal';
 import { cn } from '@/shared/utils/cn';
+import { ENTITY_KIND_LABEL, entityRank, loadPaletteEntities, type PaletteEntity } from './paletteEntities';
 
 // ============================================================================
 // TYPES
@@ -42,6 +45,19 @@ import { cn } from '@/shared/utils/cn';
 export interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
+  /** Where the datasets and robots come from. Injectable so a test needs no server. */
+  loadEntities?: () => Promise<PaletteEntity[]>;
+}
+
+/** One row of the result list: a page from the navigation model, or a thing found by name. */
+export interface PaletteResult {
+  label: string;
+  path: string;
+  icon: PaletteDestination['icon'];
+  /** The muted text after the label */
+  trail: string;
+  /** Set on a dataset or a robot; absent on a page */
+  entity?: PaletteEntity['kind'];
 }
 
 /**
@@ -159,6 +175,54 @@ export function matchDestinations(
   return hits.map((hit) => hit.destination);
 }
 
+/**
+ * Pages and named things matching `query`, best first. An empty query lists
+ * the pages and nothing else: the palette opens as a map of the product, not
+ * as a dump of every dataset.
+ *
+ * A dataset or robot whose name (or a word in it) starts with the query ranks
+ * with a page whose label does, after it; one that merely contains the query
+ * ranks ahead of a page matched by scattered letters. So "apple" leads with
+ * "Apple to Plate", and "data" still leads with the Datasets page.
+ */
+export function matchPalette(
+  destinations: PaletteDestination[],
+  entities: PaletteEntity[],
+  query: string,
+): PaletteResult[] {
+  const pages = (list: PaletteDestination[]): PaletteResult[] =>
+    list.map((d) => ({ label: d.label, path: d.path, icon: d.icon, trail: destinationTrail(d) }));
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return pages(destinations);
+
+  const hits: { result: PaletteResult; order: number; rank: number }[] = [];
+  let order = 0;
+  for (const destination of destinations) {
+    const rank = rankOf(destination, needle);
+    if (rank !== null) hits.push({ result: pages([destination])[0], order: order++, rank });
+  }
+  const seen = new Set(hits.map((hit) => hit.result.path));
+  for (const entity of entities) {
+    const how = entityRank(entity, needle);
+    if (how === null || seen.has(entity.path)) continue;
+    seen.add(entity.path);
+    hits.push({
+      result: {
+        label: entity.label,
+        path: entity.path,
+        icon: entity.icon,
+        trail: [ENTITY_KIND_LABEL[entity.kind], entity.detail].filter(Boolean).join(' · '),
+        entity: entity.kind,
+      },
+      order: order++,
+      // Between the page ranks: after a page prefix, ahead of a page subsequence.
+      rank: how === 'prefix' ? PREFIX_HIT + 0.5 : ALIAS_PREFIX_HIT + 0.5,
+    });
+  }
+  hits.sort((a, b) => a.rank - b.rank || a.order - b.order);
+  return hits.map((hit) => hit.result);
+}
+
 // ============================================================================
 // COMPONENT
 // ============================================================================
@@ -173,7 +237,7 @@ export function matchDestinations(
  * <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
  * ```
  */
-export function CommandPalette({ open, onClose }: CommandPaletteProps): ReactElement {
+export function CommandPalette({ open, onClose, loadEntities = loadPaletteEntities }: CommandPaletteProps): ReactElement {
   // The same gated groups the sidebar reads — never a second gate of its own.
   const groups = useVisibleNavGroups();
   const navigate = useNavigate();
@@ -182,8 +246,21 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps): ReactEle
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
 
+  const [entities, setEntities] = useState<PaletteEntity[]>([]);
+
   const destinations = useMemo(() => paletteDestinations(groups), [groups]);
-  const results = useMemo(() => matchDestinations(destinations, query), [destinations, query]);
+  const results = useMemo(() => matchPalette(destinations, entities, query), [destinations, entities, query]);
+
+  // Datasets and robots, fresh on every opening: one imported a minute ago has
+  // to be findable. A failure leaves the pages, which need no server.
+  useEffect(() => {
+    if (!open) return undefined;
+    let cancelled = false;
+    loadEntities()
+      .then((found) => { if (!cancelled) setEntities(found); })
+      .catch(() => { if (!cancelled) setEntities([]); });
+    return () => { cancelled = true; };
+  }, [open, loadEntities]);
   const optionId = (index: number) => `${listId}-option-${index}`;
 
   // The dialog outlives its own closing (Modal renders nothing while closed,
@@ -209,7 +286,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps): ReactEle
     setSelected((current) => (current + delta + results.length) % results.length);
   };
 
-  const go = (destination: PaletteDestination | undefined) => {
+  const go = (destination: PaletteResult | undefined) => {
     if (!destination) return;
     // The `?tab=` a tab carries needs nothing else: every tabbed page reads the
     // param off the URL.
@@ -267,8 +344,8 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps): ReactEle
             setSelected(0);
           }}
           onKeyDown={onKeyDown}
-          placeholder="Search pages…"
-          aria-label="Search pages"
+          placeholder="Search pages, datasets and robots…"
+          aria-label="Search pages, datasets and robots"
           role="combobox"
           // The listbox is the dialog: it is expanded whenever there is one to
           // point at, and nothing is pointed at while the query matches nothing.
@@ -284,27 +361,28 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps): ReactEle
         <EmptyState
           size="sm"
           icon={<Search strokeWidth={1.75} />}
-          title="No page matches"
-          description={`Nothing in the navigation matches “${query.trim()}”.`}
+          title="Nothing matches"
+          description={`No page, dataset or robot matches “${query.trim()}”.`}
         />
       ) : (
         <ul
           id={listId}
           ref={listRef}
           role="listbox"
-          aria-label="Pages"
+          aria-label="Results"
           className="min-h-0 flex-1 overflow-y-auto p-2"
         >
           {results.map((destination, index) => {
             const Icon = destination.icon;
             const active = index === selected;
-            const trail = destinationTrail(destination);
+            const trail = destination.trail;
             return (
               <li
                 // Deduped on path above, so the URL is the identity here.
                 key={destination.path}
                 id={optionId(index)}
                 role="option"
+                data-entity={destination.entity}
                 aria-selected={active}
                 onClick={() => go(destination)}
                 // mousemove, not mouseenter: arrowing through the list scrolls

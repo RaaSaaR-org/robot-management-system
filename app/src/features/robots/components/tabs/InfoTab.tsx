@@ -9,12 +9,16 @@ import { MessageSquare } from 'lucide-react';
 import { Badge, KeyValueList, LinkButton, Panel, StatusTag } from '@/shared/components/ui';
 import { formatDateTime } from '@/shared/utils/format';
 import type { InfoTabProps } from './types';
-import { robotProvisioning } from '../../types/robots.types';
+import { useEffect, useState } from 'react';
+import { robotProvisioning, type RobotTypeLink } from '../../types/robots.types';
+import { robotsApi } from '../../api/robotsApi';
 import { SiteSelect } from './SiteSelect';
 import { SiteAlignment } from './SiteAlignment';
 
 const METADATA_LABELS: Record<string, string> = {
-  robotType: 'Robot type',
+  // The embodiment key that picks the 3D model — not the robot type (the
+  // dataset configuration), which Identity shows with its widths (TASK-485).
+  robotType: 'Embodiment',
   robotClass: 'Class',
   class: 'Class',
   payload: 'Payload',
@@ -26,7 +30,42 @@ const METADATA_LABELS: Record<string, string> = {
 };
 
 /** Shown by the status tag and the banner above, not as raw key/value pairs. */
-const HIDDEN_METADATA = new Set(['provisioning', 'provisioningNote']);
+const HIDDEN_METADATA = new Set(['provisioning', 'provisioningNote', 'robotTypeName', 'robotTypeId']);
+
+/**
+ * The robot type this robot is one of, as the server links it (TASK-485):
+ * "Microduck · state 15 / action 15". While the answer is out, or when the
+ * server cannot tell, the name the robot's own metadata states, else "—".
+ */
+function RobotTypeValue({ robotId, stated }: { robotId: string; stated: string | null }) {
+  const [link, setLink] = useState<RobotTypeLink | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setLink(null);
+    robotsApi
+      .getRobotType(robotId)
+      .then((next) => {
+        if (!cancelled) setLink(next);
+      })
+      .catch(() => {
+        // An older server, or the demo build: the stated name is all there is.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [robotId]);
+
+  const type = link?.robotType ?? null;
+  if (!type) return <span data-testid="robot-type-link">{stated ?? '—'}</span>;
+  return (
+    <span data-testid="robot-type-link" data-linked-by={link?.linkedBy ?? undefined}>
+      {type.name}
+      <span className="text-ink-tertiary">
+        {' '}· state {type.proprioceptionDim} / action {type.actionDim}
+      </span>
+    </span>
+  );
+}
 
 function humanizeKey(key: string): string {
   const spaced = key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
@@ -47,6 +86,8 @@ export function InfoTab({ robot }: InfoTabProps) {
     .map(([key, value]) => ({ key, label: METADATA_LABELS[key] ?? humanizeKey(key), value: metadataValue(value) }))
     .filter((item): item is { key: string; label: string; value: string } => item.value !== null);
   const hasAgent = Boolean(robot.a2aEnabled || robot.a2aAgentUrl || robot.capabilities.includes('a2a'));
+  const provisioning = robotProvisioning(robot);
+  const statedType = robot.metadata?.robotTypeName;
 
   return (
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
@@ -57,6 +98,15 @@ export function InfoTab({ robot }: InfoTabProps) {
             items={[
               { label: 'Robot ID', value: robot.id, mono: true },
               { label: 'Model', value: robot.model },
+              {
+                label: 'Robot type',
+                value: (
+                  <RobotTypeValue
+                    robotId={robot.id}
+                    stated={typeof statedType === 'string' && statedType.trim() ? statedType : null}
+                  />
+                ),
+              },
               { label: 'Serial number', value: robot.serialNumber, mono: true },
               { label: 'Firmware', value: robot.firmware },
               { label: 'IP address', value: robot.ipAddress, mono: true },
@@ -69,10 +119,11 @@ export function InfoTab({ robot }: InfoTabProps) {
                     },
                   ]
                 : []),
-              { label: 'Place', value: robot.location?.place ?? 'Place unknown' },
+              // A robot that never connected has reported no place to be unknown about.
+              { label: 'Place', value: robot.location?.place ?? (provisioning ? null : 'Place unknown') },
               {
                 // An expected robot was put on the fleet; no agent has registered it.
-                label: robotProvisioning(robot) ? 'Added' : 'Registered',
+                label: provisioning ? 'Added' : 'Registered',
                 value: formatDateTime(robot.createdAt, { year: 'numeric', month: 'short', day: 'numeric' }),
               },
               { label: 'Last updated', value: formatDateTime(robot.updatedAt) },

@@ -13,6 +13,7 @@ import { JobMixture } from './JobMixture';
 import { RunExportNotice } from './RunExportNotice';
 import { useRunExport } from './useRunExport';
 import { baseModelLabel, isActiveJob, jobDisplayName, methodLabel } from './jobFormat';
+import { formatDateTime } from '@/shared/utils/format';
 
 export interface JobDetailModalProps {
   job: TrainingJob | null;
@@ -76,9 +77,9 @@ function OpenJobModal({ job, onClose, onCancel, onRetry }: Omit<JobDetailModalPr
               { label: 'Model', value: job.kind === 'sim_rl' ? 'Sim-RL policy' : baseModelLabel(job.baseModel) },
               { label: 'Method', value: methodLabel(job) },
               { label: 'Started from', value: startedFrom ?? 'Foundation weights', mono: !!startedFrom },
-              { label: 'Created', value: new Date(job.createdAt).toLocaleString() },
-              { label: 'Started', value: job.startedAt ? new Date(job.startedAt).toLocaleString() : undefined },
-              { label: 'Completed', value: job.completedAt ? new Date(job.completedAt).toLocaleString() : undefined },
+              { label: 'Created', value: formatDateTime(job.createdAt) },
+              { label: 'Started', value: job.startedAt ? formatDateTime(job.startedAt) : undefined },
+              { label: 'Completed', value: job.completedAt ? formatDateTime(job.completedAt) : undefined },
               { label: 'Job ID', value: job.id, mono: true },
               { label: 'Model version', value: job.modelVersionId, mono: true },
             ]}

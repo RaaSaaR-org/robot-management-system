@@ -16,7 +16,9 @@ import {
 } from '@/shared/components/ui';
 import { formatTimeAgo } from '@/shared/utils/format';
 import { CommandBar } from '@/features/command';
-import { isRobotAvailable, COMMAND_TYPE_LABELS } from '../../types/robots.types';
+import { isRobotAvailable, robotProvisioning, COMMAND_TYPE_LABELS } from '../../types/robots.types';
+import { robotTraits } from '../../utils/robotTraits';
+import { AwaitingAgentState } from '../common';
 import type { RobotCommand } from '../../types/robots.types';
 import type { CommandsTabProps } from './types';
 
@@ -57,25 +59,41 @@ export function CommandsTab({
   onReturnHome,
 }: CommandsTabProps) {
   const available = isRobotAvailable(robot);
+  const provisioning = robotProvisioning(robot);
+  // A mains-powered arm has no dock to be sent to (TASK-485).
+  const { canCharge } = robotTraits(robot);
 
   return (
     <>
+      {provisioning ? (
+        // No agent to hand a command to (TASK-485).
+        <AwaitingAgentState
+          robotName={robot.name}
+          provisioning={provisioning}
+          title="Send a command"
+          lead="Commands can be sent"
+          icon={<Terminal />}
+          data-testid="commands-awaiting-agent"
+        />
+      ) : (
       <Panel>
         <Panel.Header
           title="Send a command"
           description={`Tell ${robot.name} what to do in plain words, or use a quick act.`}
           actions={
             <>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={!canExecuteCommands}
-                isLoading={isCommandLoading}
-                onClick={() => void onSendToCharge()}
-                leftIcon={<BatteryCharging className={ICON} strokeWidth={1.75} />}
-              >
-                Send to charge
-              </Button>
+              {canCharge && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={!canExecuteCommands}
+                  isLoading={isCommandLoading}
+                  onClick={() => void onSendToCharge()}
+                  leftIcon={<BatteryCharging className={ICON} strokeWidth={1.75} />}
+                >
+                  Send to charge
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 size="sm"
@@ -98,6 +116,7 @@ export function CommandsTab({
           )}
         </Panel.Body>
       </Panel>
+      )}
 
       <Panel>
         <Panel.Header title="Command history" />

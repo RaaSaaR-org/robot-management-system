@@ -11,6 +11,7 @@ import { Button, Textarea, toast, errorMessage } from '@/shared/components/ui';
 import { ActorBadge } from './ActorBadge';
 import { EvidenceChips } from './EvidenceChips';
 import type { Actor, CommentDTO, CommentThreadDTO } from '../types/social.types';
+import { formatDateTime } from '@/shared/utils/format';
 
 export interface CommentThreadProps {
   threads: CommentThreadDTO[];
@@ -70,7 +71,7 @@ function CommentItem({ c, me, onEdit, onDelete, onReply }: {
   onReply?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const when = new Date(c.createdAt).toLocaleString();
+  const when = formatDateTime(c.createdAt);
   if (c.deletedAt) {
     return <p className="text-sm italic text-ink-muted" data-testid="comment-deleted">This comment was deleted.</p>;
   }

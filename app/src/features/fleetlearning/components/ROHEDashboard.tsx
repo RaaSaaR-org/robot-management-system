@@ -9,7 +9,7 @@ import { TrendingUp } from 'lucide-react';
 import {
   DataTable, EmptyState, ErrorState, Panel, SkeletonRows, StatRow, StatTile, type DataTableColumn,
 } from '@/shared/components/ui';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { UI_DATE_LOCALE, formatDate } from '@/shared/utils/format';
 import type { ROHEMetrics } from '../types/fleetlearning.types';
 
 export interface ROHEDashboardProps {
@@ -61,7 +61,7 @@ export function ROHEDashboard({ metrics, isLoading = false, error, onRetry, robo
 
   // An empty period comes back as the epoch; say nothing rather than "1/1/1970".
   const hasPeriod = new Date(metrics.period.start).getTime() > 0;
-  const period = !hasPeriod ? 'No interventions recorded' : `${new Date(metrics.period.start).toLocaleDateString(UI_DATE_LOCALE)} – ${new Date(metrics.period.end).toLocaleDateString(UI_DATE_LOCALE)}`;
+  const period = !hasPeriod ? 'No interventions recorded' : `${formatDate(metrics.period.start)} – ${formatDate(metrics.period.end)}`;
   const robotRows = toRows(metrics.byRobot);
   const taskRows = toRows(metrics.byTask);
 

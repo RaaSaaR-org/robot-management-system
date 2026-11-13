@@ -8,7 +8,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { cn } from '@/shared/utils/cn';
-import { formatTimeAgo } from '@/shared/utils/format';
+import { formatTimeAgo, formatDateTime } from '@/shared/utils/format';
 import { Button, Eyebrow, Modal } from '@/shared/components/ui';
 import {
   useAgentModeStore,
@@ -73,7 +73,7 @@ function formatUptime(seconds: number): string {
 /** Local date-time, or the raw ISO string when it cannot be parsed. */
 function formatClock(iso: string): string {
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? iso : formatDateTime(date);
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {

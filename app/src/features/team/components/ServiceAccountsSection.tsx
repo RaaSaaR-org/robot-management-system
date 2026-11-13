@@ -9,12 +9,12 @@ import { KeyRound, Search, Trash2 } from 'lucide-react';
 import {
   Button, DataTable, EmptyState, Panel, SearchInput, StatusTag, Toolbar, confirm, toast, type DataTableColumn,
 } from '@/shared/components/ui';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { formatDate } from '@/shared/utils/format';
 import { useServiceAccountsStore } from '../store/serviceAccountsStore';
 import type { ServiceAccount } from '../types/serviceAccount.types';
 import { teamErrorMessage } from './teamErrors';
 
-const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString(UI_DATE_LOCALE) : null);
+const fmt = (iso: string | null) => (iso ? formatDate(iso) : null);
 
 export function ServiceAccountsSection({
   createAction,

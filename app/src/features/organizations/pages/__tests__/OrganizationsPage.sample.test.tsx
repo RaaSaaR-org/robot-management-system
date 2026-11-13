@@ -45,7 +45,7 @@ function renderPage() {
   );
 }
 
-const SAMPLE = { name: 'Load sample (Acme Robotics)' };
+const SAMPLE = { name: 'Add a sample organization' };
 
 describe('OrganizationsPage sample offer', () => {
   beforeEach(() => seed([]));

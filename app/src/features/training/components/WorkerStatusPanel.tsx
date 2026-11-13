@@ -9,7 +9,7 @@
  */
 
 import { RefreshCw, Server } from 'lucide-react';
-import { Button, EmptyState, ErrorState, Panel, SkeletonRows, StatusTag } from '@/shared/components/ui';
+import { AdminHint, Button, EmptyState, ErrorState, Panel, SkeletonRows, StatusTag } from '@/shared/components/ui';
 import type { WorkerStatusListResponse, WorkerStatusView } from '../types';
 import { shortId } from './jobs/jobFormat';
 
@@ -53,8 +53,14 @@ export function WorkerStatusPanel({ workers, isLoading, onRefresh }: WorkerStatu
           <EmptyState
             size="sm"
             icon={<Server />}
-            title="No workers connected"
-            description="Queued jobs wait until a training worker connects. Start one to begin."
+            title="No training machine is online"
+            description="Jobs you create wait in the queue and start on their own as soon as a training machine comes online."
+            hint={
+              <AdminHint data-testid="workers-admin-hint">
+                No training worker is connected to this server. Start one and point it at this instance; it picks up
+                queued jobs automatically.
+              </AdminHint>
+            }
           />
         ) : (
           <ul className="flex flex-col divide-y divide-line-subtle">

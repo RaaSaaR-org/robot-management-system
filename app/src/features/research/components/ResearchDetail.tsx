@@ -7,6 +7,7 @@ import { KeyValueList, Panel, StatusTag, focusRing } from '@/shared/components/u
 import { ResearchOutcome } from './ResearchOutcome';
 import { campaignLink, kindLabel, narrative, number, object, readable, recordLink, strings, text } from '../utils/presentation';
 import type { ResearchRecord } from '../types/research.types';
+import { formatDateTime } from '@/shared/utils/format';
 
 export const ResearchDetail = memo(function ResearchDetail({ record, query }: { record: ResearchRecord; query: string }) {
   const body = record.body;
@@ -78,7 +79,7 @@ export const ResearchDetail = memo(function ResearchDetail({ record, query }: { 
         <Panel.Body><KeyValueList columns={1} items={[
           { label: 'Type', value: kindLabel(record.kind) },
           { label: 'Author', value: `${record.author.name} · ${record.author.kind === 'service' ? 'Agent' : 'Human'}` },
-          { label: 'Published', value: <time dateTime={record.createdAt}>{new Date(record.createdAt).toLocaleString()}</time> },
+          { label: 'Published', value: <time dateTime={record.createdAt}>{formatDateTime(record.createdAt)}</time> },
           { label: 'Campaign', value: <Link className={linkClass} to={campaignLink(record.campaignId)}>{record.campaignId}</Link> },
           ...(record.parentId ? [{ label: 'Parent publication', value: <Link className={linkClass} to={recordLink(record.parentId, query)}>{record.parentId}</Link> }] : []),
           ...(record.supersedesId ? [{ label: 'Corrects', value: <Link className={linkClass} to={recordLink(record.supersedesId, query)}>{record.supersedesId}</Link> }] : []),

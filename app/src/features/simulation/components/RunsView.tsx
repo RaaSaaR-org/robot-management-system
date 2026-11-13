@@ -8,6 +8,7 @@ import { FlaskConical, Plus, Search } from 'lucide-react';
 import { Button, DataTable, EmptyState, ProgressBar, StatusTag, type DataTableColumn } from '@/shared/components/ui';
 import type { SimJob, SimScene } from '../types';
 import { backendLabel, backendModeTag, formatPct, formatRelative, runName, successTone } from './simFormat';
+import { formatDateTime } from '@/shared/utils/format';
 
 export interface RunsViewProps {
   jobs: SimJob[];
@@ -80,7 +81,7 @@ export function RunsView({ jobs, scenes, loading, error, onRetry, onOpen, onNew,
       hideBelow: 'md',
       sortable: true,
       sortValue: (j) => new Date(j.createdAt),
-      cell: (j) => <span title={new Date(j.createdAt).toLocaleString()}>{formatRelative(j.createdAt)}</span>,
+      cell: (j) => <span title={formatDateTime(j.createdAt)}>{formatRelative(j.createdAt)}</span>,
     },
   ];
 

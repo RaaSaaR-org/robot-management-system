@@ -5,8 +5,10 @@
  */
 
 import { getDefaultHyperparameters } from '../../HyperparameterForm';
+import { datasetShape } from '../../../types';
 import type {
   BaseModel,
+  Dataset,
   FineTuneMethod,
   HyperparametersInput,
   InitFromSelection,
@@ -48,6 +50,30 @@ export const BASE_MODEL_OPTIONS: { value: BaseModel; label: string; description:
   { value: 'groot', label: 'GR00T', description: 'NVIDIA GR00T foundation model' },
   { value: 'groot_n1_7', label: 'GR00T N1.7', description: 'NVIDIA GR00T N1.7 via native LeRobot' },
 ];
+
+/** The picker's name for an architecture: "Pi0", never the id shouted ("PI0"). */
+export function baseModelLabel(model: BaseModel): string {
+  return BASE_MODEL_OPTIONS.find((m) => m.value === model)?.label ?? model;
+}
+
+/** A robot-type name or LeRobot `robot_type` that means a Unitree G1 ("Unitree G1", "unitree_g1", "G1 + Dex3"). */
+const UNITREE_G1 = /(^|[^a-z0-9])g1([^a-z0-9]|$)/i;
+
+/**
+ * The base model that suits a dataset's robot, or null when the dataset does
+ * not say enough to prefer one.
+ *
+ * A Unitree G1 dataset (43-wide with Dex3 hands, 28-wide without) is what
+ * GR00T N1.7 ships an embodiment for, and N1.7 is the GR00T the trainer runs
+ * natively — so that is the default there instead of Pi0, which has no G1
+ * action head (TASK-486). Every other robot keeps the wizard's own default.
+ */
+export function suggestBaseModel(dataset: Dataset | undefined): BaseModel | null {
+  if (!dataset) return null;
+  const names = [dataset.robotType?.name, dataset.robotType?.model, dataset.infoJson?.robot_type, datasetShape(dataset).robotType];
+  const isG1 = names.some((name) => typeof name === 'string' && UNITREE_G1.test(name.replace(/[_-]+/g, ' ')));
+  return isG1 ? 'groot_n1_7' : null;
+}
 
 export const FINE_TUNE_OPTIONS: { value: FineTuneMethod; label: string; description: string }[] = [
   { value: 'lora', label: 'LoRA', description: 'Parameter-efficient, lower memory' },
@@ -124,8 +150,8 @@ export const badWeights = (form: FormState) =>
  */
 export function describeStartingPoint(form: FormState): string {
   const initFrom = form.weightsSource === 'existing' ? form.initFrom : null;
-  if (!initFrom) return form.baseModel.toUpperCase();
+  if (!initFrom) return baseModelLabel(form.baseModel);
   const head =
     initFrom.checkpointEpoch !== null ? `Epoch ${initFrom.checkpointEpoch} of ${initFrom.modelName}` : initFrom.modelName;
-  return `${head} (${form.baseModel})`;
+  return `${head} (${baseModelLabel(form.baseModel)})`;
 }

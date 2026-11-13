@@ -77,7 +77,31 @@ export function DocsPage() {
     return () => cancelAnimationFrame(frame);
   }, [slug, hash, scrollToHeading]);
 
-  if (!slug && (location.pathname === '/docs' || location.pathname === '/docs/')) {
+  // A build without any bundled document has nothing to redirect to: say so
+  // and point at the source, rather than redirecting to an empty slug and
+  // rendering a blank page (TASK-486).
+  if (DOC_ENTRIES.length === 0) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Documentation" description="The documentation is not included in this build." />
+        <Panel>
+          <EmptyState
+            icon={<FileQuestion />}
+            title="Documentation is not available here"
+            description="This build was made without the documentation. You can read it on GitHub."
+            action={
+              <a href={GITHUB_DOCS_URL} target="_blank" rel="noopener noreferrer" className={buttonClasses({ variant: 'secondary' })}>
+                <ExternalLink className={ICON} strokeWidth={1.75} aria-hidden="true" />
+                Open the docs on GitHub
+              </a>
+            }
+          />
+        </Panel>
+      </div>
+    );
+  }
+
+  if (!slug) {
     return <Navigate to={`/docs/${DEFAULT_SLUG}`} replace />;
   }
 

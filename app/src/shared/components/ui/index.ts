@@ -70,6 +70,8 @@ export { Toaster } from './Toaster';
 export { FeedbackProvider, ToastProvider } from './FeedbackProvider';
 export type { FeedbackProviderProps } from './FeedbackProvider';
 export { errorMessage, ERROR_MESSAGE_FALLBACK } from './errorMessage';
+export { AdminCode, AdminHint } from './AdminHint';
+export type { AdminHintProps } from './AdminHint';
 export { EmptyState } from './EmptyState';
 export type { EmptyStateProps } from './EmptyState';
 export { ErrorState } from './ErrorState';

@@ -88,6 +88,24 @@ describe('ImportActivity', () => {
     expect(screen.getByTestId('import-job-error')).toHaveTextContent(/^Storage unreachable \(ECONNREFUSED\)$/);
   });
 
+  it('shows no empty log box once the server has forgotten the log (TASK-486)', () => {
+    // A ready dataset keeps its "Import log" action; after a server restart
+    // there are no lines to wait for, and the panel must not pretend there are.
+    act(() => {
+      store().track('ds-1', 'lerobot/pusht');
+      store().applyMessage({ type: 'dataset:validation:completed', datasetId: 'ds-1' });
+      store().applyBackfill({
+        datasetId: 'ds-1', status: 'ready', importError: null, progress: null, lines: [], dropped: 0, retained: false,
+      } as Parameters<ReturnType<typeof store>['applyBackfill']>[0]);
+    });
+    render(<ImportActivity />);
+    fireEvent.click(screen.getByTestId('import-activity-button'));
+
+    expect(screen.getByText(/its log is gone/)).toBeInTheDocument();
+    expect(screen.queryByText('Waiting for the server…')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('import-job-log')).not.toBeInTheDocument();
+  });
+
   it('closes the panel on Escape', () => {
     act(() => {
       store().track('ds-1', 'lerobot/pusht');

@@ -1,7 +1,30 @@
 # ============================================================================
 # NeoDEM App Dockerfile
 # Multi-stage build for React + Vite frontend served by nginx
+#
+# The build context is app/, but the in-app documentation viewer (/docs) inlines
+# the repository's docs/ folder at build time, and docs/ lives beside app/,
+# outside the context. It comes in through the `docs` stage below:
+#
+#   - Given a NAMED build context, that is used — the docs of this checkout:
+#       docker build --build-context docs=../docs -t neodem-app .     (from app/)
+#     docker-compose.yml and scripts/e2e-k3d/up.sh pass it. A named context
+#     replaces a stage of the same name.
+#   - Otherwise the stage fetches docs/ of DOCS_GIT_REF from the repository, so
+#     a plain `docker build ./app` (what .github/workflows/build-images.yml
+#     runs) still ships the docs rather than an empty viewer (TASK-486).
+#
+# Either way the build fails if no README.md arrives, instead of producing an
+# image whose help button opens an empty page.
 # ============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 0: Docs (replaced by `--build-context docs=<dir>` when one is given)
+# -----------------------------------------------------------------------------
+FROM scratch AS docs
+ARG DOCS_GIT_URL=https://github.com/RaaSaaR-org/robot-management-system.git
+ARG DOCS_GIT_REF=main
+ADD ${DOCS_GIT_URL}#${DOCS_GIT_REF}:docs /
 
 # -----------------------------------------------------------------------------
 # Stage 1: Builder
@@ -16,6 +39,11 @@ RUN npm ci
 
 # Copy source
 COPY . .
+
+# The docs the viewer bundles: ../docs relative to the app, as in the repo.
+# app/.dockerignore drops *.md from the app context; it does not apply here.
+COPY --from=docs / /docs
+RUN test -f /docs/README.md
 
 # Build arguments for Vite environment variables
 ARG VITE_API_BASE_URL=http://localhost:3001/api

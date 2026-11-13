@@ -11,6 +11,7 @@ import { memo } from 'react';
 import { StatusTag, statusTone } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import type { PatrolLegStatus } from '../types/patrol.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ---- formatters -------------------------------------------------------------
 
@@ -55,7 +56,7 @@ export function formatRelative(iso: string | null | undefined, now: number = Dat
   if (diff >= 0 && diff < 60) return 'just now';
   if (diff >= 0 && diff < 3600) return `${Math.round(diff / 60)} min ago`;
   if (diff >= 0 && diff < 86_400) return `${Math.round(diff / 3600)} h ago`;
-  return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  return new Date(t).toLocaleDateString(UI_DATE_LOCALE, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 /** Date and time for a run's start ("16 Aug, 22:00"). */
@@ -63,7 +64,7 @@ export function formatStarted(iso: string | null | undefined): string {
   if (!iso) return '—';
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return '—';
-  return new Date(t).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return new Date(t).toLocaleString(UI_DATE_LOCALE, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 // ---- LiveTag ------------------------------------------------------------------

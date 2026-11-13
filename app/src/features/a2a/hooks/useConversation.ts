@@ -25,7 +25,7 @@ interface UseConversationReturn {
   /** Error message */
   error: string | null;
   /** Send a message */
-  sendMessage: (text: string, targetAgentUrl?: string) => Promise<void>;
+  sendMessage: (text: string, targetAgentUrl?: string, intoConversationId?: string) => Promise<void>;
   /** Refresh messages */
   refreshMessages: () => Promise<void>;
 }
@@ -53,6 +53,7 @@ export function useConversation(
     };
   }, []);
 
+  const boundConversationId = conversationId;
   const [isLoading, setIsLoading] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +69,10 @@ export function useConversation(
   }, [conversationId, fetchMessages]);
 
   const sendMessage = useCallback(
-    async (text: string, targetAgentUrl?: string) => {
+    async (text: string, targetAgentUrl?: string, intoConversationId?: string) => {
+      // `intoConversationId`: the conversation was created for this very
+      // message (TASK-485), so the hook's own id is still null.
+      const conversationId = intoConversationId ?? boundConversationId;
       if (!conversationId) {
         setError('No conversation selected');
         return;
@@ -91,7 +95,7 @@ export function useConversation(
         setIsSending(false);
       }
     },
-    [conversationId, storeSendMessage]
+    [boundConversationId, storeSendMessage]
   );
 
   const refreshMessages = useCallback(async () => {

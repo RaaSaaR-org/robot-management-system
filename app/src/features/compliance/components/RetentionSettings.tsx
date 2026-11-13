@@ -13,6 +13,7 @@ import {
 import { useComplianceStore } from '../store';
 import type { ComplianceEventType } from '../types';
 import { EVENT_TYPE_LABELS } from './complianceFormat';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface RetentionSettingsProps {
   className?: string;
@@ -36,7 +37,7 @@ function formatRetention(days: number): string {
     const years = days / 365;
     return `${years} year${years > 1 ? 's' : ''}`;
   }
-  return `${days.toLocaleString()} days`;
+  return `${days.toLocaleString(UI_DATE_LOCALE)} days`;
 }
 
 /** Retention policies per event type plus the manual cleanup act. */
@@ -99,7 +100,7 @@ export function RetentionSettings({ className }: RetentionSettingsProps) {
     if (!ok) return;
     try {
       const r = await triggerCleanup();
-      toast.success('Cleanup finished', { description: `${r.logsDeleted.toLocaleString()} deleted · ${r.logsSkipped.toLocaleString()} kept under legal hold` });
+      toast.success('Cleanup finished', { description: `${r.logsDeleted.toLocaleString(UI_DATE_LOCALE)} deleted · ${r.logsSkipped.toLocaleString(UI_DATE_LOCALE)} kept under legal hold` });
       void fetchRetentionStats();
     } catch (err) {
       toast.error("Couldn't run the cleanup", { description: errorMessage(err) });
@@ -122,10 +123,10 @@ export function RetentionSettings({ className }: RetentionSettingsProps) {
     <div className={className ? `flex flex-col gap-4 ${className}` : 'flex flex-col gap-4'}>
       {retentionStats && (
         <StatRow columns={4}>
-          <StatTile label="Entries" value={retentionStats.totalLogs.toLocaleString()} hint="In the audit log" />
-          <StatTile label="Expire in 30 days" value={retentionStats.expiringWithin30Days.toLocaleString()} tone={retentionStats.expiringWithin30Days ? 'gated' : undefined} hint="Deleted by the next cleanups" />
-          <StatTile label="Expire in 90 days" value={retentionStats.expiringWithin90Days.toLocaleString()} hint="Including the 30-day ones" />
-          <StatTile label="Under legal hold" value={retentionStats.underLegalHold.toLocaleString()} hint="Never deleted while held" />
+          <StatTile label="Entries" value={retentionStats.totalLogs.toLocaleString(UI_DATE_LOCALE)} hint="In the audit log" />
+          <StatTile label="Expire in 30 days" value={retentionStats.expiringWithin30Days.toLocaleString(UI_DATE_LOCALE)} tone={retentionStats.expiringWithin30Days ? 'gated' : undefined} hint="Deleted by the next cleanups" />
+          <StatTile label="Expire in 90 days" value={retentionStats.expiringWithin90Days.toLocaleString(UI_DATE_LOCALE)} hint="Including the 30-day ones" />
+          <StatTile label="Under legal hold" value={retentionStats.underLegalHold.toLocaleString(UI_DATE_LOCALE)} hint="Never deleted while held" />
         </StatRow>
       )}
 
