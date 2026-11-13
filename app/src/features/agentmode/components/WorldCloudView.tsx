@@ -11,6 +11,7 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
 import { cn } from '@/shared/utils';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { AdminCode, AdminHint } from '@/shared/components/ui/AdminHint';
 import { PointCloudViewer } from '@/features/robots/components/visualization/PointCloudViewer';
 import type { PointCloudFrame } from '@/features/robots/types/robots.types';
 import { useAgentModeStore } from '../store/agentmodeStore';
@@ -111,19 +112,30 @@ export const WorldCloudView = memo(function WorldCloudView({ robotId, className,
   const orbitTarget = orbitRef.current?.robotId === robotId ? orbitRef.current.centre : built?.centre;
 
   if (!built || !cloud) {
+    const noCloudYet = Boolean(error?.includes('no cloud yet'));
     return (
-      <div className={cn('absolute inset-0 flex items-center justify-center p-4 text-center', className)} data-testid="agent-cloud-empty">
+      <div
+        className={cn('absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center', className)}
+        data-testid="agent-cloud-empty"
+      >
         <p className="max-w-[28ch] text-xs text-ink-muted">
           {status === 'disabled'
-            ? error?.includes('no cloud yet')
+            ? noCloudYet
               ? 'No cloud yet — points arrive as the robot looks and walks.'
-              : 'This robot does not keep a point cloud (AGENT_CLOUD_ENABLED).'
+              : 'This robot is not keeping a 3D view of its surroundings.'
             : status === 'unavailable'
               ? `Cloud unavailable: ${error ?? 'the robot did not answer'}.`
               : robotId
                 ? 'Reading the robot’s cloud…'
                 : 'No robot selected.'}
         </p>
+        {status === 'disabled' && !noCloudYet && (
+          // The switch is the operator's, not the visitor's: its name stays out
+          // of the sentence and folds under "For administrators" (TASK-489).
+          <AdminHint className="max-w-[30ch] text-center text-xs" data-testid="agent-cloud-admin-hint">
+            The point cloud is switched off on this robot&rsquo;s agent: <AdminCode>AGENT_CLOUD_ENABLED</AdminCode>
+          </AdminHint>
+        )}
       </div>
     );
   }
