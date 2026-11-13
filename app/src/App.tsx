@@ -15,6 +15,7 @@ import { AlertProvider } from './features/alerts';
 import { PageLoader } from './shared/components/ui/PageLoader';
 import { RouteErrorBoundary } from './shared/components/ui/RouteErrorBoundary';
 import { FeedbackProvider } from './shared/components/ui/FeedbackProvider';
+import { RateLimitNotice } from './components/RateLimitNotice';
 import {
   LazyLandingPage,
   LazyLoginPage,
@@ -146,6 +147,7 @@ function App() {
     <AlertProvider>
       {/* Toasts and confirm() for every route, public pages included */}
       <FeedbackProvider>
+      <RateLimitNotice />
       <Suspense fallback={<PageLoader />}>
         <Routes>
           {/* Public routes */}

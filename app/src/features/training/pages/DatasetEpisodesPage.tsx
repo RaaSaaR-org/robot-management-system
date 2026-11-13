@@ -34,6 +34,7 @@ import { EpisodeListPanel } from '../components/datasets/EpisodeListPanel';
 import { EpisodeViewer, type PlaybackSpeed } from '../components/datasets/EpisodeViewer';
 import { featureVideoCodec } from '../components/datasets/videoCodec';
 import { useDatasetVideoTicket } from '../hooks/useDatasetVideoTicket';
+import { probeVideoThrottle } from '../api/datasetVideoApi';
 import { CuratePanel } from '../components/datasets/CuratePanel';
 import { JointChartPanel, RewardCurvePanel } from '../components/datasets/TrajectoryPanels';
 import { AnnotationsPanel } from '../components/datasets/AnnotationsPanel';
@@ -62,6 +63,9 @@ import type {
 /** Joint names used when a dataset carries no action names (SO-101 layout). */
 const DEFAULT_JOINTS = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll', 'gripper'];
 
+/** One identity for "no frames", so charts do not recompute on every render. */
+const NO_FRAMES: FrameData[] = [];
+
 export function DatasetEpisodesPage() {
   const { datasetId } = useParams<{ datasetId: string }>();
   const navigate = useNavigate();
@@ -74,7 +78,11 @@ export function DatasetEpisodesPage() {
   const [selectedEpisode, setSelectedEpisode] = useState<number | null>(null);
   const [searchParams] = useSearchParams();
   const requestedEpisodeRef = useRef(searchParams.get('episode'));
-  const [frames, setFrames] = useState<FrameData[]>([]);
+  // The frames and the episode they are of. A slow or throttled request must
+  // never leave the previous episode's numbers on screen as if they were this
+  // one's (TASK-482), so everything reads `frames`, which is empty until the
+  // two agree.
+  const [loadedFrames, setLoadedFrames] = useState<{ episode: number; frames: FrameData[] } | null>(null);
   const [framesLoading, setFramesLoading] = useState(false);
   const [framesError, setFramesError] = useState<string | null>(null);
   const [framesReloadKey, setFramesReloadKey] = useState(0);
@@ -108,6 +116,11 @@ export function DatasetEpisodesPage() {
   // loading, so it never flashes "no statistics" before the request has left.
   const [statsAnswer, setStatsAnswer] =
     useState<{ datasetId: string; stats: Record<string, FeatureStats> | null } | null>(null);
+
+  const frames = useMemo(
+    () => (loadedFrames && loadedFrames.episode === selectedEpisode ? loadedFrames.frames : NO_FRAMES),
+    [loadedFrames, selectedEpisode],
+  );
 
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   // A <video> cannot send the bearer token, so the URL carries a short-lived
@@ -212,7 +225,7 @@ export function DatasetEpisodesPage() {
     if (!datasetId) return;
     setEpisodesLoading(true);
     setSelectedEpisode(null);
-    setFrames([]);
+    setLoadedFrames(null);
     setCurrentTime(0);
     setCheckedEpisodes([]);
     setEpisodesError(null);
@@ -272,11 +285,11 @@ export function DatasetEpisodesPage() {
     setFramesLoading(true);
     setFramesError(null);
     trainingApi.getEpisodeFrames(datasetId, selectedEpisode, 0, 2000)
-      .then((r) => { if (!cancelled) setFrames(r.frames); })
+      .then((r) => { if (!cancelled) setLoadedFrames({ episode: selectedEpisode, frames: r.frames }); })
       .catch((err) => {
         if (cancelled) return;
         // An empty chart here used to hide a read failure (TASK-354).
-        setFrames([]);
+        setLoadedFrames(null);
         setFramesError(errorMessage(err, 'unknown error'));
       })
       .finally(() => { if (!cancelled) setFramesLoading(false); });
@@ -286,6 +299,22 @@ export function DatasetEpisodesPage() {
   useEffect(() => {
     for (const ref of Object.values(videoRefs.current)) if (ref) ref.playbackRate = Number(speed);
   }, [speed]);
+
+  // Another episode is another video, loaded paused at its start: the transport
+  // and the trim range of the one before say nothing about it (TASK-482).
+  useEffect(() => {
+    setIsPlaying(false);
+    setCurrentTime(0);
+  }, [selectedEpisode]);
+
+  /** Open an episode from the list. Its trim range starts empty. */
+  const selectEpisode = useCallback((index: number) => {
+    if (index !== selectedEpisode) {
+      setTrimStart(0);
+      setTrimEnd('');
+    }
+    setSelectedEpisode(index);
+  }, [selectedEpisode]);
 
   const handleTimeUpdate = useCallback(() => {
     if (!primaryCamera) return;
@@ -594,7 +623,7 @@ export function DatasetEpisodesPage() {
           isLoading={episodesLoading}
           hasError={Boolean(episodesError)}
           selected={selectedEpisode}
-          onSelect={setSelectedEpisode}
+          onSelect={selectEpisode}
           checked={checkedEpisodes}
           onToggleChecked={toggleChecked}
           onSetChecked={setCheckedEpisodes}
@@ -623,6 +652,8 @@ export function DatasetEpisodesPage() {
                 codecFor={codecFor}
                 ready={videoTicket.ready}
                 onReload={videoTicket.refresh}
+                probeThrottle={probeVideoThrottle}
+                onPlayingChange={setIsPlaying}
                 primaryCamera={primaryCamera}
                 videoRefs={videoRefs}
                 onTimeUpdate={handleTimeUpdate}
@@ -638,7 +669,7 @@ export function DatasetEpisodesPage() {
               />
               <CuratePanel
                 episode={selectedEpisode}
-                frameCount={frames.length}
+                frameCount={loadedFrames?.episode === selectedEpisode ? frames.length : (selectedMeta?.frameCount ?? null)}
                 trimStart={trimStart}
                 trimEnd={trimEnd}
                 onTrimStart={setTrimStart}
@@ -666,7 +697,9 @@ export function DatasetEpisodesPage() {
                 frames={frames}
                 jointNames={jointNames}
                 groups={jointGroups}
-                isLoading={framesLoading}
+                // Also "loading" in the render between picking an episode and its
+                // request starting, so the chart never flashes "no data".
+                isLoading={framesLoading || (!framesError && loadedFrames?.episode !== selectedEpisode)}
                 currentTime={currentTime}
                 error={framesError}
                 onRetry={() => setFramesReloadKey((k) => k + 1)}

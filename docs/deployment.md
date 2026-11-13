@@ -9,6 +9,7 @@ This guide covers deploying NeoDEM across three environments: **Raspberry Pi** (
 - [Raspberry Pi Setup (systemd)](#raspberry-pi-setup-systemd)
 - [Docker Compose](#docker-compose)
 - [Kubernetes (Helm)](#kubernetes-helm)
+- [Rate limiting](#rate-limiting)
 - [Environment Variables Reference](#environment-variables-reference)
 - [Control leases](#control-leases)
 - [PostgreSQL Migration (SQLite → PostgreSQL)](#postgresql-migration)
@@ -449,6 +450,58 @@ kubectl logs -f deployment/neodem-server -n neodem
 
 ---
 
+## Rate limiting
+
+The server counts requests per client address in memory, in three budgets per
+window (`RATE_LIMIT_WINDOW_MS`, one minute by default):
+
+| Budget | Variable | Production default | Counts |
+|--------|----------|--------------------|--------|
+| General | `RATE_LIMIT_MAX` | 1200 | Everything under `/api` that is not dataset browsing |
+| Dataset browsing | `RATE_LIMIT_MEDIA_MAX` | 3000 | `GET /api/datasets/:id/episodes…` (list, frames, video with Range), `/stats`, `/modality`, and `POST …/video-ticket` |
+| Writes | `RATE_LIMIT_WRITE_MAX` | 300 | Every non-GET request, in addition to the general budget |
+
+Credential endpoints (`/api/auth/login`, `/register`, password reset) keep
+their own limit of 5 per minute, and MFA code entry its own.
+
+One episode click in the dataset browser is about eight requests, half of
+them video Range requests, so the browsing budget is separate: watching
+episodes cannot use up the budget the rest of the app needs, and the reverse.
+A refused request is answered `429` with `Retry-After` (seconds until the
+window resets); the app waits that long and retries by itself.
+
+The counters live in the server process. With more than one replica each
+keeps its own, so the effective budget is the configured one times the number
+of replicas a client reaches.
+
+### Which address is "the client"
+
+Behind a reverse proxy every connection comes from the proxy, so the client
+address is read from `X-Forwarded-For`. Any client can write that header;
+only the entries appended by your own proxies are true. `TRUST_PROXY` says
+how many there are:
+
+| Topology | `TRUST_PROXY` |
+|----------|---------------|
+| Clients connect to the server directly | `0` |
+| One ingress / load balancer (default) | `1` |
+| Cloudflare → one ingress (Envoy, nginx, Traefik) → server | `2` |
+
+Set it too low and everyone behind the outermost proxy — for Cloudflare,
+everyone arriving through the same edge node — shares one budget. Set it
+too high and a client can choose its own address by sending the header, and
+with it an unlimited budget. `TRUST_PROXY=2` is only correct while the
+ingress cannot be reached around Cloudflare. A list of addresses or CIDR
+ranges (`TRUST_PROXY="10.42.0.0/16, 173.245.48.0/20"`) trusts exactly those
+hops instead of counting them. `TRUST_PROXY=true` (believe the whole header)
+is refused, and `CF-Connecting-IP` / `X-Real-IP` are never read.
+
+To check a deployment, send two requests from two different networks and
+compare the `RateLimit-Remaining` response header: with the right setting
+each network counts down from its own budget.
+
+---
+
 ## Environment Variables Reference
 
 ### Server (`server/.env`)
@@ -463,6 +516,11 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `ALLOW_SELF_REGISTRATION` | No | `false` | With auth on, let anyone create an account via `POST /api/auth/register`. Off: the endpoint answers 403 `SELF_REGISTRATION_DISABLED` and admins add users. Ignored (always closed) under multi-tenancy |
 | `CORS_ORIGINS` | No | localhost ports | Comma-separated allowed origins |
 | `RATE_LIMIT_DISABLED` | No | `false` | Disable rate limiting (dev only) |
+| `RATE_LIMIT_MAX` | No | `1200` in production, else `5000` | General API requests per client address per window — everything under `/api` except dataset browsing. See [Rate limiting](#rate-limiting) |
+| `RATE_LIMIT_MEDIA_MAX` | No | `3000` in production, else `5000` | Dataset-browsing requests per client per window: episode list, frames, statistics, episode video (incl. Range requests) and the video ticket |
+| `RATE_LIMIT_WRITE_MAX` | No | `300` in production, else `5000` | Non-GET requests per client per window, counted in addition to the general budget |
+| `RATE_LIMIT_WINDOW_MS` | No | `60000` | Length of the counting window for the three budgets above |
+| `TRUST_PROXY` | No | `1` | Reverse proxies between clients and the server: a hop count (`1` one ingress, `2` Cloudflare + one ingress, `0`/`false` none) or a list of proxy addresses/CIDRs. Decides which address rate limits and audit logs see. `true` is refused |
 | `UNHANDLED_REJECTION_EXIT` | No | `true` in production, else `false` | An unhandled promise rejection is always logged. `true`: the process then exits with code 1 so the orchestrator restarts it. `false`: it keeps running — for a single-replica instance where the restart is the outage |
 | `GOOGLE_API_KEY` | No | — | Google/Gemini API key for NL commands |
 | `WORKER_API_TOKEN` | Prod | — | Shared token for GPU worker auth |

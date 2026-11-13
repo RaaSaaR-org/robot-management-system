@@ -192,14 +192,22 @@ export const useAuthStore = createStore<AuthStore>(
         return;
       }
 
-      set((state) => {
-        state.isLoading = true;
-      });
+      // A session this browser already knows (the persisted user) opens the
+      // shell at once and is confirmed behind it. Waiting for /me first meant
+      // a throttled or slow /me was a blank page with a spinner (TASK-482).
+      const known = get().isAuthenticated ? get().user : null;
+      if (known) {
+        set((state) => {
+          state.isInitialized = true;
+          state.mustChangePassword = known.forcePasswordChange === true;
+        });
+      } else {
+        set((state) => {
+          state.isLoading = true;
+        });
+      }
 
-      try {
-        // Try to get current user with existing token
-        const user = await authApi.getCurrentUser();
-
+      const accept = (user: User) => {
         set((state) => {
           state.user = user;
           state.isAuthenticated = true;
@@ -209,20 +217,22 @@ export const useAuthStore = createStore<AuthStore>(
           // so a page refresh during the "required" state still works.
           state.mustChangePassword = user.forcePasswordChange === true;
         });
-      } catch {
+      };
+      // The known session outlives anything but the server refusing it: a
+      // rate limit, an outage or a dropped connection says nothing about it.
+      const keepKnownSession = (error: unknown) => known !== null && !isAuthRejection(error);
+
+      try {
+        // Try to get current user with existing token
+        accept(await authApi.getCurrentUser());
+      } catch (firstError) {
+        if (keepKnownSession(firstError)) return;
         // Token invalid - try to refresh
         try {
           await get().refreshSession();
-          const user = await authApi.getCurrentUser();
-
-          set((state) => {
-            state.user = user;
-            state.isAuthenticated = true;
-            state.isLoading = false;
-            state.isInitialized = true;
-            state.mustChangePassword = user.forcePasswordChange === true;
-          });
+          accept(await authApi.getCurrentUser());
         } catch (error) {
+          if (keepKnownSession(error)) return;
           // Refresh failed. Drop the tokens only when the server rejected
           // them — a rate limit or an outage is not a logout (TASK-362).
           if (isAuthRejection(error)) tokenStorage.clearTokens();

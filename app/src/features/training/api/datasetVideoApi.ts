@@ -107,3 +107,36 @@ export function episodeVideoUrl(
   const fragment = window ? `#t=${window.from},${window.to}` : '';
   return `${path}${query.length ? `?${query.join('&')}` : ''}${fragment}`;
 }
+
+/** Wait before reloading a throttled video when the server gave no `Retry-After`. */
+const VIDEO_THROTTLE_DEFAULT_MS = 5_000;
+/** Longest a throttled video waits before trying again: one server window. */
+const VIDEO_THROTTLE_MAX_MS = 65_000;
+
+/**
+ * Ask why a video did not load: was the request rate limited?
+ *
+ * A `<video>` reports a failed request as a bare `error` event — no status, no
+ * headers — so a 429 looks exactly like a missing file. This asks for the
+ * first byte of the same URL and reads the answer the element could not
+ * (TASK-482).
+ *
+ * @returns Milliseconds to wait before loading the video again when the
+ *          server answered 429, else null (some other failure, or none).
+ */
+export async function probeVideoThrottle(src: string): Promise<number | null> {
+  // The `#t=from,to` media fragment is the player's business, not the server's.
+  const url = src.split('#')[0] ?? src;
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { Range: 'bytes=0-0' }, cache: 'no-store' });
+  } catch {
+    return null;
+  }
+  // Only the status and headers matter; do not download the body.
+  void response.body?.cancel().catch(() => undefined);
+  if (response.status !== 429) return null;
+  const seconds = Number(response.headers.get('Retry-After'));
+  const ms = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : VIDEO_THROTTLE_DEFAULT_MS;
+  return Math.min(ms, VIDEO_THROTTLE_MAX_MS);
+}

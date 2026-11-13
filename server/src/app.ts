@@ -10,7 +10,7 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import cors from 'cors';
 import helmet from 'helmet';
 import { createAuthLimiter } from './middleware/authRateLimit.js';
-import rateLimit from 'express-rate-limit';
+import { apiRateLimit, parseTrustProxy, readRateLimitConfig } from './middleware/rateLimit.js';
 
 // Structured logging & metrics
 import { logger, requestIdMiddleware, httpLogger } from './utils/logger.js';
@@ -148,24 +148,16 @@ export const UNGUARDED_WRITE_MOUNTS = [
   '/.well-known/a2a',
 ] as const;
 
-// Rate limiting can be fully disabled for dev/testing via RATE_LIMIT_DISABLED=true
-const rateLimitDisabled = process.env.RATE_LIMIT_DISABLED === 'true';
-
-// General API rate limit: 100 req/min (prod), 5000 (dev)
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: process.env.NODE_ENV === 'production' ? 100 : 5000,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later.' },
-  skip: (req) =>
-    rateLimitDisabled || req.path === '/health' || req.path.startsWith('/api/compliance'),
-});
+// The API's budgets per client address (TASK-482): general, dataset browsing
+// and writes — see `middleware/rateLimit.ts`. `RATE_LIMIT_MAX`,
+// `RATE_LIMIT_MEDIA_MAX`, `RATE_LIMIT_WRITE_MAX` and `RATE_LIMIT_WINDOW_MS`
+// size them; RATE_LIMIT_DISABLED=true turns all of it off for dev and tests.
+const rateLimitConfig = readRateLimitConfig();
 
 // Strict rate limit for credential endpoints (login, register, password reset):
 // 5 req/min per IP. Session upkeep (/me, /refresh, /logout) is not counted —
-// it stays under apiLimiter (TASK-362).
-const authLimiter = createAuthLimiter({ disabled: rateLimitDisabled });
+// it stays under the general API budget (TASK-362).
+const authLimiter = createAuthLimiter({ disabled: rateLimitConfig.disabled });
 
 /**
  * Create and configure Express application
@@ -173,8 +165,10 @@ const authLimiter = createAuthLimiter({ disabled: rateLimitDisabled });
 export function createApp(): Express {
   const app = express();
 
-  // Trust proxy for rate limiting behind reverse proxy
-  app.set('trust proxy', 1);
+  // Whose address a request is counted against: `req.ip` comes out of
+  // X-Forwarded-For, and only the hops named here are believed. One proxy by
+  // default; `TRUST_PROXY=2` behind Cloudflare plus one ingress (TASK-482).
+  app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
 
   // Security headers (CSP, X-Frame-Options, HSTS, etc.)
   app.use(helmet({
@@ -195,6 +189,8 @@ export function createApp(): Express {
   app.use(cors({
     origin: getCorsOrigins(),
     credentials: true,
+    // A cross-origin app must be able to read how long a 429 asks it to wait.
+    exposedHeaders: ['Retry-After'],
   }));
 
   // Request ID + structured logging
@@ -205,7 +201,7 @@ export function createApp(): Express {
   app.use(metricsMiddleware);
 
   // Rate limiting - apply to all API routes
-  app.use('/api/', apiLimiter);
+  app.use('/api/', ...apiRateLimit(rateLimitConfig));
 
   // Body parsing
   app.use(express.json({ limit: '10mb' }));
