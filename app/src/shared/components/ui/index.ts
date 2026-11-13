@@ -99,7 +99,7 @@ export type { StatusToneName } from './statusTone';
 export { Badge } from './Badge';
 export type { BadgeProps, BadgeVariant, BadgeSize } from './Badge';
 export type { Tone, BaseTone } from './styles';
-export { chartColors, chartTheme, chartSeriesColor } from './chartColors';
+export { chartColors, chartTheme, chartSeriesColor, chartChannelColor } from './chartColors';
 export { cssColor, useCssColor } from './cssColor';
 
 // Data

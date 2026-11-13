@@ -17,6 +17,33 @@ export function formatClock(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+/**
+ * The transport clock: 19.67 → "0:19.7". Tenths, so the playhead and the total
+ * are cut the same way and meet at the end of the episode — whole seconds made
+ * a 19.67 s episode stop at "0:19" under a total that had been rounded up.
+ */
+export function formatPlayhead(seconds: number): string {
+  const safe = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  // Work in tenths so 59.96 carries into the minute instead of reading "0:60.0".
+  const tenths = Math.round(safe * 10);
+  const m = Math.floor(tenths / 600);
+  const rest = tenths - m * 600;
+  return `${m}:${Math.floor(rest / 10).toString().padStart(2, '0')}.${rest % 10}`;
+}
+
+/**
+ * Where a time sits between the first and last sample of a chart, 0..1. Always
+ * a position: before the first sample is 0, past the last is 1 — a video runs
+ * one frame longer than its last sample's timestamp, and the cursor must not
+ * drop off the chart for it. Null when there is nothing to place it on.
+ */
+export function cursorFraction(time: number, first: number | undefined, last: number | undefined): number | null {
+  if (first === undefined || last === undefined || !Number.isFinite(first) || !Number.isFinite(last)) return null;
+  if (last <= first) return 0;
+  const t = Number.isFinite(time) ? time : first;
+  return Math.min(1, Math.max(0, (t - first) / (last - first)));
+}
+
 /** Reward-model score tone: good above 0.7, doubtful above 0.4, bad below. */
 export function scoreTone(score: number): StatusTagTone {
   if (score > 0.7) return 'success';

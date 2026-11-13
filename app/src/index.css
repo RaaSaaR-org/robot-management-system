@@ -187,6 +187,20 @@
   --signal-stopped: #ff9b9b;
   --signal-stopped-fill: #e5484d;
 
+  /* Ten categorical colours for charts that draw many channels at once (the
+     joints of one arm). Hues a full step apart, so no two read as the same
+     line; they carry no meaning, unlike the signal colours above. */
+  --chart-channel-1: #8ff0cf;
+  --chart-channel-2: #6cb8ff;
+  --chart-channel-3: #f5b26b;
+  --chart-channel-4: #f58fd6;
+  --chart-channel-5: #e8e27a;
+  --chart-channel-6: #b7a4ff;
+  --chart-channel-7: #ff8f8f;
+  --chart-channel-8: #9bd66b;
+  --chart-channel-9: #b2c3d5;
+  --chart-channel-10: #3fb8b0;
+
   /* The video well behind a camera or the twin: black in both themes. */
   --bg-media: #03070c;
 }
@@ -229,6 +243,17 @@
   --signal-unknown: #7a5510;
   --signal-stopped: #b02020;
   --signal-stopped-fill: #c9302c;
+
+  --chart-channel-1: #0f7a60;
+  --chart-channel-2: #1f6fd1;
+  --chart-channel-3: #c2570c;
+  --chart-channel-4: #b02a8f;
+  --chart-channel-5: #7d7300;
+  --chart-channel-6: #5b4bb0;
+  --chart-channel-7: #b02020;
+  --chart-channel-8: #3d7a1f;
+  --chart-channel-9: #3a4b5e;
+  --chart-channel-10: #0b7f86;
 
   --bg-media: #03070c;
 }

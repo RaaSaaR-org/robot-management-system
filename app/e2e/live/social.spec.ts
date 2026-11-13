@@ -21,7 +21,8 @@ test.describe('Dataset discussion (live)', () => {
 
     const body = `live comment ${Date.now()}`;
     // The dev server uses BrowserRouter, so no `#/` here (the demo build hashes).
-    await page.goto(`/datasets/${dataset.id}/episodes`);
+    // The discussion is one of the tabs under the episode stage (TASK-484).
+    await page.goto(`/datasets/${dataset.id}/episodes?tab=discussion`);
     const panel = page.getByRole('region', { name: 'Dataset discussion' });
     await expect(panel).toBeVisible({ timeout: 15_000 });
     await panel.getByRole('textbox', { name: 'Add a comment' }).fill(body);

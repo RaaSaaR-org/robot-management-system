@@ -24,15 +24,17 @@ export interface EpisodeListPanelProps {
   onToggleFlag: (index: number) => void;
   scores: Record<number, { score: number; rewardType: string }>;
   onCreateView: () => void;
+  /** Sizing from the parent: on a wide screen the list fills it and scrolls inside. */
+  className?: string;
 }
 
 export function EpisodeListPanel(props: EpisodeListPanelProps) {
-  const { episodes, isLoading, hasError = false, selected, onSelect, checked, onToggleChecked, onSetChecked, flagged, onToggleFlag, scores, onCreateView } = props;
+  const { episodes, isLoading, hasError = false, selected, onSelect, checked, onToggleChecked, onSetChecked, flagged, onToggleFlag, scores, onCreateView, className } = props;
   const checkedSet = new Set(checked);
   const allChecked = episodes.length > 0 && checked.length === episodes.length;
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
+    <div className={cn('flex min-w-0 flex-col gap-3 lg:min-h-0', className)}>
       {/* Phones: a select above the viewer instead of the list */}
       <Select
         className="lg:hidden"
@@ -46,7 +48,7 @@ export function EpisodeListPanel(props: EpisodeListPanelProps) {
         }))}
       />
 
-      <Panel padding="none" className="hidden lg:flex lg:flex-col">
+      <Panel padding="none" data-testid="episode-list" className="hidden lg:flex lg:min-h-0 lg:flex-1 lg:flex-col">
         <Panel.Header
           title="Episodes"
           titleAs="h2"
@@ -62,7 +64,7 @@ export function EpisodeListPanel(props: EpisodeListPanelProps) {
             )
           }
         />
-        <div className="max-h-[calc(100vh-16rem)] overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto">
           {isLoading ? (
             <div className="p-4"><SkeletonRows rows={6} columns={1} dense /></div>
           ) : hasError ? (

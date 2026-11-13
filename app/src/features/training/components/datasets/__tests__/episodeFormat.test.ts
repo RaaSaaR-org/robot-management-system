@@ -6,7 +6,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  cameraKeys, cameraLabel, channelLabels, channelStats, featureNames, formatStat, groupLabel, mostActiveGroup, statsFrameCount,
+  cameraKeys, cameraLabel, channelLabels, channelStats, cursorFraction, featureNames, formatPlayhead, formatStat, groupLabel,
+  mostActiveGroup, statsFrameCount,
 } from '../episodeFormat';
 
 // nvidia/GR00T-N1.7-AppleToPlate meta/modality.json: the state groups of a Unitree G1.
@@ -128,5 +129,42 @@ describe('cameraKeys', () => {
   it('labels a camera by its short name', () => {
     expect(cameraLabel('observation.images.top')).toBe('top');
     expect(cameraLabel('observation.image')).toBe('observation.image');
+  });
+});
+
+describe('formatPlayhead (TASK-484)', () => {
+  it('cuts the playhead and the total the same way, so they meet at the end', () => {
+    // Whole seconds showed 19.67 as "0:19" under a total that read "0:20".
+    expect(formatPlayhead(19.67)).toBe('0:19.7');
+    expect(formatPlayhead(0)).toBe('0:00.0');
+    expect(formatPlayhead(75.04)).toBe('1:15.0');
+  });
+
+  it('carries into the minute instead of showing sixty seconds', () => {
+    expect(formatPlayhead(59.96)).toBe('1:00.0');
+  });
+
+  it('reads nonsense as zero', () => {
+    expect(formatPlayhead(Number.NaN)).toBe('0:00.0');
+    expect(formatPlayhead(-3)).toBe('0:00.0');
+  });
+});
+
+describe('cursorFraction (TASK-484)', () => {
+  it('is on the chart at the start and past the last sample', () => {
+    expect(cursorFraction(0, 0, 19.633)).toBe(0);
+    // The video runs one frame longer than the last sample's timestamp.
+    expect(cursorFraction(19.67, 0, 19.633)).toBe(1);
+    expect(cursorFraction(-1, 0, 10)).toBe(0);
+  });
+
+  it('is proportional in between', () => {
+    expect(cursorFraction(5, 0, 10)).toBe(0.5);
+    expect(cursorFraction(6, 2, 10)).toBe(0.5);
+  });
+
+  it('has no position without samples, and one position on a single sample', () => {
+    expect(cursorFraction(1, undefined, undefined)).toBeNull();
+    expect(cursorFraction(1, 3, 3)).toBe(0);
   });
 });

@@ -1,12 +1,15 @@
 /**
  * @file DatasetEpisodesPage.tsx
- * @description Episode browser of one dataset: synced video, joint charts, annotations, curation and views
+ * @description Episode browser of one dataset. The episode list, the video with its controls and the
+ *              joint chart share the first screen; curation, annotations, statistics, views and the
+ *              discussions sit in tabs under it.
  * @feature training
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { SocialPanel } from '@/features/social';
+import { cn } from '@/shared/utils/cn';
 import { CloudUpload, GitFork, Layers } from 'lucide-react';
 import {
   Button,
@@ -16,6 +19,7 @@ import {
   RowActions,
   SkeletonText,
   StatusTag,
+  Tabs,
   confirm,
   errorMessage,
   toast,
@@ -31,9 +35,11 @@ import { TrainingJobWizard } from '../components/TrainingJobWizard';
 import { ViewBanner } from '../components/datasets/ViewBanner';
 import { DatasetExpectationsPanel } from '../components/datasets/DatasetExpectationsPanel';
 import { EpisodeListPanel } from '../components/datasets/EpisodeListPanel';
-import { EpisodeViewer, type PlaybackSpeed } from '../components/datasets/EpisodeViewer';
+import { EpisodeViewer } from '../components/datasets/EpisodeViewer';
 import { featureVideoCodec } from '../components/datasets/videoCodec';
 import { useDatasetVideoTicket } from '../hooks/useDatasetVideoTicket';
+import { useEpisodePlayback } from '../hooks/useEpisodePlayback';
+import { useViewportFill } from '../hooks/useViewportFill';
 import { CuratePanel } from '../components/datasets/CuratePanel';
 import { JointChartPanel, RewardCurvePanel } from '../components/datasets/TrajectoryPanels';
 import { AnnotationsPanel } from '../components/datasets/AnnotationsPanel';
@@ -62,6 +68,24 @@ import type {
 /** Joint names used when a dataset carries no action names (SO-101 layout). */
 const DEFAULT_JOINTS = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll', 'gripper'];
 
+/** Cameras assumed for a dataset that carries no feature metadata at all. */
+const LEGACY_CAMERAS = ['observation.images.wrist', 'observation.images.top'];
+
+const NO_FRAMES: FrameData[] = [];
+
+/**
+ * The stage (list, video, chart) ends at the bottom of the window. From this
+ * height on there is room to put the chart under the video instead of beside
+ * it; below it they share the row, or the video would be a stamp. Sharing the
+ * row takes width: under `SIDE_FROM_PX` the chart goes under the video anyway
+ * and the stage is given the height that needs, at the price of a short scroll.
+ */
+const STACKED_FROM_PX = 540;
+const SIDE_FROM_PX = 1280;
+/** Stacked in a narrow window: the group switch and the legend wrap, so the chart needs more. */
+const STACKED_NARROW_PX = 620;
+const STAGE_FILL = { min: 380, max: 900, gap: 16 } as const;
+
 export function DatasetEpisodesPage() {
   const { datasetId } = useParams<{ datasetId: string }>();
   const navigate = useNavigate();
@@ -72,16 +96,13 @@ export function DatasetEpisodesPage() {
   const [episodesLoading, setEpisodesLoading] = useState(false);
   const [episodesError, setEpisodesError] = useState<string | null>(null);
   const [selectedEpisode, setSelectedEpisode] = useState<number | null>(null);
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const requestedEpisodeRef = useRef(searchParams.get('episode'));
-  const [frames, setFrames] = useState<FrameData[]>([]);
-  const [framesLoading, setFramesLoading] = useState(false);
-  const [framesError, setFramesError] = useState<string | null>(null);
+  // The frames and the request they answer: until the two agree the chart is
+  // loading, so it never shows the previous episode's samples (TASK-484).
+  const [framesAnswer, setFramesAnswer] =
+    useState<{ key: string; frames: FrameData[]; error: string | null } | null>(null);
   const [framesReloadKey, setFramesReloadKey] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [speed, setSpeed] = useState<PlaybackSpeed>('1');
   const [flaggedMap, setFlaggedMap] = useState<Record<number, boolean>>({});
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState<number | ''>('');
@@ -109,7 +130,6 @@ export function DatasetEpisodesPage() {
   const [statsAnswer, setStatsAnswer] =
     useState<{ datasetId: string; stats: Record<string, FeatureStats> | null } | null>(null);
 
-  const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   // A <video> cannot send the bearer token, so the URL carries a short-lived
   // ticket for this dataset's videos. Re-checked per episode: that is when the
   // video changes anyway, so a renewed ticket never interrupts playback.
@@ -117,12 +137,14 @@ export function DatasetEpisodesPage() {
   const { submitJob } = useTrainingJobs();
 
   // Camera feature keys (dtype video/image). State-only datasets have none; the
-  // legacy wrist/top guess applies only when there is no feature metadata at all.
+  // legacy wrist/top guess applies only to a dataset that has been read and
+  // carries no feature metadata at all. Null until this dataset's row is here:
+  // guessing before then asked for a `wrist` video the dataset does not have.
   const cameraNames = useMemo(() => {
-    const features = dataset?.infoJson?.features as Record<string, unknown> | undefined;
-    if (!features) return ['observation.images.wrist', 'observation.images.top'];
-    return cameraKeys(features);
-  }, [dataset]);
+    if (!dataset || dataset.id !== datasetId) return null;
+    const features = dataset.infoJson?.features as Record<string, unknown> | undefined;
+    return features ? cameraKeys(features) : LEGACY_CAMERAS;
+  }, [dataset, datasetId]);
 
   // Channel names out of info.json, per vector.
   const infoNames = useMemo(() => {
@@ -155,12 +177,36 @@ export function DatasetEpisodesPage() {
     [dataset]
   );
 
-  const primaryCamera = cameraNames[0];
+  const primaryCamera = cameraNames?.[0];
   const selectedMeta = useMemo(() => episodes.find((e) => e.index === selectedEpisode) ?? null, [episodes, selectedEpisode]);
   // v3.0 chunked datasets: the episode's window inside the chunk video, per camera.
   const videoWindows = selectedMeta?.videoWindows;
   const windowFor = useCallback((cam: string) => videoWindows?.[cam], [videoWindows]);
-  const primaryWindow = primaryCamera ? videoWindows?.[primaryCamera] : undefined;
+
+  const playback = useEpisodePlayback({
+    episodeKey: datasetId && selectedEpisode !== null ? `${datasetId}:${selectedEpisode}` : null,
+    datasetKey: datasetId,
+    primaryCamera,
+    windowFor,
+    fallbackDuration: selectedMeta?.durationSeconds ?? 0,
+  });
+  const { currentTime } = playback;
+
+  const framesKey = datasetId && selectedEpisode !== null ? `${datasetId}:${selectedEpisode}:${framesReloadKey}` : null;
+  const framesCurrent = framesAnswer && framesAnswer.key === framesKey ? framesAnswer : null;
+  const frames = framesCurrent?.frames ?? NO_FRAMES;
+  const framesLoading = framesKey !== null && !framesCurrent;
+  const framesError = framesCurrent?.error ?? null;
+
+  const stage = useViewportFill<HTMLDivElement>(STAGE_FILL);
+  const stageLayout =
+    stage.height !== null && stage.height < STACKED_FROM_PX && stage.viewportWidth >= SIDE_FROM_PX ? 'side' : 'stacked';
+  const stageHeight =
+    stage.height === null
+      ? null
+      : stageLayout === 'side'
+        ? stage.height
+        : Math.max(stage.height, stage.viewportWidth < SIDE_FROM_PX ? STACKED_NARROW_PX : STACKED_FROM_PX);
 
   useEffect(() => {
     if (!datasetId) return;
@@ -212,8 +258,6 @@ export function DatasetEpisodesPage() {
     if (!datasetId) return;
     setEpisodesLoading(true);
     setSelectedEpisode(null);
-    setFrames([]);
-    setCurrentTime(0);
     setCheckedEpisodes([]);
     setEpisodesError(null);
     trainingApi.getEpisodes(datasetId)
@@ -266,78 +310,27 @@ export function DatasetEpisodesPage() {
 
   useEffect(() => {
     if (!datasetId || selectedEpisode === null) return;
-    const ep = episodes.find((e) => e.index === selectedEpisode);
-    if (ep) setDuration(ep.durationSeconds);
+    const key = `${datasetId}:${selectedEpisode}:${framesReloadKey}`;
     let cancelled = false;
-    setFramesLoading(true);
-    setFramesError(null);
     trainingApi.getEpisodeFrames(datasetId, selectedEpisode, 0, 2000)
-      .then((r) => { if (!cancelled) setFrames(r.frames); })
+      .then((r) => { if (!cancelled) setFramesAnswer({ key, frames: r.frames, error: null }); })
       .catch((err) => {
-        if (cancelled) return;
         // An empty chart here used to hide a read failure (TASK-354).
-        setFrames([]);
-        setFramesError(errorMessage(err, 'unknown error'));
-      })
-      .finally(() => { if (!cancelled) setFramesLoading(false); });
+        if (!cancelled) setFramesAnswer({ key, frames: [], error: errorMessage(err, 'unknown error') });
+      });
     return () => { cancelled = true; };
-  }, [datasetId, selectedEpisode, episodes, framesReloadKey]);
+  }, [datasetId, selectedEpisode, framesReloadKey]);
 
-  useEffect(() => {
-    for (const ref of Object.values(videoRefs.current)) if (ref) ref.playbackRate = Number(speed);
-  }, [speed]);
-
-  const handleTimeUpdate = useCallback(() => {
-    if (!primaryCamera) return;
-    const primary = videoRefs.current[primaryCamera];
-    if (!primary) return;
-    const win = windowFor(primaryCamera);
-    const rel = primary.currentTime - (win?.from ?? 0);
-    setCurrentTime(rel);
-    // Clamp so a chunked episode never bleeds into the next one.
-    if (win && primary.currentTime >= win.to - 0.05) {
-      for (const ref of Object.values(videoRefs.current)) ref?.pause();
-      setIsPlaying(false);
-      return;
-    }
-    for (const [name, ref] of Object.entries(videoRefs.current)) {
-      if (!ref || name === primaryCamera) continue;
-      const target = (windowFor(name)?.from ?? 0) + rel;
-      if (Math.abs(ref.currentTime - target) > 0.1) ref.currentTime = target;
-    }
-  }, [primaryCamera, windowFor]);
-
-  const handleLoadedMetadata = useCallback(() => {
-    // Chunked (v3.0): duration is the episode's window, not the chunk video's.
-    if (primaryWindow) { setDuration(primaryWindow.to - primaryWindow.from); return; }
-    const primary = primaryCamera ? videoRefs.current[primaryCamera] : null;
-    if (primary && isFinite(primary.duration)) setDuration(primary.duration);
-  }, [primaryCamera, primaryWindow]);
-
-  const handlePlayPause = useCallback(() => {
-    const entries = Object.entries(videoRefs.current).filter(([, v]) => Boolean(v)) as [string, HTMLVideoElement][];
-    if (entries.length === 0) return;
-    const primary = (primaryCamera && videoRefs.current[primaryCamera]) || entries[0][1];
-    if (primary.paused) {
-      const win = primaryCamera ? windowFor(primaryCamera) : undefined;
-      if (win && primary.currentTime >= win.to - 0.1) {
-        for (const [name, ref] of entries) ref.currentTime = windowFor(name)?.from ?? 0;
+  /** Open another episode from the list. A typed trim range was the previous episode's. */
+  const selectEpisode = useCallback((index: number) => {
+    setSelectedEpisode((prev) => {
+      if (prev !== index) {
+        setTrimStart(0);
+        setTrimEnd('');
       }
-      entries.forEach(([, v]) => { void v.play(); });
-      setIsPlaying(true);
-    } else {
-      entries.forEach(([, v]) => v.pause());
-      setIsPlaying(false);
-    }
-  }, [primaryCamera, windowFor]);
-
-  const handleSeek = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-    const time = parseFloat(e.target.value);
-    setCurrentTime(time);
-    for (const [name, ref] of Object.entries(videoRefs.current)) {
-      if (ref) ref.currentTime = (windowFor(name)?.from ?? 0) + time;
-    }
-  }, [windowFor]);
+      return index;
+    });
+  }, []);
 
   const handleFlagToggle = useCallback(async (index: number) => {
     if (!datasetId) return;
@@ -512,12 +505,38 @@ export function DatasetEpisodesPage() {
     Object.values(rewardsByEpisode).map((r) => [r.episodeIndex, { score: r.score, rewardType: r.rewardType }]),
   );
   const description = dataset
-    ? `${episodes.length || dataset.demonstrationCount} episodes · ${formatDuration(dataset.totalDuration)} · ${dataset.fps} fps · ${cameraNames.length} camera${cameraNames.length === 1 ? '' : 's'}`
+    ? `${episodes.length || dataset.demonstrationCount} episodes · ${formatDuration(dataset.totalDuration)} · ${dataset.fps} fps${cameraNames ? ` · ${cameraNames.length} camera${cameraNames.length === 1 ? '' : 's'}` : ''}`
     : undefined;
   const ready = dataset?.status === 'ready';
 
+  // Secondary panels, one at a time, state in ?tab= (TASK-484). The ones about
+  // the selected episode come first and exist only while there is one.
+  const showEpisode = selectedEpisode !== null && !episodesError;
+  const tabs = [
+    ...(showEpisode
+      ? [
+          { id: 'curate', label: 'Curate' },
+          { id: 'annotations', label: 'Annotations' },
+          ...(selectedReward ? [{ id: 'progress', label: 'Task progress' }] : []),
+          { id: 'episode-discussion', label: 'Episode discussion' },
+        ]
+      : []),
+    ...(dataset && !isView ? [{ id: 'statistics', label: 'Statistics' }] : []),
+    { id: 'views', label: 'Views', count: views.length || undefined },
+    ...(dataset ? [{ id: 'discussion', label: isView ? 'View discussion' : 'Dataset discussion' }] : []),
+  ];
+  const requestedTab = searchParams.get('tab');
+  const activeTab = tabs.find((t) => t.id === requestedTab)?.id ?? tabs[0]!.id;
+  const openTab = (id: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('tab', id);
+      return next;
+    }, { replace: true });
+  };
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <PageHeader
         eyebrow="Build"
         back={back}
@@ -585,16 +604,22 @@ export function DatasetEpisodesPage() {
         />
       )}
 
-      {/* A view has no files of its own; its expectations are its parent's (TASK-353). */}
-      {dataset && !isView && <DatasetExpectationsPanel dataset={dataset} onDatasetChange={setDataset} />}
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+      {/* The stage: everything a viewer watches at once. From `lg` up it is as
+          tall as the window has left, so the transport bar and the chart's
+          cursor are on screen with the video (TASK-484). */}
+      <div
+        ref={stage.ref}
+        data-testid="episode-stage"
+        data-layout={stageLayout}
+        style={stageHeight !== null ? ({ '--stage-height': `${stageHeight}px` } as CSSProperties) : undefined}
+        className="grid grid-cols-1 gap-4 lg:h-[var(--stage-height)] lg:grid-cols-[240px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]"
+      >
         <EpisodeListPanel
           episodes={episodes}
           isLoading={episodesLoading}
           hasError={Boolean(episodesError)}
           selected={selectedEpisode}
-          onSelect={setSelectedEpisode}
+          onSelect={selectEpisode}
           checked={checkedEpisodes}
           onToggleChecked={toggleChecked}
           onSetChecked={setCheckedEpisodes}
@@ -604,94 +629,122 @@ export function DatasetEpisodesPage() {
           onCreateView={() => setIsCreateViewOpen(true)}
         />
 
-        <div className="flex min-w-0 flex-col gap-6">
-          {episodesError ? (
-            <Panel>
-              <ErrorState
-                title="Couldn't load the episodes"
-                message={episodesError}
-                onRetry={() => setReloadKey((k) => k + 1)}
-              />
-            </Panel>
-          ) : selectedEpisode === null ? (
-            <Panel>{episodesLoading || !dataset ? <SkeletonText lines={6} /> : <p className="text-sm text-ink-tertiary">Select an episode to watch it.</p>}</Panel>
-          ) : (
-            <>
-              <EpisodeViewer
-                cameras={cameraNames}
-                srcFor={(cam) => trainingApi.getEpisodeVideoUrl(datasetId, selectedEpisode, cam, windowFor(cam), videoTicket.ticket)}
-                codecFor={codecFor}
-                ready={videoTicket.ready}
-                onReload={videoTicket.refresh}
-                primaryCamera={primaryCamera}
-                videoRefs={videoRefs}
-                onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={handleLoadedMetadata}
-                onEnded={() => setIsPlaying(false)}
-                isPlaying={isPlaying}
-                onPlayPause={handlePlayPause}
-                currentTime={currentTime}
-                duration={duration}
-                onSeek={handleSeek}
-                speed={speed}
-                onSpeedChange={setSpeed}
-              />
-              <CuratePanel
-                episode={selectedEpisode}
-                frameCount={frames.length}
-                trimStart={trimStart}
-                trimEnd={trimEnd}
-                onTrimStart={setTrimStart}
-                onTrimEnd={setTrimEnd}
-                curating={curating}
-                suggesting={suggesting}
-                onTrim={() => void handleTrim()}
-                onDelete={() => void handleDeleteEpisode()}
-                onSuggest={() => void handleSuggest()}
-                message={curationMsg}
-                newDataset={newDataset}
-                onOpenNew={() => {
-                  if (!newDataset) return;
-                  setNewDataset(null);
-                  setCurationMsg(null);
-                  setSuggestions([]);
-                  navigate(`/datasets/${newDataset.id}/episodes`);
-                }}
-                suggestMessage={suggestMsg}
-                suggestions={suggestions}
-                onApply={applySuggestion}
-                onDismiss={(i) => setSuggestions((prev) => prev.filter((_, j) => j !== i))}
-              />
-              <JointChartPanel
-                frames={frames}
-                jointNames={jointNames}
-                groups={jointGroups}
-                isLoading={framesLoading}
-                currentTime={currentTime}
-                error={framesError}
-                onRetry={() => setFramesReloadKey((k) => k + 1)}
-              />
-              {selectedReward && (
-                <RewardCurvePanel reward={selectedReward} fallbackFps={dataset?.fps ?? 30} currentTime={currentTime} />
-              )}
-              <AnnotationsPanel
-                annotation={selectedAnnotation}
-                hasAny={annotations.length > 0}
-                annotating={annotating}
-                onAnnotate={() => void handleAnnotate()}
-              />
-              <Panel>
-                <SocialPanel
-                  subject={{ subjectType: 'episode', subjectId: datasetId, episodeIndex: selectedEpisode }}
-                  title={`Episode ${selectedEpisode} discussion`}
-                />
-              </Panel>
-            </>
-          )}
-        </div>
+        {episodesError ? (
+          <Panel>
+            <ErrorState
+              title="Couldn't load the episodes"
+              message={episodesError}
+              onRetry={() => setReloadKey((k) => k + 1)}
+            />
+          </Panel>
+        ) : selectedEpisode === null || !cameraNames ? (
+          <Panel>
+            {episodesLoading || !cameraNames
+              ? <SkeletonText lines={6} />
+              : <p className="text-sm text-ink-tertiary">Select an episode to watch it.</p>}
+          </Panel>
+        ) : (
+          <div
+            className={cn(
+              'grid min-w-0 grid-cols-1 gap-4 lg:min-h-0',
+              stageLayout === 'side'
+                ? 'lg:grid-cols-[minmax(0,6fr)_minmax(0,5fr)] lg:grid-rows-[minmax(0,1fr)]'
+                : 'lg:grid-rows-[minmax(0,3fr)_minmax(270px,2fr)]',
+            )}
+          >
+            <EpisodeViewer
+              cameras={cameraNames}
+              srcFor={(cam) => trainingApi.getEpisodeVideoUrl(datasetId, selectedEpisode, cam, windowFor(cam), videoTicket.ticket)}
+              codecFor={codecFor}
+              ready={videoTicket.ready}
+              onReload={videoTicket.refresh}
+              primaryCamera={primaryCamera}
+              videoRefs={playback.videoRefs}
+              onTimeUpdate={playback.onTimeUpdate}
+              onLoadedMetadata={playback.onLoadedMetadata}
+              onEnded={playback.onEnded}
+              onPause={playback.onPause}
+              onFailure={playback.onFailure}
+              layout={stageLayout}
+              isPlaying={playback.isPlaying}
+              onPlayPause={playback.togglePlay}
+              currentTime={currentTime}
+              duration={playback.duration}
+              onSeek={playback.seek}
+              speed={playback.speed}
+              onSpeedChange={playback.setSpeed}
+            />
+            <JointChartPanel
+              frames={frames}
+              jointNames={jointNames}
+              groups={jointGroups}
+              isLoading={framesLoading}
+              currentTime={currentTime}
+              isPlaying={playback.isPlaying}
+              error={framesError}
+              onRetry={() => setFramesReloadKey((k) => k + 1)}
+            />
+          </div>
+        )}
       </div>
 
-      {dataset && !isView && (
+      {/* A view has no files of its own; its expectations are its parent's (TASK-353). */}
+      {dataset && !isView && <DatasetExpectationsPanel dataset={dataset} onDatasetChange={setDataset} />}
+
+      <Tabs tabs={tabs} activeTab={activeTab} onTabChange={openTab} label="Episode and dataset details" />
+
+      {activeTab === 'curate' && selectedEpisode !== null && (
+        <CuratePanel
+          episode={selectedEpisode}
+          frameCount={selectedMeta?.frameCount ?? frames.length}
+          trimStart={trimStart}
+          trimEnd={trimEnd}
+          onTrimStart={setTrimStart}
+          onTrimEnd={setTrimEnd}
+          curating={curating}
+          suggesting={suggesting}
+          onTrim={() => void handleTrim()}
+          onDelete={() => void handleDeleteEpisode()}
+          onSuggest={() => void handleSuggest()}
+          message={curationMsg}
+          newDataset={newDataset}
+          onOpenNew={() => {
+            if (!newDataset) return;
+            setNewDataset(null);
+            setCurationMsg(null);
+            setSuggestions([]);
+            navigate(`/datasets/${newDataset.id}/episodes`);
+          }}
+          suggestMessage={suggestMsg}
+          suggestions={suggestions}
+          onApply={applySuggestion}
+          onDismiss={(i) => setSuggestions((prev) => prev.filter((_, j) => j !== i))}
+        />
+      )}
+
+      {activeTab === 'annotations' && (
+        <AnnotationsPanel
+          annotation={selectedAnnotation}
+          hasAny={annotations.length > 0}
+          annotating={annotating}
+          onAnnotate={() => void handleAnnotate()}
+        />
+      )}
+
+      {activeTab === 'progress' && selectedReward && (
+        <RewardCurvePanel reward={selectedReward} fallbackFps={dataset?.fps ?? 30} currentTime={currentTime} />
+      )}
+
+      {activeTab === 'episode-discussion' && selectedEpisode !== null && (
+        <Panel>
+          <SocialPanel
+            subject={{ subjectType: 'episode', subjectId: datasetId, episodeIndex: selectedEpisode }}
+            title={`Episode ${selectedEpisode} discussion`}
+          />
+        </Panel>
+      )}
+
+      {activeTab === 'statistics' && dataset && !isView && (
         <DatasetStatsPanel
           stats={statsAnswer?.datasetId === dataset.id ? statsAnswer.stats : null}
           isLoading={statsAnswer?.datasetId !== dataset.id}
@@ -700,7 +753,24 @@ export function DatasetEpisodesPage() {
         />
       )}
 
-      {dataset && (
+      {activeTab === 'views' && (
+        <DatasetViewsSection
+          parentEpisodeCount={episodes.length || dataset?.demonstrationCount || 0}
+          views={views}
+          isLoading={viewsLoading}
+          error={viewsError}
+          onCreate={() => setIsCreateViewOpen(true)}
+          onOpen={(view) => navigate(`/datasets/${view.id}/episodes`)}
+          onDelete={deleteViewRow}
+          onDuplicate={(view) => setDuplicateTarget(view)}
+          onMaterialize={async (view) => {
+            await materializeView(view.id);
+            toast.success('View materialized', { description: view.name });
+          }}
+        />
+      )}
+
+      {activeTab === 'discussion' && dataset && (
         <Panel>
           <SocialPanel
             subject={{ subjectType: isView ? 'dataset_view' : 'dataset', subjectId: dataset.id }}
@@ -708,21 +778,6 @@ export function DatasetEpisodesPage() {
           />
         </Panel>
       )}
-
-      <DatasetViewsSection
-        parentEpisodeCount={episodes.length || dataset?.demonstrationCount || 0}
-        views={views}
-        isLoading={viewsLoading}
-        error={viewsError}
-        onCreate={() => setIsCreateViewOpen(true)}
-        onOpen={(view) => navigate(`/datasets/${view.id}/episodes`)}
-        onDelete={deleteViewRow}
-        onDuplicate={(view) => setDuplicateTarget(view)}
-        onMaterialize={async (view) => {
-          await materializeView(view.id);
-          toast.success('View materialized', { description: view.name });
-        }}
-      />
 
       <CreateViewModal
         isOpen={isCreateViewOpen}

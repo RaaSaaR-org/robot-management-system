@@ -409,6 +409,7 @@ the same barrel (`ButtonProps`, `DataTableColumn<T>`, …).
 | `chartColors` | CSS var strings: `primary` · `accent` · `measured` · `estimated` · `unknown` · `stopped` · `series[6]` · `grid` · `axis` · `tick` · `label` · `muted` · `surface` · `tooltipBg` · `tooltipBorder` · `tooltipText` |
 | `chartTheme` | recharts props to spread: `grid` · `xAxis` · `yAxis` · `tooltip` · `legend` |
 | `chartSeriesColor(i)` | the i-th categorical colour (wraps; red last) |
+| `chartChannelColor(i)` | the i-th of ten channel colours (`chartColors.channels`) — for a chart that draws many unnamed channels at once, such as the joints of one arm |
 | `cssColor(name, fallback?)`, `useCssColor(name, fallback?)` | a token's resolved value (`cssColor('--color-primary')`) for renderers that cannot read `var(…)`: three.js materials, canvas, SVG attributes set from code. The hook re-reads when the theme changes |
 
 **Data**
