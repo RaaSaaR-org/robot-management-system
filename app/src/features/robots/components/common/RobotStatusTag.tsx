@@ -6,10 +6,21 @@
  */
 
 import { StatusTag, type Tone } from '@/shared/components/ui';
-import { ROBOT_STATUS_LABELS, type RobotStatus } from '../../types/robots.types';
+import {
+  ROBOT_PROVISIONING_LABELS,
+  ROBOT_STATUS_LABELS,
+  type RobotProvisioningState,
+  type RobotStatus,
+} from '../../types/robots.types';
 
 export interface RobotStatusTagProps {
   status: RobotStatus | string;
+  /**
+   * Set for an expected robot (`robotProvisioning(robot)?.state`): it reads
+   * "Not connected" or "Arriving" — it was never online, so "Offline" would
+   * suggest something stopped working.
+   */
+  provisioning?: RobotProvisioningState | null;
   size?: 'sm' | 'md';
   className?: string;
 }
@@ -31,8 +42,15 @@ const EXTRA_LABELS: Record<string, string> = {
 };
 
 /** Robot status as a dotted StatusTag. */
-export function RobotStatusTag({ status, size, className }: RobotStatusTagProps) {
+export function RobotStatusTag({ status, provisioning, size, className }: RobotStatusTagProps) {
   const key = String(status).toLowerCase();
+  if (provisioning && key === 'offline') {
+    return (
+      <StatusTag tone="neutral" size={size} className={className}>
+        {ROBOT_PROVISIONING_LABELS[provisioning]}
+      </StatusTag>
+    );
+  }
   const label =
     EXTRA_LABELS[key] ??
     (ROBOT_STATUS_LABELS as Record<string, string>)[key] ??

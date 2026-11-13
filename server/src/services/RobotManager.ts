@@ -20,6 +20,7 @@ import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from './HttpClient.js';
 import { alertService } from './AlertService.js';
 import { Prisma } from '@prisma/client';
 import { ConflictError } from '../utils/errors.js';
+import type { ExpectedRobotInput } from './expectedRobot.js';
 
 // ============================================================================
 // TYPES
@@ -626,6 +627,29 @@ export class RobotManager {
   }
 
   /**
+   * Put an expected robot on the fleet (TASK-477): a robot with no agent yet.
+   * Returns `null` when the id belongs to a robot that is not (or no longer)
+   * an expected one — nothing is written then.
+   */
+  async putExpectedRobot(input: ExpectedRobotInput): Promise<{ robot: Robot; created: boolean } | null> {
+    const result = await robotRepository.putExpected(input);
+    if ('conflict' in result) return null;
+    // No agent, so no cache entry and no health check. The event only tells
+    // open fleet pages to show the row; telemetry ingestion finds no endpoints
+    // for it and starts nothing.
+    this.emitEvent({
+      type: result.created ? 'robot_registered' : 'robot_status_changed',
+      robotId: result.robot.id,
+      robot: result.robot,
+      timestamp: new Date().toISOString(),
+    });
+    console.log(
+      `[RobotManager] ${result.created ? 'Added' : 'Updated'} expected robot: ${result.robot.name} (${result.robot.id})`
+    );
+    return result;
+  }
+
+  /**
    * Unregister a robot by ID
    */
   async unregisterRobot(robotId: string): Promise<boolean> {
@@ -636,11 +660,13 @@ export class RobotManager {
     if (!registered) {
       // Not in the cache, or another tenant's: the row decides — and the
       // tenant-scoped lookup does not find another tenant's row either.
-      const dbRobot = await robotRepository.getRegisteredRobot(robotId);
-      if (!dbRobot) {
+      // Read the bare row, not the registration: an expected robot (TASK-477)
+      // has no endpoints or agent card, and must still be removable.
+      const row = await robotRepository.findTenantOf(robotId);
+      if (!row) {
         return false;
       }
-      tenantId = dbRobot.tenantId;
+      tenantId = row.tenantId;
     }
 
     // Delete from database first: a delete the tenant guard refuses must not

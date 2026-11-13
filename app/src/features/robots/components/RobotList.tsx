@@ -15,9 +15,9 @@ import {
 import { usePermission } from '@/features/auth/hooks/useAuth';
 import { useRobots } from '../hooks/useRobots';
 import { useRobotsStore } from '../store/robotsStore';
-import { RobotCard, robotBattery, robotLastSeen, robotPlace } from './RobotCard';
+import { RobotCard, UNREGISTER_EXPECTED_DESCRIPTION, robotBattery, robotLastSeen, robotPlace } from './RobotCard';
 import { RobotStatusTag } from './common/RobotStatusTag';
-import type { Robot, RobotStatus } from '../types/robots.types';
+import { robotProvisioning, type Robot, type RobotStatus } from '../types/robots.types';
 
 type ViewMode = 'grid' | 'table';
 const VIEW_KEY = 'robots.view';
@@ -102,8 +102,9 @@ export function RobotList({ onRegister }: RobotListProps) {
   const askUnregister = async (robot: Robot) => {
     const ok = await confirm({
       title: `Unregister ${robot.name}?`,
-      description:
-        'The robot leaves the fleet and stops receiving tasks. Register its agent URL again to bring it back.',
+      description: robotProvisioning(robot)
+        ? UNREGISTER_EXPECTED_DESCRIPTION
+        : 'The robot leaves the fleet and stops receiving tasks. Register its agent URL again to bring it back.',
       confirmLabel: 'Unregister',
       tone: 'danger',
     });
@@ -139,7 +140,7 @@ export function RobotList({ onRegister }: RobotListProps) {
           </div>
         ),
       },
-      { key: 'status', header: 'Status', sortable: true, cell: (r) => <RobotStatusTag status={r.status} /> },
+      { key: 'status', header: 'Status', sortable: true, cell: (r) => <RobotStatusTag status={r.status} provisioning={robotProvisioning(r)?.state} /> },
       {
         key: 'battery', header: 'Battery', align: 'right', sortable: true, hideBelow: 'sm',
         sortValue: (r) => r.batteryLevel,
@@ -147,17 +148,20 @@ export function RobotList({ onRegister }: RobotListProps) {
           const b = robotBattery(r);
           return (
             <span className="tabular-nums text-ink-secondary">
-              {b.value}
+              {b.value ?? '—'}
               {b.unit && <span className="text-ink-tertiary">{b.unit}</span>}
             </span>
           );
         },
       },
-      { key: 'zone', header: 'Place', hideBelow: 'md', sortValue: robotPlace, cell: robotPlace },
+      {
+        key: 'zone', header: 'Place', hideBelow: 'md', sortValue: robotPlace,
+        cell: (r) => (robotProvisioning(r) ? '—' : robotPlace(r)),
+      },
       { key: 'task', header: 'Task', hideBelow: 'lg', cell: (r) => r.currentTaskName ?? '—' },
       {
         key: 'lastSeen', header: 'Last seen', align: 'right', sortable: true, hideBelow: 'md',
-        sortValue: (r) => (r.lastSeen ? new Date(r.lastSeen) : null), cell: robotLastSeen,
+        sortValue: (r) => (r.lastSeen && !robotProvisioning(r) ? new Date(r.lastSeen) : null), cell: robotLastSeen,
       },
     ],
     [],

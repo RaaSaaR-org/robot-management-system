@@ -41,6 +41,21 @@ describe('seedStandardRobotTypes', () => {
     }) });
   });
 
+  it('seeds the Microduck with one value per servo (TASK-477)', async () => {
+    const { db, create } = fakeDb([]);
+    await seedStandardRobotTypes(db);
+    expect(create).toHaveBeenCalledWith({ data: {
+      name: 'Microduck', manufacturer: 'Pollen Robotics', model: 'microduck', actionDim: 15, proprioceptionDim: 15,
+    } });
+  });
+
+  it('keeps the G1 EDU and SO-101 rows the demo fleet is built on', () => {
+    expect(STANDARD_ROBOT_TYPES).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Unitree G1 EDU (Dex3-1)', manufacturer: 'Unitree', actionDim: 43, proprioceptionDim: 43 }),
+      expect.objectContaining({ name: 'SO-101 Follower', manufacturer: 'TheRobotStudio', actionDim: 6, proprioceptionDim: 6 }),
+    ]));
+  });
+
   it('writes nothing on a second boot', async () => {
     const { db, create } = fakeDb([]);
     await seedStandardRobotTypes(db);

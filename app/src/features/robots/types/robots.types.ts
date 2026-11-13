@@ -576,6 +576,39 @@ export const DEFAULT_FILTERS: RobotFilters = {};
 // ============================================================================
 
 /**
+ * An expected robot (TASK-477): on the fleet before its agent has ever
+ * registered. `awaiting_agent` — the hardware exists, nothing is connected;
+ * `arriving` — it has not been delivered yet.
+ */
+export type RobotProvisioningState = 'awaiting_agent' | 'arriving';
+
+export interface RobotProvisioning {
+  state: RobotProvisioningState;
+  /** One operator-facing sentence the server stored with the robot. */
+  note?: string;
+}
+
+/** What the status tag says instead of "Offline" for an expected robot. */
+export const ROBOT_PROVISIONING_LABELS: Record<RobotProvisioningState, string> = {
+  awaiting_agent: 'Not connected',
+  arriving: 'Arriving',
+};
+
+/**
+ * The robot's provisioning state, or null for a robot an agent has registered.
+ * The server sets `metadata.provisioning` on `PUT /api/robots/:id/expected`
+ * and drops it when an agent takes the row over. A robot that is not offline
+ * is connected by definition, whatever stale metadata says.
+ */
+export function robotProvisioning(robot: Pick<Robot, 'status' | 'metadata'>): RobotProvisioning | null {
+  if (robot.status !== 'offline') return null;
+  const state = robot.metadata?.provisioning;
+  if (state !== 'awaiting_agent' && state !== 'arriving') return null;
+  const note = robot.metadata?.provisioningNote;
+  return { state, ...(typeof note === 'string' && note.trim() ? { note: note.trim() } : {}) };
+}
+
+/**
  * Check if a robot is available for commands
  */
 export function isRobotAvailable(robot: Robot): boolean {

@@ -12,11 +12,12 @@ import { Button, Panel, StatusTag } from '@/shared/components/ui';
 import { usePermission } from '@/features/auth/hooks/useAuth';
 import { Robot3DViewerFallback } from '../visualization';
 import { VlaControlSection } from '../VlaControlSection';
-import { ProvenanceTag, Readout, provenanceOf } from '../common';
+import { ProvenanceTag, Readout, ViewerUnavailable, provenanceOf } from '../common';
 import {
   ROBOT_STATUS_LABELS,
   isRobotAvailable,
   normalizeRobotType,
+  robotProvisioning,
 } from '../../types/robots.types';
 import type { OdometryState } from '../../types/robots.types';
 import type { OverviewTabProps } from './types';
@@ -53,6 +54,9 @@ export function OverviewTab({
   const reportedType =
     telemetry?.robotType ?? (robot.metadata?.robotType as string | undefined) ?? 'generic';
   const robotType = normalizeRobotType(reportedType);
+  // An expected robot of a kind the viewer has no model for (TASK-477): the
+  // placeholder box under "Live model" would pass for the robot itself.
+  const noModelYet = robotType === 'generic' && robotProvisioning(robot) !== null;
   const odometry = telemetry?.odometry ?? null;
   const speed = odometry ? odometrySpeed(odometry) : null;
   const statusLabel =
@@ -69,26 +73,38 @@ export function OverviewTab({
         <Panel.Header
           title="Live model"
           description={
-            telemetry?.jointStates?.length
-              ? 'Posed from live joint states.'
-              : 'Default pose — no joint states yet.'
+            noModelYet
+              ? 'Nothing to show until the robot connects.'
+              : telemetry?.jointStates?.length
+                ? 'Posed from live joint states.'
+                : 'Default pose — no joint states yet.'
           }
           actions={
             <>
-              <StatusTag tone="neutral">{reportedType.replace(/[_-]+/g, ' ')}</StatusTag>
+              {!noModelYet && (
+                <StatusTag tone="neutral">{reportedType.replace(/[_-]+/g, ' ')}</StatusTag>
+              )}
               <ProvenanceTag source={provenanceOf(telemetry, isTelemetryConnected)} />
             </>
           }
         />
         <div className="h-[280px] border-t border-line-subtle sm:h-[340px] lg:h-[440px]">
-          <Suspense fallback={<Robot3DViewerFallback className="h-full" />}>
-            <Robot3DViewer
-              robotType={robotType}
-              jointStates={telemetry?.jointStates}
-              isAnimating={isTelemetryConnected}
-              robotId={robotId}
+          {noModelYet ? (
+            <ViewerUnavailable
+              className="rounded-none"
+              title="No 3D model yet"
+              description={`${robot.name} has no model in this viewer. Its telemetry appears here once it connects.`}
             />
-          </Suspense>
+          ) : (
+            <Suspense fallback={<Robot3DViewerFallback className="h-full" />}>
+              <Robot3DViewer
+                robotType={robotType}
+                jointStates={telemetry?.jointStates}
+                isAnimating={isTelemetryConnected}
+                robotId={robotId}
+              />
+            </Suspense>
+          )}
         </div>
       </Panel>
 

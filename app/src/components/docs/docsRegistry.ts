@@ -58,6 +58,7 @@ const CATEGORY_MAP: Record<string, string> = {
   'platform': 'Getting Started',
   'demo-intro': 'Getting Started',
   'demo-day': 'Getting Started',
+  'demo-fleet': 'Getting Started',
   'README': 'Getting Started',
   'architecture': 'Architecture',
   'app-architecture': 'Architecture',

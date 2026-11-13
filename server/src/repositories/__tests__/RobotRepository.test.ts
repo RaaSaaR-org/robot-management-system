@@ -506,7 +506,8 @@ describe('getAllRegisteredRobots', () => {
 describe('upsertWithRegistration', () => {
   it('upserts robot/endpoints/agentCard inside a transaction and maps the robot', async () => {
     const tx = {
-      robot: { upsert: vi.fn().mockResolvedValue(makeDbRobot()) },
+      // No prior row: a first registration, not the claim of an expected robot.
+      robot: { findUnique: vi.fn().mockResolvedValue(null), upsert: vi.fn().mockResolvedValue(makeDbRobot()) },
       robotEndpoints: { upsert: vi.fn().mockResolvedValue(makeDbEndpoints()) },
       agentCard: { upsert: vi.fn().mockResolvedValue(makeDbAgentCard()) },
     };
@@ -536,6 +537,8 @@ describe('upsertWithRegistration', () => {
     });
     expect(robotArg.create.registeredAt).toBeInstanceOf(Date);
     expect(robotArg.update).toMatchObject({ isConnected: true, baseUrl: 'http://robot' });
+    // A re-registration never moves the original registration time.
+    expect(robotArg.update).not.toHaveProperty('registeredAt');
 
     // endpoints upsert keyed on robotId
     const epArg = tx.robotEndpoints.upsert.mock.calls[0][0] as {

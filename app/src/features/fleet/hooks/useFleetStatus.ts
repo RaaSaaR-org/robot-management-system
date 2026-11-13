@@ -168,7 +168,8 @@ export function useFleetStatus(): UseFleetStatusReturn {
         y: robot.location?.y ?? 0,
       },
       status: robot.status,
-      batteryLevel: robot.batteryLevel ?? 0,
+      // null stays null: an unknown or mains-powered battery is not "0 %" (TASK-477).
+      batteryLevel: robot.batteryLevel ?? null,
       floor: robot.location?.floor ?? '1',
       place: robot.location?.place ?? null,
       metadata: robot.metadata,

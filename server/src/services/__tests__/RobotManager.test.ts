@@ -54,6 +54,8 @@ vi.mock('../../repositories/index.js', () => ({
   robotRepository: {
     getAllRegisteredRobots: vi.fn(),
     getRegisteredRobot: vi.fn(),
+    findTenantOf: vi.fn(),
+    putExpected: vi.fn(),
     upsertWithRegistration: vi.fn(),
     findAll: vi.fn(),
     findById: vi.fn(),
@@ -275,7 +277,7 @@ describe('registerRobot', () => {
 describe('unregisterRobot', () => {
   it('returns false when the robot is neither cached nor in the database', async () => {
     const mgr = new RobotManager();
-    robotRepository.getRegisteredRobot.mockResolvedValue(null);
+    robotRepository.findTenantOf.mockResolvedValue(null);
 
     await expect(mgr.unregisterRobot('missing')).resolves.toBe(false);
     expect(robotRepository.delete).not.toHaveBeenCalled();
@@ -283,7 +285,9 @@ describe('unregisterRobot', () => {
 
   it('deletes a DB-only robot (not cached) without touching A2A cleanup', async () => {
     const mgr = new RobotManager();
-    robotRepository.getRegisteredRobot.mockResolvedValue(makeRegistered({ tenantId: 'tenant-a' }));
+    // The bare row decides, not the registration: an expected robot (TASK-477)
+    // has no endpoints or agent card and must still be removable.
+    robotRepository.findTenantOf.mockResolvedValue({ tenantId: 'tenant-a' });
     robotRepository.delete.mockResolvedValue(true);
 
     const events: { type: string }[] = [];
@@ -595,10 +599,56 @@ describe('getTelemetry', () => {
 // Event subscriptions
 // ===========================================================================
 
+describe('putExpectedRobot (TASK-477)', () => {
+  const input = {
+    id: 'duck-1',
+    name: 'MicroDuck',
+    model: 'Pollen Robotics Microduck',
+    provisioning: 'arriving' as const,
+    capabilities: [],
+    metadata: {},
+  };
+  const robot = makeRobot({ id: 'duck-1', name: 'MicroDuck', status: 'offline' });
+
+  it('announces a new expected robot to open fleet pages and keeps it out of the health-check cache', async () => {
+    const mgr = new RobotManager();
+    robotRepository.putExpected.mockResolvedValue({ robot, created: true });
+    const events: { type: string; robotId: string }[] = [];
+    mgr.onRobotEvent((e) => events.push(e));
+
+    await expect(mgr.putExpectedRobot(input)).resolves.toEqual({ robot, created: true });
+    expect(events).toEqual([expect.objectContaining({ type: 'robot_registered', robotId: 'duck-1', robot })]);
+    // Not cached: there is no agent to health-check, and no A2A agent to register.
+    robotRepository.getRegisteredRobot.mockResolvedValue(null);
+    await expect(mgr.getRegisteredRobot('duck-1')).resolves.toBeUndefined();
+    expect(conversationManager.registerAgent).not.toHaveBeenCalled();
+  });
+
+  it('reports an update as a change, not a second registration', async () => {
+    const mgr = new RobotManager();
+    robotRepository.putExpected.mockResolvedValue({ robot, created: false });
+    const events: { type: string }[] = [];
+    mgr.onRobotEvent((e) => events.push(e));
+
+    await mgr.putExpectedRobot(input);
+    expect(events.map((e) => e.type)).toEqual(['robot_status_changed']);
+  });
+
+  it('returns null and emits nothing when the id belongs to a robot that is not an expected one', async () => {
+    const mgr = new RobotManager();
+    robotRepository.putExpected.mockResolvedValue({ conflict: true });
+    const cb = vi.fn();
+    mgr.onRobotEvent(cb);
+
+    await expect(mgr.putExpectedRobot(input)).resolves.toBeNull();
+    expect(cb).not.toHaveBeenCalled();
+  });
+});
+
 describe('onRobotEvent', () => {
   it('unsubscribes so the callback stops receiving events', async () => {
     const mgr = new RobotManager();
-    robotRepository.getRegisteredRobot.mockResolvedValue(makeRegistered());
+    robotRepository.findTenantOf.mockResolvedValue({ tenantId: null });
     robotRepository.delete.mockResolvedValue(true);
 
     const cb = vi.fn();
@@ -614,7 +664,7 @@ describe('onRobotEvent', () => {
 
   it('isolates a throwing subscriber from the others', async () => {
     const mgr = new RobotManager();
-    robotRepository.getRegisteredRobot.mockResolvedValue(makeRegistered());
+    robotRepository.findTenantOf.mockResolvedValue({ tenantId: null });
     robotRepository.delete.mockResolvedValue(true);
 
     const bad = vi.fn(() => {

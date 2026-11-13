@@ -19,6 +19,17 @@ import type {
   RobotTelemetry,
 } from '../services/RobotManager.js';
 import type { A2AAgentCard } from '../types/index.js';
+import {
+  expectedRobotMetadata,
+  isExpectedRobotRow,
+  metadataWithoutProvisioning,
+  type ExpectedRobotInput,
+} from '../services/expectedRobot.js';
+
+/** What `putExpected` did: wrote the row, or found it is not an expected robot. */
+export type PutExpectedResult =
+  | { robot: Robot; created: boolean }
+  | { conflict: true };
 
 /** Parse a JSON column, returning `fallback` on null/undefined/corrupt data. */
 function parseJsonColumn<T>(value: string | null | undefined, fallback: T): T {
@@ -39,6 +50,15 @@ export class RobotRepository {
       where: { id },
     });
     return robot ? dbRobotToDomain(robot) : null;
+  }
+
+  /**
+   * Whether a robot row exists for the caller, and whose it is — without
+   * requiring the endpoints and agent card a registered robot has.
+   */
+  async findTenantOf(id: string): Promise<{ tenantId: string | null } | null> {
+    const row = await prisma.robot.findUnique({ where: { id }, select: { tenantId: true } });
+    return row ? { tenantId: row.tenantId ?? null } : null;
   }
 
   /**
@@ -259,6 +279,25 @@ export class RobotRepository {
     const agentCardData = domainAgentCardToDb(agentCard, robot.id);
 
     const result = await prisma.$transaction(async (tx) => {
+      // A row no agent ever registered (an expected robot, TASK-477, or a
+      // seeded one) is being claimed: stamp `registeredAt`, or the next server
+      // start — which loads `registeredAt != null` only — would not health-check
+      // this robot again. It also stops being "expected": when the agent sends
+      // no metadata of its own, the provisioning keys come off what is stored.
+      const prior = await tx.robot.findUnique({
+        where: { id: robot.id },
+        select: { registeredAt: true, metadata: true },
+      });
+      const claim =
+        prior && prior.registeredAt === null
+          ? {
+              registeredAt: new Date(),
+              ...(robotData.metadata === undefined
+                ? { metadata: metadataWithoutProvisioning(prior.metadata) }
+                : {}),
+            }
+          : {};
+
       // Upsert robot
       const dbRobot = await tx.robot.upsert({
         where: { id: robot.id },
@@ -271,6 +310,7 @@ export class RobotRepository {
         },
         update: {
           ...robotData,
+          ...claim,
           isConnected: true,
           lastHealthCheck: new Date(),
           baseUrl,
@@ -313,6 +353,64 @@ export class RobotRepository {
     });
 
     return dbRobotToDomain(result);
+  }
+
+  /**
+   * Create or update an expected robot (TASK-477) — a row with no agent.
+   *
+   * Idempotent: the same input twice leaves one row. Only a row that is still
+   * an expected robot is ever updated; a robot an agent has registered, or any
+   * other row under this id, answers `conflict` untouched. The read is
+   * tenant-scoped like every read here, so another tenant's robot under the
+   * same id is invisible, its create fails on the primary key, and that is a
+   * conflict too.
+   */
+  async putExpected(input: ExpectedRobotInput): Promise<PutExpectedResult> {
+    const fields = {
+      name: input.name,
+      model: input.model,
+      serialNumber: input.serialNumber ?? null,
+      capabilities: JSON.stringify(input.capabilities),
+      metadata: JSON.stringify(expectedRobotMetadata(input)),
+    };
+
+    let existing = await prisma.robot.findUnique({ where: { id: input.id } });
+    if (!existing) {
+      try {
+        const created = await prisma.robot.create({
+          data: {
+            id: input.id,
+            ...fields,
+            status: 'offline',
+            // Unknown, not "AC": nothing has reported a battery yet.
+            batteryLevel: null,
+            // A parseable pose (the column default `{}` is not one). It is in
+            // no place and not site-aligned, so no map draws it.
+            location: JSON.stringify({ x: 0, y: 0 }),
+            a2aEnabled: false,
+            isConnected: false,
+          },
+        });
+        return { robot: dbRobotToDomain(created), created: true };
+      } catch (error) {
+        if ((error as { code?: unknown } | null)?.code !== 'P2002') throw error;
+        // Lost a race with another writer of this id: judge the row that won.
+        existing = await prisma.robot.findUnique({ where: { id: input.id } });
+        if (!existing) return { conflict: true };
+      }
+    }
+
+    if (!isExpectedRobotRow(existing)) return { conflict: true };
+
+    // `updateMany` repeats the "still unregistered" test in the WHERE clause,
+    // so an agent registering between the read and this write keeps its row.
+    const { count } = await prisma.robot.updateMany({
+      where: { id: input.id, registeredAt: null, baseUrl: null },
+      data: fields,
+    });
+    if (count === 0) return { conflict: true };
+    const updated = await prisma.robot.findUnique({ where: { id: input.id } });
+    return updated ? { robot: dbRobotToDomain(updated), created: false } : { conflict: true };
   }
 
   /**

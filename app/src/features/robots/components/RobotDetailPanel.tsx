@@ -20,6 +20,7 @@ import {
 } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { RobotControlCenter } from './RobotControlCenter';
+import { UNREGISTER_EXPECTED_DESCRIPTION } from './RobotCard';
 import { AutonomousExecutionPanel } from './AutonomousExecutionPanel';
 import { EmergencyStopButton } from './EmergencyStopButton';
 import { RobotStatusTag, ProvenanceTag, provenanceOf } from './common';
@@ -28,7 +29,7 @@ import { useRobot } from '../hooks/useRobots';
 import { useTelemetryStream } from '../hooks/useTelemetryStream';
 import { useRobotsStore } from '../store/robotsStore';
 import { useTasksByRobotId } from '@/features/processes/hooks/useTasks';
-import { isRobotAvailable } from '../types/robots.types';
+import { isRobotAvailable, robotProvisioning } from '../types/robots.types';
 
 // ============================================================================
 // TYPES
@@ -117,8 +118,9 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
   const handleUnregister = useCallback(async () => {
     const ok = await confirm({
       title: `Unregister ${name}?`,
-      description:
-        'The robot leaves the fleet and stops receiving tasks. Register its agent URL again to bring it back.',
+      description: robot && robotProvisioning(robot)
+        ? UNREGISTER_EXPECTED_DESCRIPTION
+        : 'The robot leaves the fleet and stops receiving tasks. Register its agent URL again to bring it back.',
       confirmLabel: 'Unregister',
       tone: 'danger',
     });
@@ -130,7 +132,7 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
     } catch (err) {
       toast.error("Couldn't unregister robot", { description: errorMessage(err) });
     }
-  }, [navigate, robotId, name]);
+  }, [navigate, robotId, name, robot]);
 
   // Not found / failed to load — keep the header and its way back.
   if (!robot && error && !isLoading) {
@@ -161,6 +163,7 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
   }
 
   const canExecuteCommands = canCommand && isRobotAvailable(robot) && !isCommandLoading;
+  const provisioning = robotProvisioning(robot);
 
   return (
     <div className={cn('flex flex-col gap-6', className)}>
@@ -168,10 +171,10 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
         eyebrow="Operate"
         back={BACK}
         title={robot.name}
-        description={`${robot.model} · ${robot.location?.place ?? 'Place unknown'}`}
+        description={provisioning ? robot.model : `${robot.model} · ${robot.location?.place ?? 'Place unknown'}`}
         meta={
           <>
-            <RobotStatusTag status={robot.status} />
+            <RobotStatusTag status={robot.status} provisioning={provisioning?.state} />
             <ProvenanceTag source={provenanceOf(telemetry, isTelemetryConnected)} />
           </>
         }

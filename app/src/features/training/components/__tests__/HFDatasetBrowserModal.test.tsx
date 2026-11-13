@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { HFDatasetBrowserModal } from '../HFDatasetBrowserModal';
 import { useImportJobsStore } from '../../store/importJobsStore';
 import type { Dataset, HFDatasetPreview } from '../../types';
@@ -71,6 +71,40 @@ beforeEach(() => {
   previewHuggingFace.mockResolvedValue(grootPreview());
   importFromHuggingFace.mockResolvedValue({ datasetId: 'ds-new' });
   searchHuggingFace.mockResolvedValue([]);
+});
+
+describe('the Featured list (TASK-477)', () => {
+  it('offers our own G1 recording and a small SO-101 dataset, each with its real numbers', () => {
+    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
+    const table = screen.getByRole('table', { name: 'Featured datasets' });
+
+    const ours = within(table).getByText('G1 — Apple to Plate (our recording)').closest('tr') as HTMLElement;
+    expect(ours).toHaveTextContent('43-wide state and action, 260 episodes at 15 fps, one ego-view camera, 310 MB');
+    expect(ours).toHaveTextContent('Unitree G1');
+
+    const arm = within(table).getByText('SO-101 — Object in Box').closest('tr') as HTMLElement;
+    expect(arm).toHaveTextContent('6-wide state and action, 101 episodes, one front camera, 51 MB');
+    expect(arm).toHaveTextContent('SO-101');
+  });
+
+  it.each([
+    ['G1 — Apple to Plate (our recording)', 'ycchen0106/g1-apple-to-plate'],
+    ['SO-101 — Object in Box', 'Thytu/so101-object-in-box_v0.4-fixed'],
+  ])('previews %s as %s', async (title, repoId) => {
+    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
+    const row = screen.getByText(title).closest('tr') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: 'Preview' }));
+    await screen.findByTestId('hf-preview-step');
+    expect(previewHuggingFace).toHaveBeenCalledWith(repoId, undefined);
+  });
+
+  it('lists no repo twice', () => {
+    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
+    const rows = within(screen.getByRole('table', { name: 'Featured datasets' })).getAllByRole('row').slice(1);
+    const titles = rows.map((r) => r.querySelector('td')?.textContent);
+    expect(new Set(titles).size).toBe(titles.length);
+    expect(titles.length).toBeGreaterThanOrEqual(10);
+  });
 });
 
 describe('what the modal shows before committing to a download', () => {
