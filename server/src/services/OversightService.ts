@@ -11,6 +11,7 @@
  * - Art. 14(3): Automation bias prevention
  */
 
+import { runInBackground } from '../utils/backgroundTask.js';
 import {
   manualControlSessionRepository,
   verificationScheduleRepository,
@@ -80,7 +81,10 @@ export class OversightService {
 
     // Check for due verifications every 5 minutes
     this.dueVerificationCheckInterval = setInterval(
-      () => this.checkDueVerifications(),
+      () =>
+        runInBackground('[OversightService] due verification check failed:', () =>
+          this.checkDueVerifications()
+        ),
       5 * 60 * 1000
     );
 

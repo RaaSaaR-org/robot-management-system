@@ -4,6 +4,7 @@
  * @feature safety
  */
 
+import { runInBackground } from '../utils/backgroundTask.js';
 import {
   robotManager,
   type Robot,
@@ -601,8 +602,8 @@ class SafetyService {
     console.log(`[SafetyService] Starting robot heartbeats every ${intervalMs}ms`);
 
     // Create interval for heartbeat cycle
-    const heartbeatInterval = setInterval(async () => {
-      await this.sendHeartbeats();
+    const heartbeatInterval = setInterval(() => {
+      runInBackground('[SafetyService] heartbeat failed:', () => this.sendHeartbeats());
     }, intervalMs);
 
     this.heartbeatIntervals.set('main', heartbeatInterval);

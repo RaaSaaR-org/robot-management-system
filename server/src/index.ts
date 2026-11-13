@@ -8,6 +8,7 @@ import './config/env.js';
 import { createServer } from 'http';
 import { createApp } from './app.js';
 import { logger } from './utils/logger.js';
+import { registerProcessHandlers } from './utils/processHandlers.js';
 import { setupWebSocket } from './websocket/index.js';
 import { teleopProxyRoute } from './websocket/teleopProxyRoute.js';
 import { connectDatabase, disconnectDatabase } from './database/index.js';
@@ -79,6 +80,10 @@ async function requeueInterruptedValidations(): Promise<void> {
 }
 
 async function main() {
+  // Before anything can run in the background: an unhandled rejection is
+  // logged, and only ends the process where the policy says so (TASK-433).
+  registerProcessHandlers();
+
   logger.info('Starting A2A Server...');
 
   // Before anything is accepted: a production key that cannot encrypt would

@@ -17,6 +17,7 @@ import {
 } from '../repositories/IncidentRepository.js';
 import { breachAssessmentService } from './BreachAssessmentService.js';
 import { alertService } from './AlertService.js';
+import { runInBackground } from '../utils/backgroundTask.js';
 import type {
   Incident,
   IncidentNotification,
@@ -387,17 +388,21 @@ export class NotificationWorkflowService {
    */
   private startOverdueChecker(): void {
     // Check every 5 minutes
-    this.overdueCheckInterval = setInterval(
-      async () => {
-        await this.checkAndMarkOverdue();
-      },
-      5 * 60 * 1000
-    );
+    this.overdueCheckInterval = setInterval(() => this.runOverdueCheck(), 5 * 60 * 1000);
 
     // Also run immediately
-    this.checkAndMarkOverdue().catch((err) => {
-      console.error('[NotificationWorkflowService] Error checking overdue:', err);
-    });
+    this.runOverdueCheck();
+  }
+
+  /**
+   * One overdue check nobody awaits. A failure (a database timeout, say) is
+   * logged and the next interval tick runs; it must never reach the process as
+   * an unhandled rejection (TASK-433).
+   */
+  private runOverdueCheck(): void {
+    runInBackground('[NotificationWorkflowService] Error checking overdue:', () =>
+      this.checkAndMarkOverdue()
+    );
   }
 
   /**

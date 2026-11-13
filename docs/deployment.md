@@ -463,6 +463,7 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `ALLOW_SELF_REGISTRATION` | No | `false` | With auth on, let anyone create an account via `POST /api/auth/register`. Off: the endpoint answers 403 `SELF_REGISTRATION_DISABLED` and admins add users. Ignored (always closed) under multi-tenancy |
 | `CORS_ORIGINS` | No | localhost ports | Comma-separated allowed origins |
 | `RATE_LIMIT_DISABLED` | No | `false` | Disable rate limiting (dev only) |
+| `UNHANDLED_REJECTION_EXIT` | No | `true` in production, else `false` | An unhandled promise rejection is always logged. `true`: the process then exits with code 1 so the orchestrator restarts it. `false`: it keeps running — for a single-replica instance where the restart is the outage |
 | `GOOGLE_API_KEY` | No | — | Google/Gemini API key for NL commands |
 | `WORKER_API_TOKEN` | Prod | — | Shared token for GPU worker auth |
 | `NATS_SERVERS` | No | `nats://localhost:4222` | NATS connection URL |

@@ -1177,3 +1177,41 @@ describe('onApprovalEvent', () => {
     expect(good).toHaveBeenCalled();
   });
 });
+
+// ===========================================================================
+// SLA and escalation timers survive a database timeout (TASK-433)
+// ===========================================================================
+
+describe('initialize: timers with a failing database', () => {
+  it('logs a failing SLA check and a failing escalation check, and runs both again', async () => {
+    vi.useFakeTimers();
+    const { resetBackgroundFailureLogs } = await import('../../utils/backgroundTask.js');
+    resetBackgroundFailureLogs();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const timeout = Object.assign(new Error('Socket timeout'), { code: 'P1008' });
+      vi.mocked(approvalRequestRepository.findNearingDeadline).mockRejectedValue(timeout);
+      vi.mocked(approvalRequestRepository.findOverdue).mockRejectedValue(timeout);
+
+      service.initialize();
+
+      // 30 min: the SLA check has run twice, the escalation check once.
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      expect(approvalRequestRepository.findNearingDeadline).toHaveBeenCalledTimes(2);
+      expect(approvalRequestRepository.findOverdue).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith('[ApprovalWorkflowService] SLA compliance check failed:', timeout);
+      expect(errorSpy).toHaveBeenCalledWith('[ApprovalWorkflowService] overdue escalation failed:', timeout);
+
+      // 60 min: both loops are still running.
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      expect(approvalRequestRepository.findNearingDeadline).toHaveBeenCalledTimes(4);
+      expect(approvalRequestRepository.findOverdue).toHaveBeenCalledTimes(2);
+    } finally {
+      service.shutdown();
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});

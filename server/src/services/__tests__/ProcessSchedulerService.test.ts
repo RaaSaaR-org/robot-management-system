@@ -382,3 +382,31 @@ describe('ProcessSchedulerService singleton', () => {
     expect(processSchedulerService).toBeInstanceOf(ProcessSchedulerService);
   });
 });
+
+// ===========================================================================
+// a detached nextRunAt write survives a database timeout (TASK-433)
+// ===========================================================================
+
+describe('tick: first-time scheduling with a failing database', () => {
+  it('logs a recordScheduledRun() that rejects instead of leaving it unhandled', async () => {
+    const { resetBackgroundFailureLogs } = await import('../../utils/backgroundTask.js');
+    resetBackgroundFailureLogs();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const timeout = Object.assign(new Error('Socket timeout'), { code: 'P1008' });
+    const def = makeDefinition({ nextRunAt: undefined });
+    processRepository.findSchedulableDefinitions.mockResolvedValue([def]);
+    processRepository.recordScheduledRun.mockRejectedValue(timeout);
+
+    // The write is not awaited by the tick; unhandled, its rejection ends the process.
+    await processSchedulerService.tick(new Date('2026-06-01T12:00:00.000Z'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(errorSpy).toHaveBeenCalledWith('[ProcessScheduler] Failed to initialise nextRunAt for def-1:', timeout);
+
+    // The next tick tries again.
+    await processSchedulerService.tick(new Date('2026-06-01T12:00:30.000Z'));
+    expect(processRepository.recordScheduledRun).toHaveBeenCalledTimes(2);
+    errorSpy.mockRestore();
+  });
+});

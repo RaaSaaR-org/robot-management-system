@@ -565,3 +565,81 @@ describe('initialize and shutdown', () => {
     }
   });
 });
+
+// ===========================================================================
+// overdue checker survives a database timeout (TASK-433)
+// ===========================================================================
+
+/** What Prisma raises when the database does not answer in time. */
+function socketTimeout(): Error {
+  return Object.assign(new Error('Socket timeout'), {
+    name: 'PrismaClientKnownRequestError',
+    code: 'P1008',
+  });
+}
+
+describe('overdue checker: a failing database call', () => {
+  const FIVE_MINUTES = 5 * 60 * 1000;
+
+  it('logs a markOverdue() that rejects on an interval tick, and runs the next tick', async () => {
+    vi.useFakeTimers();
+    const { resetBackgroundFailureLogs } = await import('../../utils/backgroundTask.js');
+    resetBackgroundFailureLogs();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      vi.mocked(notificationTemplateRepository.findAll).mockResolvedValue([makeTemplate()]);
+      const markOverdue = vi.mocked(incidentNotificationRepository.markOverdue);
+      markOverdue.mockResolvedValue(0);
+
+      await service.initialize();
+      expect(markOverdue).toHaveBeenCalledTimes(1); // the immediate run
+
+      // The interval tick is the one that killed the dev server on 2026-10-29:
+      // an unhandled rejection here fails this test run by itself.
+      const timeout = socketTimeout();
+      markOverdue.mockRejectedValueOnce(timeout);
+      await vi.advanceTimersByTimeAsync(FIVE_MINUTES);
+
+      expect(markOverdue).toHaveBeenCalledTimes(2);
+      expect(errorSpy).toHaveBeenCalledWith('[NotificationWorkflowService] Error checking overdue:', timeout);
+
+      // The loop is still alive: the next tick runs, and works again.
+      markOverdue.mockResolvedValue(2);
+      await vi.advanceTimersByTimeAsync(FIVE_MINUTES);
+
+      expect(markOverdue).toHaveBeenCalledTimes(3);
+      expect(alertService.createAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceId: 'notification-workflow' })
+      );
+
+      service.shutdown();
+    } finally {
+      errorSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps ticking through a database that stays down', async () => {
+    vi.useFakeTimers();
+    const { resetBackgroundFailureLogs } = await import('../../utils/backgroundTask.js');
+    resetBackgroundFailureLogs();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      vi.mocked(notificationTemplateRepository.findAll).mockResolvedValue([makeTemplate()]);
+      const markOverdue = vi.mocked(incidentNotificationRepository.markOverdue);
+      markOverdue.mockRejectedValue(socketTimeout());
+
+      await service.initialize();
+      await vi.advanceTimersByTimeAsync(3 * FIVE_MINUTES);
+
+      // The immediate run and three ticks, each one logged.
+      expect(markOverdue).toHaveBeenCalledTimes(4);
+      expect(errorSpy).toHaveBeenCalledTimes(4);
+
+      service.shutdown();
+    } finally {
+      errorSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});

@@ -4,6 +4,7 @@
  * @feature vla
  */
 
+import { runInBackground } from '../utils/backgroundTask.js';
 import { EventEmitter } from 'events';
 import { robotManager } from './RobotManager.js';
 import { deploymentRepository } from '../repositories/index.js';
@@ -103,14 +104,18 @@ export class DeploymentMetricsService extends EventEmitter {
     });
 
     // Start polling interval
-    const pollInterval = setInterval(async () => {
-      await this.pollDeploymentMetrics(deploymentId);
+    const pollInterval = setInterval(() => {
+      runInBackground(`[DeploymentMetricsService] metrics poll failed (${deploymentId}):`, () =>
+        this.pollDeploymentMetrics(deploymentId)
+      );
     }, METRICS_POLL_INTERVAL_MS);
     this.pollIntervals.set(deploymentId, pollInterval);
 
     // Start threshold check interval
-    const thresholdInterval = setInterval(async () => {
-      await this.checkDeploymentThresholds(deploymentId);
+    const thresholdInterval = setInterval(() => {
+      runInBackground(`[DeploymentMetricsService] threshold check failed (${deploymentId}):`, () =>
+        this.checkDeploymentThresholds(deploymentId)
+      );
     }, THRESHOLD_CHECK_INTERVAL_MS);
     this.thresholdIntervals.set(deploymentId, thresholdInterval);
 

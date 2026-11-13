@@ -5,6 +5,7 @@
  * @feature processes
  */
 
+import { runInBackground } from '../utils/backgroundTask.js';
 import {
   computeNextRun as computeNextCronRun,
   isDue as isCronDue,
@@ -112,10 +113,12 @@ export class ProcessSchedulerService {
       // First-time scheduling — initialise nextRunAt and skip this tick.
       const next = this.computeNextRun(def.cronExpression, now);
       if (next) {
-        void processRepository.recordScheduledRun(
-          def.id,
-          def.lastScheduledRunAt ? new Date(def.lastScheduledRunAt) : now,
-          next
+        runInBackground(`[ProcessScheduler] Failed to initialise nextRunAt for ${def.id}:`, () =>
+          processRepository.recordScheduledRun(
+            def.id,
+            def.lastScheduledRunAt ? new Date(def.lastScheduledRunAt) : now,
+            next
+          )
         );
       }
       return false;
