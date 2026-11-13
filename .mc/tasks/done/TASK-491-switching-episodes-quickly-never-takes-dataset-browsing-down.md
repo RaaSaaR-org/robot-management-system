@@ -99,6 +99,15 @@ samples the S3 client's socket pool.
     list or the health probe;
   - `getStream(bucket, key, range, { signal })` passes the signal to the SDK
     and destroys the body when it fires later;
+  - response bodies are timed by the client itself (`endWhenStalled`), because
+    the SDK's `socketTimeout` is not: at any setting from 6 s up — the 120 s
+    default included — it arms its timer three seconds into a request and
+    cancels it when the answer begins, so a store that answered at once and
+    went quiet halfway through a body left `download()` / `downloadRange()`
+    pending for good (found in review, with a store that sends half a body).
+    A body is ended when its reader has waited on a silent store for the idle
+    timeout, or when nobody ever read it; a reader that is itself the slow
+    side — a paused player — keeps its stream;
   - uploads keep their own per-request connections (the SDK's
     `Expect: 100-continue` path) and have no deadline, only the idle timeout —
     a part that is moving is never cut off.
@@ -170,9 +179,21 @@ bottle dataset 10.9 s (8.2 s before, one run each) and, throttled to 1 MB/s per
 connection so that a 32 MB part takes 32 s and the whole upload 161 s, `ready`
 both times; one 216 MB video streamed whole at 1.4 MB/s over 150 s,
 byte-identical to the source; the 1,856 s head video played first second to
-last in Chromium at 16×; and with the idle timeout turned down to 4 s, a player
-left paused for 12 s played to the end all the same (the browser asks again
-when the server has let the idle stream go).
+last in Chromium at 16×.
+
+Added in review, on the same kind of stack (own proxy and driver): a fake store
+that sends half a body and stops left `download()`, `downloadRange()` and a
+stream pending after 25 s with the idle timeout at 8 s, and ends all three at
+8.0 s now with a `TimeoutError`. With the idle timeout at 4 s, a client that
+stops reading for 15 s gets the whole 208 MB file afterwards (also when it stops
+on the last 3 MB), and eight readers at 400 KB/s ran 90 s each without one being
+cut — the first version of that check cut one in six, in the instant a slow
+reader asks for more and nothing has landed yet, which is why a body is only
+ended on two checks in a row with no byte in between. 2,000 dropped requests in
+bursts of eight: zero 5xx, 0 sockets busy afterwards. Twenty uncached frame
+reads against a silent store come back in waves of six, 15 s apart (the gate),
+all answered by 60 s, none left behind; `/health` says `unavailable` /
+`connectivity` meanwhile and `ready` one probe period after the store is back.
 
 Not reproduced locally: the early `500 {"error":"Failed to stream video"}`
 answers the live instance gave before it started hanging. Locally the same
