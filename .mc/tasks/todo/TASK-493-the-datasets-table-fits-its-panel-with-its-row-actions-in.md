@@ -112,7 +112,8 @@ audience-eyed pass ahead of the demo day on 2026-11-16. Each is on a page the de
 - `DatasetProvenance` (new): "Imported from Hugging Face: <owner/repo> at revision
   37cb1d6e" — the repo a link to that exact commit on the Hub, the full SHA on hover.
   **Not yet placed in the dataset page header**: that header lives in
-  `DatasetEpisodesPage.tsx`, which TASK-492 is rewriting at the same time; see Notes.
+  `DatasetEpisodesPage.tsx`, which TASK-492 is rewriting at the same time; placing it is
+  TASK-494.
 - `SiteMap`: an expected robot bound to the site is no longer listed as "not aligned —
   fence not enforcing". With a `plannedPlace` that is a zone of the site it is drawn in
   that zone as a dashed, hollow ring labelled "<name> (planned)" — never the solid dot of
@@ -164,9 +165,9 @@ audience-eyed pass ahead of the demo day on 2026-11-16. Each is on a page the de
       robots at a planned place that cannot be read as live.
 - [x] No sentence puts `'s` after a robot's name; the docs count is the number of
       documents listed.
-- [x] The dataset list says "From Hugging Face: …".
-- [ ] The dataset page header says "Imported from Hugging Face: …" with a link — component
-      and tests are in; the one-line wiring waits for TASK-492 (see Notes).
+- [x] The dataset list says "From Hugging Face: …", and the component that says
+      "Imported from Hugging Face: <linked repo> at revision …" exists with its tests.
+      Placing it in the dataset page header is TASK-494 (see Notes) and is not claimed here.
 
 ## Test Strategy
 
@@ -189,7 +190,7 @@ audience-eyed pass ahead of the demo day on 2026-11-16. Each is on a page the de
   being changed by TASK-492 in parallel, and this task was told to keep out of it. What
   is left is to replace the `data-testid="dataset-source"` span in that page's
   `PageHeader` `meta` with `<DatasetProvenance dataset={dataset} />` (same test id) once
-  TASK-492 has merged.
+  TASK-492 has merged. Filed as [[TASK-494]], blocked by [[TASK-492]].
 - **Name for the live 31-wide type.** Its layout is 3 waist + 14 arm + 14 Dex3-1 hand
   joints (`meta/info.json` of the bottle-sorting set), so "Unitree G1 upper body + Dex3-1
   hands" is accurate; "arms + Dex3-1 hands" is already the name of the standard 28-wide
