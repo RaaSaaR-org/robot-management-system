@@ -162,6 +162,8 @@ describe('creating a view from the episode selection', () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId('episode-check-0')).toBeInTheDocument());
 
+    // The views list is one of the tabs under the stage (TASK-484).
+    fireEvent.click(screen.getByRole('tab', { name: 'Views' }));
     fireEvent.click(screen.getByTestId('views-create'));
     fireEvent.click(screen.getByTestId('view-source-flags'));
     fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Unflagged only' } });

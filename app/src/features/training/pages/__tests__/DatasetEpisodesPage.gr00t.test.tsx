@@ -93,9 +93,9 @@ const STATS = {
   action: { min: ramp(99), max: ramp(101), mean: ramp(100), std: ramp(0).map(() => 0.5), count: [171625] },
 };
 
-function renderPage() {
+function renderPage(search = '') {
   return render(
-    <MemoryRouter initialEntries={['/datasets/apple/episodes']}>
+    <MemoryRouter initialEntries={[`/datasets/apple/episodes${search}`]}>
       <Routes>
         <Route path="/datasets/:datasetId/episodes" element={<DatasetEpisodesPage />} />
       </Routes>
@@ -137,6 +137,8 @@ describe('the episode page on a GR00T v2.1 dataset', () => {
 
   it('fills the statistics panel, by joint group', async () => {
     renderPage();
+    // Statistics is one of the tabs under the stage (TASK-484).
+    await userEvent.click(await screen.findByRole('tab', { name: 'Statistics' }));
 
     const panel = within(await screen.findByTestId('dataset-stats-panel'));
     await waitFor(() => expect(panel.getByTestId('stats-row-0')).toBeInTheDocument());
@@ -152,7 +154,7 @@ describe('the episode page on a GR00T v2.1 dataset', () => {
   it('keeps the info.json names and an empty panel when the dataset has neither file', async () => {
     trainingApiMock.getDatasetModality.mockResolvedValue(null);
     trainingApiMock.getDatasetStats.mockResolvedValue({ datasetId: 'apple', hasStats: false });
-    renderPage();
+    renderPage('?tab=statistics');
 
     expect(await screen.findByText('No statistics for this dataset')).toBeInTheDocument();
     const legend = within(await screen.findByTestId('joint-chart-legend'));
@@ -163,7 +165,7 @@ describe('the episode page on a GR00T v2.1 dataset', () => {
   it('still renders when the two requests fail', async () => {
     trainingApiMock.getDatasetModality.mockRejectedValue(new Error('503'));
     trainingApiMock.getDatasetStats.mockRejectedValue(new Error('503'));
-    renderPage();
+    renderPage('?tab=statistics');
 
     expect(await screen.findByText('No statistics for this dataset')).toBeInTheDocument();
     expect(await screen.findByTestId('joint-chart-legend')).toBeInTheDocument();

@@ -13,7 +13,8 @@ const EPISODES_URL = '/#/datasets/demo-g1-edu/episodes';
 
 test.describe('Dataset discussion', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto(EPISODES_URL);
+    // The discussion is one of the tabs under the episode stage (TASK-484).
+    await page.goto(`${EPISODES_URL}?tab=discussion`);
     await expect(page.getByRole('region', { name: 'Dataset discussion' })).toBeVisible({ timeout: 10_000 });
   });
 
