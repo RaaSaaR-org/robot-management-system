@@ -3,7 +3,7 @@ id: "TASK-482"
 aliases: []
 title: "Browsing episodes never trips the API rate limit, and a throttled request recovers on its own"
 slug: "browsing-episodes-never-trips-the-api-rate-limit-and-a"
-status: "in-progress"                # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
