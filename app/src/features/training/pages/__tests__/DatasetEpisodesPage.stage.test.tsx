@@ -145,7 +145,10 @@ describe('the episode stage', () => {
     expect(endFrame()).toHaveValue(null);
     expect(screen.queryByText(/samples/)).not.toBeInTheDocument();
     expect(screen.queryByTestId('joint-chart-cursor')).not.toBeInTheDocument();
-    expect(screen.getByTestId('transport-clock')).toHaveTextContent('0:00.0 / 0:17.8');
+    // The player follows once the selection has held still for a moment
+    // (TASK-492); the click came right after the page opened episode 0.
+    await waitFor(() => expect(screen.getByTestId('transport-clock')).toHaveTextContent('0:00.0 / 0:17.8'));
+    expect(screen.queryByText(/samples/)).not.toBeInTheDocument();
 
     await act(async () => { slow.resolve({ frames: framesOf(4), total: 4 }); });
     expect(await screen.findByText(/4 samples/)).toBeInTheDocument();

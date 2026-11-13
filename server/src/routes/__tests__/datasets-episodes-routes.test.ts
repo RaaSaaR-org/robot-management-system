@@ -9,7 +9,9 @@
  * numbers storage does not hold.
  */
 
-import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vitest';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import express from 'express';
 import request from 'supertest';
 import { FRAME_FIELDS, frameRows, parquetBuffer } from '../../services/lerobot/__tests__/parquetFixtures.js';
@@ -24,6 +26,8 @@ const storage = vi.hoisted(() => ({
   reads: [] as string[],
   // Every round trip to storage, reads included: `LIST …`, `HEAD …`, `GET …`.
   calls: [] as string[],
+  // When set, every object read waits for it: storage that has not answered yet.
+  hold: null as Promise<void> | null,
 }));
 
 /** What S3 throws for an object that is not there. */
@@ -61,6 +65,7 @@ vi.mock('../../storage/rustfs-client.js', () => {
     },
     async download(bucket: string, key: string) {
       storage.calls.push(`GET ${key}`);
+      if (storage.hold) await storage.hold;
       if (!storage.buckets[bucket]?.[key]) throw missing('NoSuchKey');
       storage.reads.push(key);
       return storage.buckets[bucket][key];
@@ -337,8 +342,9 @@ describe('RustFS dataset episodes and frames', () => {
       storage.calls = [];
       const next = await frames(5);
       expect(next.body.frames[9].observationState[0]).toBe(5009);
-      // Only the bytes of the file holding it; even its size is remembered.
-      expect(storage.calls).toEqual([`GET ${DATA}`]);
+      // Nothing at all: the small data file holds every episode and its
+      // bytes were kept from the first read (TASK-492).
+      expect(storage.calls).toEqual([]);
 
       storage.calls = [];
       expect((await list()).body.episodes).toHaveLength(6);
@@ -371,7 +377,7 @@ describe('RustFS dataset episodes and frames', () => {
       expect(datasetReadCacheUsage().episodeTables.entries).toBe(1);
 
       invalidateDatasetReads('ds-bottle');
-      expect(Object.values(datasetReadCacheUsage()).map((u) => u.entries)).toEqual([0, 0, 0, 0]);
+      expect(Object.values(datasetReadCacheUsage()).map((u) => u.entries)).toEqual([0, 0, 0, 0, 0, 0]);
       storage.buckets = { 'training-datasets': {} };
       expect((await list()).status).toBe(422);
       expect((await frames(1)).status).toBe(422);
@@ -384,6 +390,152 @@ describe('RustFS dataset episodes and frames', () => {
       const cold = await frames(3);
       expect(cold.status).toBe(503);
       expect(cold.body.error).toMatch(/Object storage is unavailable/);
+    });
+
+    describe('a viewer who has moved on (TASK-492)', () => {
+      let server: http.Server;
+      let port: number;
+      let release: () => void;
+
+      beforeEach(async () => {
+        server = http.createServer(app);
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+        port = (server.address() as AddressInfo).port;
+        storage.hold = new Promise<void>((resolve) => (release = resolve));
+        // The episode table is in memory, as it is once the page has listed the episodes.
+        const held = storage.hold;
+        storage.hold = null;
+        await list();
+        storage.hold = held;
+        storage.calls = [];
+      });
+      afterEach(async () => {
+        release();
+        storage.hold = null;
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+      });
+
+      /** A frames request over a real socket, which the test can drop. */
+      function open(episode: number) {
+        let finish!: (answer: { status: number; body: { total?: number } } | null) => void;
+        const answer = new Promise<{ status: number; body: { total?: number } } | null>((resolve) => (finish = resolve));
+        const req = http.get(
+          { host: '127.0.0.1', port, path: `/api/datasets/ds-bottle/episodes/${episode}/frames`, agent: false },
+          (res) => {
+            let text = '';
+            res.on('data', (chunk) => (text += chunk));
+            res.on('end', () => finish({ status: res.statusCode ?? 0, body: JSON.parse(text) }));
+          },
+        );
+        req.on('error', () => finish(null));
+        return { answer, drop: () => req.destroy() };
+      }
+      const until = async (condition: () => boolean) => {
+        for (let i = 0; i < 200 && !condition(); i++) await new Promise((r) => setTimeout(r, 5));
+        expect(condition()).toBe(true);
+      };
+      const framesLogged = (episode: number) =>
+        logSpy.mock.calls.filter((c: unknown[]) => String(c[0]).includes(`frames from parquet for episode ${episode},`)).length;
+      let logSpy: ReturnType<typeof vi.spyOn>;
+      beforeEach(() => {
+        logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      });
+      afterEach(() => logSpy.mockRestore());
+
+      it('stops reading an episode whose only request was dropped, and reads it afresh when asked again', async () => {
+        const viewer = open(2);
+        await until(() => storage.calls.includes(`GET ${DATA}`));
+        viewer.drop();
+        expect(await viewer.answer).toBeNull();
+        // Give the server its turn to notice, then let storage answer.
+        await new Promise((r) => setTimeout(r, 30));
+        release();
+        await new Promise((r) => setTimeout(r, 30));
+
+        // Nothing was decoded and nothing was kept for it.
+        expect(framesLogged(2)).toBe(0);
+        expect(datasetReadCacheUsage().episodeFrames.entries).toBe(0);
+
+        storage.hold = null;
+        const back = await frames(2);
+        expect(back.status).toBe(200);
+        expect(back.body.total).toBe(10);
+        expect(back.body.frames[0].observationState[0]).toBe(2000);
+      });
+
+      it('finishes the read for a second request that is still waiting for the same episode', async () => {
+        const left = open(4);
+        const stays = open(4);
+        await until(() => storage.calls.includes(`GET ${DATA}`));
+        // Both are waiting on the one read.
+        await new Promise((r) => setTimeout(r, 30));
+        left.drop();
+        expect(await left.answer).toBeNull();
+        await new Promise((r) => setTimeout(r, 30));
+        release();
+
+        const answer = await stays.answer;
+        expect(answer?.status).toBe(200);
+        expect(answer?.body.total).toBe(10);
+        expect(storage.calls.filter((c) => c === `GET ${DATA}`)).toHaveLength(1);
+        expect(datasetReadCacheUsage().episodeFrames.entries).toBe(1);
+      });
+
+      it('takes dropped requests out of the queue for a read slot, so the newest is not behind them', async () => {
+        // Six reads hold every slot; a seventh and eighth request queue behind them.
+        // v2.1 episodes each have a file of their own, so each is a read of its own.
+        datasets.get.mockImplementation(async (id: string) => (id === 'ds-apple' ? DATASET : V30));
+        storage.buckets = { 'training-datasets': { ...v30Files, ...v21Files } };
+        const openApple = (episode: number) => {
+          const req = http.get({ host: '127.0.0.1', port, path: `/api/datasets/ds-apple/episodes/${episode}/frames`, agent: false });
+          req.on('error', () => undefined);
+          return req;
+        };
+        const holders = [0, 1, 2].map(openApple);
+        const more = [0, 1, 3].map((episode) => open(episode));
+        await until(() => storage.calls.filter((c) => c.startsWith('GET')).length === 4);
+        // Episodes 0, 1 and 3 of the bottle file share its one download; the
+        // apple episodes hold three more slots — six reads in all.
+        const queuedOld = open(4);
+        const queuedNew = open(5);
+        await new Promise((r) => setTimeout(r, 30));
+
+        queuedOld.drop();
+        expect(await queuedOld.answer).toBeNull();
+        await new Promise((r) => setTimeout(r, 30));
+        release();
+        expect((await queuedNew.answer)?.status).toBe(200);
+        for (const m of more) expect((await m.answer)?.status).toBe(200);
+        // The dropped one never got a slot: it was not read.
+        expect(framesLogged(4)).toBe(0);
+        for (const holder of holders) holder.destroy();
+      });
+    });
+
+    describe('?maxPoints — frames for a chart (TASK-492)', () => {
+      it('thins the page to evenly spaced frames and still reports the real total', async () => {
+        const all = await frames(3);
+        const thinned = await request(app).get('/api/datasets/ds-bottle/episodes/3/frames?maxPoints=4');
+        expect(thinned.status).toBe(200);
+        expect(thinned.body.total).toBe(10);
+        expect(thinned.body.frames.map((f: { frameIndex: number }) => f.frameIndex)).toEqual([0, 3, 6, 9]);
+        expect(thinned.body.frames[1]).toEqual(all.body.frames[3]);
+      });
+
+      it('changes nothing when the page is already small enough, or the value is not a number', async () => {
+        const all = await frames(3);
+        for (const value of ['400', '10', 'abc', '0', '-5']) {
+          const answer = await request(app).get(`/api/datasets/ds-bottle/episodes/3/frames?maxPoints=${value}`);
+          expect(answer.body).toEqual(all.body);
+        }
+      });
+
+      it('thins after paging, so offset and limit mean what they did', async () => {
+        const answer = await request(app).get('/api/datasets/ds-bottle/episodes/3/frames?offset=2&limit=6&maxPoints=2');
+        expect(answer.body.frames.map((f: { frameIndex: number }) => f.frameIndex)).toEqual([2, 7]);
+        expect(answer.body.total).toBe(10);
+      });
     });
   });
 });

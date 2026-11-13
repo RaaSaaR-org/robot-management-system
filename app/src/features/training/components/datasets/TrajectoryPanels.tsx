@@ -34,6 +34,11 @@ const X_AXIS_HEIGHT = 24;
 
 export interface JointChartPanelProps {
   frames: FrameData[];
+  /**
+   * How many frames the episode has, when `frames` is a thinned-out selection
+   * of them (the page asks for at most a few hundred). Defaults to `frames.length`.
+   */
+  sampleCount?: number | null;
   jointNames: string[];
   /**
    * Joint groups of the vector (`meta/modality.json`). When given, the chart
@@ -58,7 +63,7 @@ export interface JointChartPanelProps {
 const tsFormat = (v: number) => v.toFixed(1);
 const labelFormat = (v: unknown) => `t = ${Number(v).toFixed(2)}s`;
 
-export function JointChartPanel({ frames, jointNames, groups, isLoading, currentTime, isPlaying = false, error, onRetry, className }: JointChartPanelProps) {
+export function JointChartPanel({ frames, sampleCount, jointNames, groups, isLoading, currentTime, isPlaying = false, error, onRetry, className }: JointChartPanelProps) {
   // The viewer's choice, kept across episodes; until they make one, the group
   // that moves most in the episode on screen.
   const [pickedGroup, setPickedGroup] = useState<string | null>(null);
@@ -119,7 +124,10 @@ export function JointChartPanel({ frames, jointNames, groups, isLoading, current
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pt-3">
         <h2 className="font-display text-base font-semibold tracking-[-0.01em] text-ink-primary">Joint trajectories</h2>
         {hasChart && (
-          <p className="text-xs text-ink-tertiary">{frames.length} samples · solid = state, dashed = action</p>
+          <p className="text-xs text-ink-tertiary">
+            {sampleCount ?? frames.length} samples
+            {sampleCount != null && sampleCount > frames.length ? ` (${frames.length} drawn)` : ''} · solid = state, dashed = action
+          </p>
         )}
         {hasChart && groups && activeGroup && (
           <SegmentedControl

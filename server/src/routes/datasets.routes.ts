@@ -42,11 +42,13 @@ import { readFile } from 'fs/promises';
 import type { Readable } from 'stream';
 import { DatasetViewError, resolveLocalView } from '../services/lerobot/LocalDatasetView.js';
 import { DatasetStoreError } from '../services/lerobot/DatasetTree.js';
+import { isReadAbandoned } from '../services/lerobot/ReadCache.js';
 import {
   DatasetReadError,
   episodeFramesCache,
   episodeWeight,
   pageOf,
+  thinFrames,
   parseEpisodeRecords,
   readRemoteEpisodeFrames,
   readEpisodeTable,
@@ -1351,6 +1353,11 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
     const limitRaw = query.limit ? parseInt(query.limit, 10) : 500;
     const offset = Number.isFinite(offsetRaw) ? Math.max(0, offsetRaw) : 0;
     const limit = Number.isFinite(limitRaw) ? Math.max(1, limitRaw) : 500;
+    // ?maxPoints=N thins the page to N evenly spaced frames for a chart; `total`
+    // stays the episode's real length (TASK-492).
+    const maxPointsRaw = query.maxPoints ? parseInt(query.maxPoints, 10) : NaN;
+    const thin = (frames: FrameData[]): FrameData[] =>
+      Number.isFinite(maxPointsRaw) && maxPointsRaw > 0 ? thinFrames(frames, maxPointsRaw) : frames;
 
     const info = typeof dataset.infoJson === 'string'
       ? JSON.parse(dataset.infoJson as string)
@@ -1368,41 +1375,61 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
       if (local === null) {
         return res.status(404).json({ error: 'Episode frames not found' });
       }
-      return res.json({ frames: local.frames, total: local.total });
+      return res.json({ frames: thin(local.frames), total: local.total });
     }
 
     // RustFS: the parquet holding this episode, or an error naming the file
     // that could not be read — never generated frames (TASK-354).
     // The decoded episode is cached, keyed by the record's updatedAt, so
     // paging through it reads storage once (TASK-355).
+    //
+    // The read belongs to whoever is waiting for it (TASK-492). A viewer
+    // clicking through episodes drops each request as the next one starts;
+    // this one then leaves the queue for a cold-read slot, or — if it was
+    // already decoding and no other request wants the same episode — stops at
+    // its next pause instead of finishing work nobody will see.
     const versionKey = datasetVersionKey(dataset);
-    const episode = await episodeFramesCache.getOrLoad(`${versionKey}#${episodeIndex}`, episodeWeight, async () => {
-      const store = await rustfsDatasetStore(dataset.storagePath, versionKey);
-      if (!store) throw new DatasetReadError(503, 'Object storage is unavailable, so frames cannot be read');
-      // A v3.0 episode's data file is named by the episode table, which is
-      // cached. It is fetched BEFORE taking a cold-read slot: the table load
-      // takes a slot of its own, and waiting for it while holding one would
-      // let six first-time frame requests starve the read they all wait on.
-      const table =
-        layoutOf(info, dataset.lerobotVersion) === 'v3' ? await remoteEpisodeTable(dataset, info, fps) : null;
-      return coldReadGate(() =>
-        readRemoteEpisodeFrames(
-          store,
-          info,
-          episodeIndex,
-          fps,
-          dataset.lerobotVersion,
-          table ? async () => table : undefined,
-        ),
-      );
-    });
+    const gone = clientGoneSignal(res);
+    const episode = await episodeFramesCache.getOrLoad(
+      `${versionKey}#${episodeIndex}`,
+      episodeWeight,
+      async (stop) => {
+        const store = await rustfsDatasetStore(dataset.storagePath, versionKey);
+        if (!store) throw new DatasetReadError(503, 'Object storage is unavailable, so frames cannot be read');
+        // A v3.0 episode's data file is named by the episode table, which is
+        // cached. It is fetched BEFORE taking a cold-read slot: the table load
+        // takes a slot of its own, and waiting for it while holding one would
+        // let six first-time frame requests starve the read they all wait on.
+        const table =
+          layoutOf(info, dataset.lerobotVersion) === 'v3' ? await remoteEpisodeTable(dataset, info, fps) : null;
+        return coldReadGate(
+          () =>
+            readRemoteEpisodeFrames(
+              store,
+              info,
+              episodeIndex,
+              fps,
+              dataset.lerobotVersion,
+              table ? async () => table : undefined,
+              stop,
+            ),
+          stop,
+        );
+      },
+      gone,
+    );
     const page = pageOf(episode, { offset, limit });
     // scripts/e2e-k3d/test.sh greps this line; keep its wording.
     console.log(
       `[DatasetRoutes] Read ${page.total} frames from parquet for episode ${episodeIndex}, returning ${page.frames.length} (${page.source})`,
     );
-    res.json({ frames: page.frames, total: page.total });
+    res.json({ frames: thin(page.frames), total: page.total });
   } catch (error) {
+    // The client left while its episode was being read: there is nobody to answer.
+    if (isReadAbandoned(error)) {
+      if (!res.headersSent && !res.destroyed) res.status(503).set('Retry-After', '1').json({ error: 'The read was interrupted' });
+      return;
+    }
     sendDatasetReadError(res, req.params.id, error, 'Failed to get episode frames');
   }
 });

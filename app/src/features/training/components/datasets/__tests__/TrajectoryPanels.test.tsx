@@ -87,6 +87,18 @@ describe('JointChartPanel', () => {
     for (const s of swatches) expect(s.style.opacity).toBe('');
   });
 
+  it("says the episode's own length when the chart was given a selection of its frames (TASK-492)", () => {
+    const { rerender } = render(
+      <JointChartPanel frames={frames} sampleCount={688} jointNames={['j0', 'j1']} isLoading={false} currentTime={0} />,
+    );
+    expect(screen.getByText(/688 samples \(3 drawn\)/)).toBeInTheDocument();
+    // Every frame is on the chart: nothing to add.
+    rerender(<JointChartPanel frames={frames} sampleCount={3} jointNames={['j0', 'j1']} isLoading={false} currentTime={0} />);
+    expect(screen.getByText(/^3 samples · /)).toBeInTheDocument();
+    rerender(<JointChartPanel frames={frames} jointNames={['j0', 'j1']} isLoading={false} currentTime={0} />);
+    expect(screen.getByText(/^3 samples · /)).toBeInTheDocument();
+  });
+
   it('does not show a sample count while the next episode loads (TASK-484)', () => {
     render(<JointChartPanel frames={frames} jointNames={['j0', 'j1']} isLoading currentTime={0} />);
     expect(screen.queryByText(/samples/)).not.toBeInTheDocument();

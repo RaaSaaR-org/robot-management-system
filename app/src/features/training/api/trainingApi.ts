@@ -223,21 +223,28 @@ export const trainingApi = {
   },
 
   /**
-   * Get frame data for an episode
+   * Get frame data for an episode. `total` is the episode's real frame count,
+   * whatever the page.
+   *
+   * `maxPoints` asks for at most that many frames of the page, evenly spaced
+   * with the first and last among them — what a chart needs. `signal` drops
+   * the request; the server then stops reading the episode (TASK-492).
    */
   async getEpisodeFrames(
     datasetId: string,
     episodeIndex: number,
     offset?: number,
-    limit?: number
+    limit?: number,
+    options: { maxPoints?: number; signal?: AbortSignal } = {}
   ): Promise<{ frames: FrameData[]; total: number }> {
     const params: Record<string, string> = {};
     if (offset !== undefined) params.offset = String(offset);
     if (limit !== undefined) params.limit = String(limit);
+    if (options.maxPoints !== undefined) params.maxPoints = String(options.maxPoints);
 
     const response = await apiClient.get<{ frames: FrameData[]; total: number }>(
       ENDPOINTS.datasetEpisodeFrames(datasetId, episodeIndex),
-      { params }
+      { params, signal: options.signal }
     );
     return response.data;
   },
