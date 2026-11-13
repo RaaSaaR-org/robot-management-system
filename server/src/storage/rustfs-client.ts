@@ -16,6 +16,10 @@ import {
   HeadBucketCommand,
   ListMultipartUploadsCommand,
   AbortMultipartUploadCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  ListPartsCommand,
+  CompleteMultipartUploadCommand,
   type PutObjectCommandInput,
   type GetObjectCommandInput,
   type ListObjectsV2CommandInput,
@@ -52,6 +56,13 @@ export interface MultipartUploadInfo {
   key: string;
   uploadId: string;
   initiated?: Date;
+}
+
+/** One stored part of a multipart upload that is still open. */
+export interface MultipartPartInfo {
+  partNumber: number;
+  size: number;
+  etag: string;
 }
 
 export interface UploadProgress {
@@ -186,7 +197,7 @@ export class RustFSClient {
    * Every multipart upload in `bucket` that was started and never completed or
    * aborted — the parts an interrupted upload left behind (TASK-379).
    */
-  async listMultipartUploads(bucket: string): Promise<MultipartUploadInfo[]> {
+  async listMultipartUploads(bucket: string, prefix?: string): Promise<MultipartUploadInfo[]> {
     const uploads: MultipartUploadInfo[] = [];
     let keyMarker: string | undefined;
     let uploadIdMarker: string | undefined;
@@ -194,6 +205,7 @@ export class RustFSClient {
       const response = await this.client.send(
         new ListMultipartUploadsCommand({
           Bucket: bucket,
+          ...(prefix ? { Prefix: prefix } : {}),
           KeyMarker: keyMarker,
           UploadIdMarker: uploadIdMarker,
         })
@@ -214,6 +226,115 @@ export class RustFSClient {
   async abortMultipartUpload(bucket: string, key: string, uploadId: string): Promise<void> {
     await this.client.send(
       new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: uploadId })
+    );
+  }
+
+  /**
+   * Open a multipart upload whose parts are sent one request at a time
+   * (TASK-480) and return its id. Nothing is visible under `key` until
+   * {@link completeMultipartUpload}; {@link abortMultipartUpload} removes it.
+   */
+  async createMultipartUpload(bucket: string, key: string, contentType?: string): Promise<string> {
+    const response = await this.client.send(
+      new CreateMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: contentType ?? 'application/octet-stream',
+      })
+    );
+    if (!response.UploadId) throw new Error(`Store returned no upload id for ${bucket}/${key}`);
+    return response.UploadId;
+  }
+
+  /**
+   * Stream one part of `length` bytes into an open multipart upload.
+   *
+   * `body` is piped to the store as it is read, so memory stays at the
+   * stream's own buffers whatever the part size. It MUST NOT emit `error`: the
+   * SDK does not listen for it. A caller whose source can fail ends the request
+   * through `signal` instead. Sending a part number again replaces that part.
+   */
+  async uploadPartStream(
+    bucket: string,
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    body: Readable | Buffer,
+    length: number,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const response = await this.client.send(
+      new UploadPartCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: uploadId,
+        PartNumber: partNumber,
+        Body: body,
+        ContentLength: length,
+      }),
+      { abortSignal: signal },
+    );
+    return response.ETag ?? '';
+  }
+
+  /** Every part an open multipart upload holds, in part-number order. */
+  async listParts(bucket: string, key: string, uploadId: string): Promise<MultipartPartInfo[]> {
+    const parts: MultipartPartInfo[] = [];
+    let marker: string | undefined;
+    for (;;) {
+      const response = await this.client.send(
+        new ListPartsCommand({ Bucket: bucket, Key: key, UploadId: uploadId, PartNumberMarker: marker })
+      );
+      for (const part of response.Parts ?? []) {
+        if (part.PartNumber === undefined) continue;
+        parts.push({ partNumber: part.PartNumber, size: part.Size ?? 0, etag: part.ETag ?? '' });
+      }
+      if (!response.IsTruncated || !response.NextPartNumberMarker) break;
+      marker = response.NextPartNumberMarker;
+    }
+    return parts.sort((a, b) => a.partNumber - b.partNumber);
+  }
+
+  /** Turn the listed parts of an open multipart upload into the object at `key`. */
+  async completeMultipartUpload(
+    bucket: string,
+    key: string,
+    uploadId: string,
+    parts: Array<Pick<MultipartPartInfo, 'partNumber' | 'etag'>>,
+  ): Promise<void> {
+    await this.client.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: uploadId,
+        MultipartUpload: {
+          Parts: parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })),
+        },
+      })
+    );
+  }
+
+  /**
+   * Stream an object of exactly `length` bytes in one PutObject — no multipart,
+   * no buffering. The same rule as {@link uploadPartStream}: `body` must not
+   * emit `error`; stop it through `signal`.
+   */
+  async putObjectStream(
+    bucket: string,
+    key: string,
+    body: Readable | Buffer,
+    length: number,
+    options?: { contentType?: string; signal?: AbortSignal },
+  ): Promise<void> {
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: body,
+        ContentLength: length,
+        ContentType: options?.contentType ?? 'application/octet-stream',
+      }),
+      { abortSignal: options?.signal },
     );
   }
 

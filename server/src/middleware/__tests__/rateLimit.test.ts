@@ -14,19 +14,25 @@ import { fileURLToPath } from 'url';
 import { parse } from 'yaml';
 import express from 'express';
 import request from 'supertest';
+import { isDatasetUploadPart } from '../../routes/dataset-uploads.routes.js';
 import {
   RATE_LIMIT_DEFAULTS,
   apiRateLimit,
   isDatasetBrowseRequest,
   parseTrustProxy,
   readRateLimitConfig,
+  type ApiLimiterOptions,
   type RateLimitConfig,
   type TrustProxySetting,
 } from '../rateLimit.js';
 
 const DS = '9b7c63ca-fc76-4dd1-aed2-2dada9bdcb64';
 
-function appWith(overrides: Partial<RateLimitConfig> = {}, trustProxy: TrustProxySetting = 1) {
+function appWith(
+  overrides: Partial<RateLimitConfig> = {},
+  trustProxy: TrustProxySetting = 1,
+  options: ApiLimiterOptions = {}
+) {
   const config: RateLimitConfig = {
     disabled: false,
     windowMs: 60_000,
@@ -37,7 +43,7 @@ function appWith(overrides: Partial<RateLimitConfig> = {}, trustProxy: TrustProx
   };
   const app = express();
   app.set('trust proxy', trustProxy);
-  app.use('/api/', ...apiRateLimit(config));
+  app.use('/api/', ...apiRateLimit(config, options));
   app.all(/.*/, (req, res) => {
     res.json({ ip: req.ip });
   });
@@ -129,6 +135,19 @@ describe('the API budgets', () => {
     const retryAfter = Number(refused.headers['retry-after']);
     expect(retryAfter).toBeGreaterThan(0);
     expect(retryAfter).toBeLessThanOrEqual(30);
+  });
+
+  it('counts no budget for the parts of a dataset upload, and every budget for the rest of it', async () => {
+    const app = appWith({ max: 4, mediaMax: 4, writeMax: 2 }, 1, { exempt: isDatasetUploadPart });
+    // A dataset is thousands of parts; far more than any budget here.
+    for (let part = 1; part <= 20; part++) {
+      const ok = await request(app).put(`/api/datasets/${DS}/upload/files/0/parts/${part}`).expect(200);
+      expect(ok.headers['ratelimit-remaining']).toBeUndefined();
+    }
+    // The upload's other requests are ordinary writes.
+    await request(app).post('/api/datasets/uploads').expect(200);
+    await request(app).post(`/api/datasets/${DS}/upload/finish`).expect(200);
+    await request(app).post(`/api/datasets/${DS}/upload/cancel`).expect(429);
   });
 
   it('counts nothing when disabled', async () => {
