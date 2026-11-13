@@ -18,6 +18,7 @@ import { useFeatures, useFeaturesStore } from '../useFeatures';
 const DEFAULT_FLAGS = {
   multiTenancyEnabled: false,
   selfRegistrationEnabled: false,
+  signInRequired: true,
   natsEnabled: false,
   rustfsEnabled: false,
 };
@@ -25,6 +26,7 @@ const DEFAULT_FLAGS = {
 const ENABLED_FLAGS = {
   multiTenancyEnabled: true,
   selfRegistrationEnabled: false,
+  signInRequired: true,
   natsEnabled: true,
   rustfsEnabled: false,
 };
@@ -115,6 +117,46 @@ describe('useFeaturesStore', () => {
 
     expect(mockGet).toHaveBeenCalledTimes(1);
     expect(useFeaturesStore.getState().flags).toEqual(ENABLED_FLAGS);
+  });
+});
+
+describe('signInRequired (TASK-483)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useFeaturesStore.setState({ flags: DEFAULT_FLAGS, loaded: false, loading: false, error: null });
+  });
+
+  it('defaults to required, and stays required when an older server omits it', async () => {
+    expect(useFeaturesStore.getState().flags.signInRequired).toBe(true);
+    mockGet.mockResolvedValueOnce({ data: { multiTenancyEnabled: true } });
+
+    await useFeaturesStore.getState().fetch();
+
+    expect(useFeaturesStore.getState().flags).toEqual({ ...DEFAULT_FLAGS, multiTenancyEnabled: true });
+  });
+
+  it('takes "not required" from the server', async () => {
+    mockGet.mockResolvedValueOnce({ data: { ...DEFAULT_FLAGS, signInRequired: false } });
+
+    await useFeaturesStore.getState().fetch();
+
+    expect(useFeaturesStore.getState().flags.signInRequired).toBe(false);
+  });
+
+  it('a second caller waits for the request under way instead of returning early', async () => {
+    let resolve!: (v: unknown) => void;
+    mockGet.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+
+    void useFeaturesStore.getState().fetch();
+    let settled = false;
+    const second = useFeaturesStore.getState().fetch().then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    resolve({ data: { ...DEFAULT_FLAGS, signInRequired: false } });
+    await second;
+    expect(useFeaturesStore.getState().flags.signInRequired).toBe(false);
+    expect(mockGet).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -516,7 +516,8 @@ each network counts down from its own budget.
 | `JWT_SECRET` | Prod | `dev-secret-...` | JWT signing secret (32+ chars) |
 | `JWT_ACCESS_EXPIRES` | No | `15m` | Access token TTL |
 | `JWT_REFRESH_EXPIRES` | No | `7d` | Refresh token TTL |
-| `AUTH_DISABLED` | No | `false` | Disable authentication (dev only) |
+| `AUTH_DISABLED` | No | `false` | Disable authentication (dev, or a demo instance behind its own access control). Every request without a service token is one shared super-admin, `GET /api/config/features` reports `signInRequired: false`, and the app opens any URL without a sign-in page |
+| `ANONYMOUS_USER_NAME` | No | `Demo user` in production, else `Dev User` | Display name of that shared user under `AUTH_DISABLED=true` (top bar, account page, attributions). At most 60 characters |
 | `ALLOW_SELF_REGISTRATION` | No | `false` | With auth on, let anyone create an account via `POST /api/auth/register`. Off: the endpoint answers 403 `SELF_REGISTRATION_DISABLED` and admins add users. Ignored (always closed) under multi-tenancy |
 | `CORS_ORIGINS` | No | localhost ports | Comma-separated allowed origins |
 | `RATE_LIMIT_DISABLED` | No | `false` | Disable rate limiting (dev only) |

@@ -13,6 +13,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { UserMenu } from '../UserMenu';
 
 const auth = vi.hoisted(() => ({ logout: vi.fn() }));
+const features = vi.hoisted(() => ({ signInRequired: true }));
 
 vi.mock('@/features/auth', () => ({
   useAuth: () => ({
@@ -21,8 +22,13 @@ vi.mock('@/features/auth', () => ({
   }),
 }));
 
+vi.mock('@/shared/hooks/useFeatures', () => ({
+  useFeatures: () => ({ signInRequired: features.signInRequired }),
+}));
+
 beforeEach(() => {
   auth.logout.mockClear();
+  features.signInRequired = true;
 });
 
 /** Open the menu the way a user does, and hand back its items in DOM order. */
@@ -64,5 +70,23 @@ describe('UserMenu', () => {
     expect(panel.getByText('Ada Lovelace')).toBeInTheDocument();
     expect(panel.getByText('ada@example.com')).toBeInTheDocument();
     expect(panel.getByText('Owner')).toBeInTheDocument();
+  });
+
+  // TASK-483: nothing to sign out of, and Sign out used to end on a sign-in
+  // form no credentials exist for.
+  it('says sign-in is off instead of offering Sign out on a server without sign-in', async () => {
+    features.signInRequired = false;
+    const items = await openMenu();
+    expect(items.map((item) => item.textContent)).toEqual(['Account settings', 'Settings']);
+
+    const panel = within(screen.getByRole('menu', { name: 'User menu' }));
+    expect(panel.getByText(/Sign-in is turned off on this server/)).toBeInTheDocument();
+    expect(panel.getByText('Ada Lovelace')).toBeInTheDocument();
+    // The shared user's address is a placeholder, not somebody's email.
+    expect(panel.queryByText('ada@example.com')).not.toBeInTheDocument();
+
+    // The arrow keys wrap over the two items that are left.
+    await userEvent.keyboard('{ArrowDown}{ArrowDown}');
+    expect(items[0]).toHaveFocus();
   });
 });

@@ -7,6 +7,7 @@
 export * from './LoginForm';
 export * from './LogoutButton';
 export * from './ProtectedRoute';
+export * from './RequireSession';
 export * from './RegistrationForm';
 export * from './ForgotPasswordForm';
 export * from './ResetPasswordForm';
