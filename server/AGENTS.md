@@ -332,7 +332,7 @@ Photos: `PatrolPhotoStore` — S3 bucket `patrol-photos` when RustFS is configur
 
 ### ML & Training Pipeline
 
-- `/api/datasets` — Dataset management
+- `/api/datasets` — Dataset management. Direct upload (TASK-480, contract in `../docs/dataset-upload.md`): `POST /uploads`, `GET /:id/upload`, `PUT /:id/upload/files/:fileId/parts/:partNumber` (raw body, streamed to RustFS or `DATASET_UPLOAD_DIR`), `POST /:id/upload/finish`, `POST /:id/upload/cancel` — `routes/dataset-uploads.routes.ts`, `services/datasetUpload/`
 - `/api/training` — Training job orchestration
 - `/api/models` — Model registry (versions, metrics, lineage, checkpoints)
 - `/api/deployments` — Fleet deployment (canary, blue-green, rolling)

@@ -296,6 +296,7 @@ measured, estimated or unknown rather than guessing, and it labels anything simu
 | **G1 + Dex3 pick-and-place** — an environment replicating NVIDIA's GR00T-N1.7-AppleToPlate workflow, with the real-G1 bridge dry-run by default. | Sim-only; real-G1 bridge **gated** (needs both `G1_BRIDGE_ARMED=1` and `--arm`; legs are never commanded) | [#210](https://github.com/RaaSaaR-org/robot-management-system/pull/210), [#211](https://github.com/RaaSaaR-org/robot-management-system/pull/211) |
 | **LeRobot 0.6.0** — reward models, annotation jobs, rollout strategies, GR00T N1.7 support. | Live | [#182](https://github.com/RaaSaaR-org/robot-management-system/pull/182) |
 | **Dataset revisions and curation** — video-aware trim/delete producing a new revision with lineage, stats recompute, v3 LeRobot backend, AI suggestions. | Live | [#189](https://github.com/RaaSaaR-org/robot-management-system/pull/189) |
+| **Direct dataset upload** — a LeRobot v2.1 or v3.0 directory goes from your machine straight into the instance's storage, no Hugging Face repository in between: file by file in bounded, resumable parts through the API server, streamed into RustFS (or the local dataset directory in development), then validated exactly like an import. Contract: [`docs/dataset-upload.md`](docs/dataset-upload.md). | Live (API; the app's upload dialog still uses the older archive flow) | TASK-480 |
 
 Two more honesty mechanics worth calling out:
 
@@ -422,7 +423,8 @@ synthetic so nothing on the record pretends a dream was a recording
 - **No account for the reasoning.** `LLM_PROVIDER=ollama` and every server-side LLM call runs on
   a model in your own building.
 - **Open weights, open format.** Datasets are LeRobot v2.1 and v3.0 with Hub sync both ways —
-  take the data and the checkpoints and walk out.
+  take the data and the checkpoints and walk out. Getting a dataset *in* does not need the Hub
+  either: [`docs/dataset-upload.md`](docs/dataset-upload.md) uploads a directory directly.
 - **Two honest exceptions.** The Cosmos 3 forward-dynamics generator wants a HuggingFace PRO
   token, and a hosted LLM provider needs its own key if you choose one over Ollama. Neither is
   required to run the platform.
@@ -592,6 +594,7 @@ Full contributor guide: [CONTRIBUTING.md](CONTRIBUTING.md).
 | [`docs/agent-mode.md`](docs/agent-mode.md) | Agent Mode, patrol and host mode: what they do, how to switch them on, what they refuse, where their data lives |
 | [`docs/robot-integration-guide.md`](docs/robot-integration-guide.md) | Wiring a robot up: SO-101, G1 EDU, calibration, sidecars |
 | [`docs/vla-integration-guide.md`](docs/vla-integration-guide.md) | VLA models, cameras, inference pipeline |
+| [`docs/dataset-upload.md`](docs/dataset-upload.md) | Uploading a LeRobot dataset directory directly, without Hugging Face: the HTTP contract, resume, limits |
 | [`docs/g1-edu-lab-bringup.md`](docs/g1-edu-lab-bringup.md) | Real G1 EDU lab bringup — status and log |
 | [`docs/real-g1-apple-runbook.md`](docs/real-g1-apple-runbook.md) | Robot-day runbook for the apple-to-plate use case |
 | [`docs/vr-teleop-data-collection.md`](docs/vr-teleop-data-collection.md) | VR teleoperation data collection with G1 EDU + Dex3-1 |

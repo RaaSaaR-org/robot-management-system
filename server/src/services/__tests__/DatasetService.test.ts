@@ -29,6 +29,7 @@ const {
   findDatasetRow,
   deleteDatasetPrefix,
   updateManyDatasets,
+  findDirectUpload,
 } = vi.hoisted(() => ({
   getDatasetUploadUrl: vi.fn(),
   deleteDatasetFromStorage: vi.fn(),
@@ -55,6 +56,7 @@ const {
   deleteDatasetPrefix: vi.fn(async (_prefix: string) => 0),
   // TASK-359: the conditional writes of the startup sweep.
   updateManyDatasets: vi.fn(async (_args: unknown) => ({ count: 1 })),
+  findDirectUpload: vi.fn(async (_args: unknown): Promise<{ state: string } | null> => null),
 }));
 
 vi.mock('../../database/index.js', () => ({
@@ -65,6 +67,8 @@ vi.mock('../../database/index.js', () => ({
     // forked from a dataset before deleting it. Empty by default, so every
     // pre-existing case still describes an ordinary materialized dataset.
     dataset: { findMany: findDerivedViews, findUnique: findDatasetRow, updateMany: updateManyDatasets },
+    // TASK-480: no direct upload is filling the dataset unless a case says so.
+    datasetUpload: { findUnique: findDirectUpload },
   },
 }));
 
@@ -699,6 +703,20 @@ describe('initiateUpload', () => {
     expect(getDatasetUploadUrl).not.toHaveBeenCalled();
   });
 
+  // TASK-480: a direct upload's row is `uploading` too.
+  it('refuses a dataset a direct upload is filling, and signs nothing', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    findDirectUpload.mockResolvedValueOnce({ state: 'uploading' });
+
+    await expect(datasetService.initiateUpload('ds1')).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining('direct upload'),
+    });
+    expect(findDirectUpload).toHaveBeenCalledWith({ where: { datasetId: 'ds1' }, select: { state: true } });
+    expect(getDatasetUploadUrl).not.toHaveBeenCalled();
+  });
+
   it('returns a presigned upload URL and emits upload:initiated', async () => {
     vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
     vi.mocked(isRustFSInitialized).mockReturnValue(true);
@@ -728,6 +746,14 @@ describe('initiateUpload', () => {
 // ===========================================================================
 
 describe('completeUpload', () => {
+  it('refuses a dataset a direct upload is filling (TASK-480)', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    findDirectUpload.mockResolvedValueOnce({ state: 'processing' });
+
+    await expect(datasetService.completeUpload('ds1')).rejects.toMatchObject({ statusCode: 409 });
+    expect(datasetRepository.update).not.toHaveBeenCalled();
+  });
+
   it('throws when the dataset is not found', async () => {
     vi.mocked(datasetRepository.findById).mockResolvedValue(null as never);
     await expect(datasetService.completeUpload('missing')).rejects.toThrow(

@@ -38,6 +38,7 @@ import {
 } from './storage/index.js';
 import { storageCleanupJob } from './jobs/storage-cleanup.js';
 import { multipartUploadSweep } from './jobs/multipart-upload-sweep.js';
+import { datasetUploadService } from './services/datasetUpload/DatasetUploadService.js';
 import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
 import { experimentService } from './services/ExperimentService.js';
 import { digitalTwinService } from './services/DigitalTwinService.js';
@@ -67,6 +68,17 @@ async function recoverInterruptedDatasetWork(): Promise<void> {
     logger.warn({ err: error instanceof Error ? error.message : error }, '[Datasets] Could not sweep interrupted imports');
   }
   await requeueInterruptedValidations();
+  await resumeInterruptedUploads();
+}
+
+/** Direct uploads cut off between `finish` and validation (TASK-480). */
+async function resumeInterruptedUploads(): Promise<void> {
+  try {
+    const resumed = await datasetUploadService.resumeInterrupted();
+    if (resumed.length > 0) logger.info({ datasetIds: resumed }, '[Datasets] Interrupted uploads being finished');
+  } catch (error) {
+    logger.warn({ err: error instanceof Error ? error.message : error }, '[Datasets] Could not resume interrupted uploads');
+  }
 }
 
 async function requeueInterruptedValidations(): Promise<void> {
@@ -210,6 +222,7 @@ async function main() {
           multipartUploadSweep.start();
           logger.info('[RustFS] Object storage recovered');
           void requeueInterruptedValidations();
+          void resumeInterruptedUploads();
         },
       });
     } else {
@@ -218,6 +231,8 @@ async function main() {
   }
 
   await recoverInterruptedDatasetWork();
+  // Uploads nobody has sent to for DATASET_UPLOAD_IDLE_MINUTES are removed (TASK-480).
+  datasetUploadService.startReaper();
 
   // Create Express app
   const app = createApp();
@@ -250,6 +265,7 @@ async function main() {
     telemetryCleanupJob.stopSchedule();
     storageCleanupJob.stopSchedule();
     multipartUploadSweep.stop();
+    datasetUploadService.stopReaper();
     digitalTwinService.stopReaper();
     trainingJobService.stopAllWatchers();
     await syntheticDataWorker.stop();
