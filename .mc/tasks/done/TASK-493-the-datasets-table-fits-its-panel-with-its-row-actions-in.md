@@ -3,7 +3,7 @@ id: "TASK-493"
 aliases: []
 title: "The datasets table fits its panel with its row actions in view, demo robots stand on the site map, and an import-created robot type can be renamed"
 slug: "the-datasets-table-fits-its-panel-with-its-row-actions-in"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
