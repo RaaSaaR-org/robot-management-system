@@ -3,7 +3,7 @@ id: "TASK-483"
 aliases: []
 title: "With sign-in disabled, a fresh browser goes straight into the app"
 slug: "with-sign-in-disabled-a-fresh-browser-goes-straight-into-the"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
