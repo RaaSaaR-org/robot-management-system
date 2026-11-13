@@ -220,4 +220,31 @@ describe('a server that does not say', () => {
     await waitFor(() => expect(toSignIn).toHaveBeenCalled());
     expect(api.getCurrentUser).not.toHaveBeenCalled();
   });
+
+  it('opens the page by itself once a late snapshot says no sign-in is needed', async () => {
+    serverSays(new Error('network down'));
+    await open(DEEP_LINK);
+    await waitFor(() => expect(toSignIn).toHaveBeenCalled());
+
+    // The retry `useFeatures` schedules after a failed request gets through.
+    serverSays({ signInRequired: false });
+    api.getCurrentUser.mockResolvedValue(SHARED_USER);
+    await useFeaturesStore.getState().fetch();
+
+    expect(await screen.findByRole('heading', { name: 'Episodes of a549a2b4' })).toBeInTheDocument();
+    expect(screen.queryByText("Can't reach the server")).not.toBeInTheDocument();
+    expect(tokenStorage.getAccessToken()).toBeNull();
+  });
+
+  it('stays on sign-in when a late snapshot says sign-in is required', async () => {
+    serverSays(new Error('network down'));
+    await open(DEEP_LINK);
+    await waitFor(() => expect(toSignIn).toHaveBeenCalled());
+
+    serverSays({ signInRequired: true });
+    await useFeaturesStore.getState().fetch();
+
+    expect(api.getCurrentUser).not.toHaveBeenCalled();
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+  });
 });

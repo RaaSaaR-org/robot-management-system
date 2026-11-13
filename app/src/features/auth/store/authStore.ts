@@ -227,8 +227,10 @@ export const useAuthStore = createStore<AuthStore>(
           return;
         }
 
-        // Sign-in is required and there is no token: whatever an earlier
-        // session persisted, nobody is signed in.
+        // Sign-in is required, or the server could not say yet (see the
+        // feature-snapshot subscription below the store). A persisted session
+        // is left as it is: the dev server and the static demo build sign in
+        // their bundled user without a token.
         set((state) => {
           state.isInitialized = true;
         });
@@ -452,6 +454,18 @@ export const useAuthStore = createStore<AuthStore>(
     }),
   }
 );
+
+// TASK-483: the feature snapshot can arrive after the session was settled — it
+// failed while the app booted, so a token-less browser was taken for signed out,
+// and `useFeatures` fetched it again a few seconds later. If it then says that
+// no sign-in is needed, load the shared user right away; otherwise the visitor
+// sits on a retry screen for a server that is answering.
+useFeaturesStore.subscribe((features, previous) => {
+  if (!features.loaded || previous.loaded || features.flags.signInRequired !== false) return;
+  const auth = useAuthStore.getState();
+  if (!auth.isInitialized || auth.isAuthenticated || auth.isLoading) return;
+  void auth.initialize();
+});
 
 // ============================================================================
 // SELECTORS
