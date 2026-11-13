@@ -3,7 +3,7 @@ id: "TASK-494"
 aliases: []
 title: "A dataset's joint chart names each joint inside its group, and a dataset imported from Hugging Face says so in its page header"
 slug: "a-dataset-s-joint-chart-names-each-joint-inside-its-group"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
@@ -120,25 +120,25 @@ repo link, but the component is not mounted anywhere).
 
 ## Acceptance Criteria
 
-- [ ] On a dataset with joint groups whose `info.json` names every channel, the chart
+- [x] On a dataset with joint groups whose `info.json` names every channel, the chart
       legend, the chart tooltip and the statistics table show the joint's name inside
       each group, never `<group>[n]`.
-- [ ] On a dataset with joint groups whose names are placeholders (`motor_0`…) or one
+- [x] On a dataset with joint groups whose names are placeholders (`motor_0`…) or one
       name for the whole vector (GR00T's `observation_to_policy`), labels stay
       `<group>[n]` exactly as before.
-- [ ] A dataset with names and no groups is labelled as before.
-- [ ] A shared `_joint` suffix is dropped from the legend only when every name has it;
+- [x] A dataset with names and no groups is labelled as before.
+- [x] A shared `_joint` suffix is dropped from the legend only when every name has it;
       the full name is the hover text.
-- [ ] State (solid) and action (dashed) of one joint share one colour; in a two-sided
+- [x] State (solid) and action (dashed) of one joint share one colour; in a two-sided
       group no two joints share a hue, and left and right of one joint do.
-- [ ] The legend and the tooltip of the `arms` tab fit inside the chart panel at
+- [x] The legend and the tooltip of the `arms` tab fit inside the chart panel at
       1280x720 and 1440x900.
-- [ ] The header of a Hub-imported dataset reads "Imported from Hugging Face: owner/repo
+- [x] The header of a Hub-imported dataset reads "Imported from Hugging Face: owner/repo
       at revision <8 characters>", the repo linking to
       `https://huggingface.co/datasets/<owner>/<repo>/tree/<full revision>`, the full
       revision on hover.
-- [ ] A dataset that was not imported from the Hub shows no source line.
-- [ ] The header still fits one screen with the video and the joint chart at 1280x720.
+- [x] A dataset that was not imported from the Hub shows no source line.
+- [x] The header still fits one screen with the video and the joint chart at 1280x720.
 
 ## Test Strategy
 
