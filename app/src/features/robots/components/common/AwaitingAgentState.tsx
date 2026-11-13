@@ -28,7 +28,11 @@ export function awaitingAgentTitle(provisioning: RobotProvisioning): string {
   return provisioning.state === 'arriving' ? 'Not arrived yet' : 'Not connected yet';
 }
 
-/** "{lead} when {name}'s robot agent connects to this server." — or once it has arrived. */
+/**
+ * "{lead} when the robot agent of {name} connects to this server." — or once it
+ * has arrived. No possessive: a name like "Unitree G1 with Dex3 hands" made it
+ * "…Dex3 hands's robot agent" (TASK-493).
+ */
 export function awaitingAgentSentence(
   robotName: string,
   provisioning: RobotProvisioning,
@@ -36,7 +40,7 @@ export function awaitingAgentSentence(
 ): string {
   return provisioning.state === 'arriving'
     ? `${lead} once ${robotName} has arrived and its robot agent has connected.`
-    : `${lead} when ${robotName}'s robot agent connects to this server.`;
+    : `${lead} when the robot agent of ${robotName} connects to this server.`;
 }
 
 export function AwaitingAgentState({

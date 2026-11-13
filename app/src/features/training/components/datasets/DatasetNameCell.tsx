@@ -1,6 +1,8 @@
 /**
  * @file DatasetNameCell.tsx
- * @description Name cell of the dataset table: name, origin line, tags and the warnings a row carries
+ * @description Name cell of the dataset table: name, origin line, tags and the warnings a row carries.
+ *              It is as wide as its column and no wider (TASK-493): a long name
+ *              wraps to two lines and then truncates, with the whole name on hover.
  * @feature training
  */
 
@@ -32,7 +34,8 @@ export function datasetOriginLine(dataset: Dataset, parent?: DatasetParentSummar
   // (a v3.0 main and a v2.1 tag of the same dataset) — TASK-358.
   if (dataset.huggingFaceRepoId) {
     const version = formatLerobotVersion(dataset.lerobotVersion);
-    const source = formatRepoAtRevision(dataset.huggingFaceRepoId, dataset.sourceRevision);
+    // Said as provenance: the bare `owner/repo@commit` read like a second name (TASK-493).
+    const source = `From Hugging Face: ${formatRepoAtRevision(dataset.huggingFaceRepoId, dataset.sourceRevision)}`;
     return version ? `${source} · ${version}` : source;
   }
   return dataset.description ?? `LeRobot ${dataset.lerobotVersion}`;
@@ -47,9 +50,15 @@ export function DatasetNameCell({ dataset, parent }: DatasetNameCellProps) {
   const problems = validation?.errors ?? [];
 
   return (
-    <div className="flex w-[11rem] min-w-0 flex-col gap-1 sm:w-auto sm:max-w-md">
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-        <span className="truncate text-sm font-medium text-ink-primary">{dataset.name}</span>
+    <div className="flex w-[11rem] min-w-0 flex-col gap-1 sm:w-auto">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+        <span
+          className="line-clamp-2 min-w-0 text-sm font-medium text-ink-primary [overflow-wrap:anywhere]"
+          title={dataset.name}
+          data-testid="dataset-name"
+        >
+          {dataset.name}
+        </span>
         {isView && (
           <StatusTag tone="accent" data-testid="dataset-view-badge">
             View

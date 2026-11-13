@@ -58,7 +58,7 @@ const QUICK_ACTS: QuickAct[] = [
   },
   {
     type: 'stop', label: 'Stop task', icon: <Square className={ICON} strokeWidth={1.75} />,
-    title: (n) => `Stop ${n}'s current task?`,
+    title: (n) => `Stop the current task of ${n}?`,
     description: () => 'The robot halts in place and drops the task it is running.',
     confirmLabel: 'Stop task', done: 'Task stopped', failed: "Couldn't stop the task",
   },

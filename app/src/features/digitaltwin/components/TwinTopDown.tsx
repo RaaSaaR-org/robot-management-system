@@ -34,8 +34,20 @@ export interface TopDownTransform {
   screenToWorld: (sx: number, sy: number) => TwinPoint;
 }
 
-/** Derive world bounds (meters) from the twin, falling back to the cloud XY. */
-export function deriveWorldBounds(twin: DigitalTwinDTO, cloud?: AccumulatedCloud | null): WorldBounds {
+/**
+ * Derive world bounds (meters) from the twin, falling back to the cloud XY.
+ *
+ * `zones`, when given, is the fallback after those two: a twin that was never
+ * scanned (the seeded "Demo Warehouse") has neither, and the 12 m default
+ * square cut its 20 m of zones off at both ends on a narrow map (TASK-493).
+ * The zone editor does not pass them — bounds that move while a zone is being
+ * drawn would move the drawing.
+ */
+export function deriveWorldBounds(
+  twin: DigitalTwinDTO,
+  cloud?: AccumulatedCloud | null,
+  zones?: TwinZoneDTO[],
+): WorldBounds {
   const tb = twin.bounds;
   const hasTwinBounds = tb && (tb.maxX - tb.minX > 0.5 || tb.maxY - tb.minY > 0.5);
   if (hasTwinBounds) {
@@ -54,6 +66,13 @@ export function deriveWorldBounds(twin: DigitalTwinDTO, cloud?: AccumulatedCloud
     }
     if (Number.isFinite(minX)) return { minX, minY, maxX, maxY };
   }
+  const points = (zones ?? []).flatMap((z) => z.points);
+  if (points.length > 0) {
+    const xs = points.map((p) => p.x);
+    const ys = points.map((p) => p.y);
+    const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    if (maxX - minX > 0.5 || maxY - minY > 0.5) return { minX, minY, maxX, maxY };
+  }
   // Default 12 m square centered on world origin.
   const origin = twin.worldOrigin ?? { x: 0, y: 0 };
   return { minX: origin.x - 6, minY: origin.y - 6, maxX: origin.x + 6, maxY: origin.y + 6 };
@@ -62,12 +81,21 @@ export function deriveWorldBounds(twin: DigitalTwinDTO, cloud?: AccumulatedCloud
 /**
  * Fit world bounds into the padded viewBox, preserving aspect ratio. World +y
  * is up, so the screen y axis is flipped.
+ *
+ * `viewAspect` is the width / height of the element the SVG is shown in, when
+ * the caller knows it. The viewBox is 4:3 and is letterboxed in a wider
+ * element, which leaves visible room left and right of it: a wide site is then
+ * fitted to that room instead of to the viewBox, so it is drawn as large as
+ * the element allows and never cut off at its ends (TASK-493). The map stays
+ * centred on the viewBox; anything narrower than 4:3 fits the viewBox as before.
  */
-export function makeTopDownTransform(bounds: WorldBounds): TopDownTransform {
+export function makeTopDownTransform(bounds: WorldBounds, viewAspect?: number): TopDownTransform {
   const wWidth = Math.max(0.001, bounds.maxX - bounds.minX);
   const wHeight = Math.max(0.001, bounds.maxY - bounds.minY);
+  const visibleW =
+    viewAspect && Number.isFinite(viewAspect) ? Math.max(TOP_DOWN_VIEW_W, TOP_DOWN_VIEW_H * viewAspect) : TOP_DOWN_VIEW_W;
   const scale = Math.min(
-    (TOP_DOWN_VIEW_W - 2 * TOP_DOWN_PADDING) / wWidth,
+    (visibleW - 2 * TOP_DOWN_PADDING) / wWidth,
     (TOP_DOWN_VIEW_H - 2 * TOP_DOWN_PADDING) / wHeight,
   );
   const offsetX = (TOP_DOWN_VIEW_W - wWidth * scale) / 2;
@@ -98,6 +126,10 @@ export interface TwinTopDownProps {
   /** Occupancy image URL drawn under the zones (replaces the projection). */
   occupancyImageUrl?: string;
   zones: TwinZoneDTO[];
+  /** With no scan to take the bounds from, fit the map to the zones (read-only maps only) */
+  fitZones?: boolean;
+  /** Width / height of the element this is shown in; see {@link makeTopDownTransform} */
+  viewAspect?: number;
   selectedZoneId?: string | null;
   /** Makes zones clickable (and keyboard-reachable) */
   onZoneClick?: (zone: TwinZoneDTO, e: MouseEvent<SVGPolygonElement>) => void;
@@ -120,6 +152,8 @@ export function TwinTopDown({
   cloud,
   occupancyImageUrl,
   zones,
+  fitZones = false,
+  viewAspect,
   selectedZoneId,
   onZoneClick,
   onZoneDoubleClick,
@@ -133,8 +167,11 @@ export function TwinTopDown({
   children,
   ...rest
 }: TwinTopDownProps) {
-  const bounds = useMemo(() => deriveWorldBounds(twin, cloud), [twin, cloud]);
-  const t = useMemo(() => makeTopDownTransform(bounds), [bounds]);
+  const bounds = useMemo(
+    () => deriveWorldBounds(twin, cloud, fitZones ? zones : undefined),
+    [twin, cloud, fitZones, zones],
+  );
+  const t = useMemo(() => makeTopDownTransform(bounds, viewAspect), [bounds, viewAspect]);
   const primary = useCssColor('--color-primary');
   const interactive = Boolean(onZoneClick);
 

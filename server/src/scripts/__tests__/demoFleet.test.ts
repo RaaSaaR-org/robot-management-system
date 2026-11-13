@@ -12,6 +12,7 @@ vi.mock('../../database/index.js', () => ({ prisma: {} }));
 
 import { DEMO_FLEET, DEMO_FLEET_MARKER, apiRoot, isOurs, matches, syncDemoFleet } from '../demoFleet.js';
 import { parseArgs } from '../seed-demo-fleet.js';
+import { DEMO_PLANNED_PLACE_TYPES, placeDemoRobots, plannedPlaceFor, resolveDemoSite } from '../demoFleetSites.js';
 import { STANDARD_ROBOT_TYPES } from '../../database/seedStandardRobotTypes.js';
 
 function json(status: number, body: unknown): Response {
@@ -134,7 +135,8 @@ describe('syncDemoFleet against a server that misbehaves', () => {
 describe('parseArgs', () => {
   it('defaults to the local server and a normal run', () => {
     expect(parseArgs([], {})).toEqual({
-      baseUrl: 'http://localhost:3001', remove: false, dryRun: false, withoutMicroduck: false, token: undefined, help: false,
+      baseUrl: 'http://localhost:3001', remove: false, dryRun: false, withoutMicroduck: false,
+      noSite: false, also: [], token: undefined, help: false,
     });
   });
 
@@ -145,9 +147,78 @@ describe('parseArgs', () => {
     expect(parseArgs(['--base-url=https://b'], { NEODEM_TOKEN: 'env' })).toMatchObject({ baseUrl: 'https://b', token: 'env' });
   });
 
+  it('reads the site flags (TASK-493)', () => {
+    expect(parseArgs(['--site', 'Demo Warehouse', '--also', 'sim-robot-001', '--also=lab-g1'], {})).toMatchObject({
+      site: 'Demo Warehouse', also: ['sim-robot-001', 'lab-g1'], noSite: false,
+    });
+    expect(parseArgs(['--site=9a53'], {}).site).toBe('9a53');
+    expect(parseArgs(['--no-site'], {}).noSite).toBe(true);
+    expect(() => parseArgs(['--no-site', '--also', 'x'], {})).toThrow(/--no-site/);
+    expect(() => parseArgs(['--remove', '--site', 'x'], {})).toThrow(/--remove/);
+    expect(() => parseArgs(['--also'], {})).toThrow(/needs a value/);
+  });
+
   it('refuses an unknown flag or a flag without its value', () => {
     expect(() => parseArgs(['--prod'], {})).toThrow(/Unknown option/);
     expect(() => parseArgs(['--base-url'], {})).toThrow(/needs a value/);
     expect(() => parseArgs(['--base-url', '--remove'], {})).toThrow(/needs a value/);
+  });
+});
+
+describe('planned places (TASK-493)', () => {
+  const zone = (name: string, placeType: string | null, type = 'room') => ({ name, type, placeType });
+  const site = (zones: ReturnType<typeof zone>[]) => ({ id: 'tw-1', name: 'Demo Warehouse', zones });
+
+  it('has a preference for every demo robot', () => {
+    expect(Object.keys(DEMO_PLANNED_PLACE_TYPES).sort()).toEqual(DEMO_FLEET.map((r) => r.id).sort());
+  });
+
+  it('puts the manipulators in staging and the undelivered MicroDuck at the dock', () => {
+    const warehouse = site([zone('AISLE-1', 'aisle'), zone('DOCK-1', 'dock'), zone('STAGING', 'staging')]);
+    expect(placeDemoRobots(DEMO_FLEET, warehouse).map((r) => r.metadata.plannedPlace)).toEqual(['STAGING', 'STAGING', 'DOCK-1']);
+  });
+
+  it('never plans a robot into a keep-out, and falls back down its list', () => {
+    const edgeOnly = site([zone('DOCK-1-EDGE', 'dock', 'keepout'), zone('STAGING', 'staging')]);
+    expect(plannedPlaceFor('demo-microduck', edgeOnly)).toBe('STAGING');
+    expect(plannedPlaceFor('demo-g1-dex3', site([zone('Cell 2', null, 'workcell'), zone('Cell 1', null, 'workcell')]))).toBe('Cell 1');
+  });
+
+  it('plans nothing where no zone fits or there is no site, and leaves the robot as it is', () => {
+    expect(plannedPlaceFor('demo-g1-dex3', site([zone('AISLE-1', 'aisle')]))).toBeNull();
+    expect(plannedPlaceFor('some-other-robot', site([zone('STAGING', 'staging')]))).toBeNull();
+    expect(placeDemoRobots(DEMO_FLEET, null)).toEqual([...DEMO_FLEET]);
+    expect(placeDemoRobots(DEMO_FLEET, site([]))[0]).toBe(DEMO_FLEET[0]);
+  });
+});
+
+describe('resolveDemoSite (TASK-493)', () => {
+  it('reads a server without the sites route as "no site", and fails loudly on anything else', async () => {
+    const without = vi.fn(async () => new Response('Cannot GET', { status: 404 }));
+    expect(await resolveDemoSite({ baseUrl: 'http://x', fetchImpl: without as typeof fetch })).toEqual({
+      site: null, reason: 'this server has no sites',
+    });
+    const down = vi.fn(async () => json(503, { error: 'down' }));
+    await expect(resolveDemoSite({ baseUrl: 'http://x', fetchImpl: down as typeof fetch })).rejects.toThrow(/503: down/);
+  });
+
+  it('sends the token and reads the place type of each zone', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer t0k');
+      return String(url).endsWith('/zones')
+        ? json(200, [{ name: 'STAGING', type: 'room', metadata: { placeType: 'staging' } }, { name: 'Bare', type: 'room', metadata: null }])
+        : json(200, [{ id: 'tw-1', name: 'Demo Warehouse' }]);
+    });
+    expect(await resolveDemoSite({ baseUrl: 'https://host', token: 't0k', fetchImpl: fetchImpl as typeof fetch })).toEqual({
+      site: {
+        id: 'tw-1',
+        name: 'Demo Warehouse',
+        zones: [{ name: 'STAGING', type: 'room', placeType: 'staging' }, { name: 'Bare', type: 'room', placeType: null }],
+      },
+    });
+    expect(fetchImpl.mock.calls.map(([url]) => String(url))).toEqual([
+      'https://host/api/digital-twins',
+      'https://host/api/digital-twins/tw-1/zones',
+    ]);
   });
 });

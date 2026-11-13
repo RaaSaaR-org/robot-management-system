@@ -84,6 +84,9 @@ export class RobotTypeInUseError extends DatasetExpectationError {
 /** How many names of one kind a refusal spells out before it says "and N more". */
 const NAMED_REFERENCES = 5;
 
+/** Longest robot-type name a rename accepts: it has to fit a table cell and a picker row. */
+const ROBOT_TYPE_NAME_MAX = 80;
+
 /** `2 datasets ("a", "b")`, or null when there are none. */
 function describeReferences(noun: string, names: string[]): string | null {
   if (names.length === 0) return null;
@@ -1814,6 +1817,63 @@ export class DatasetService extends EventEmitter {
       proprioceptionDim: robotType.proprioceptionDim,
     }, 'robot-type');
     return robotType;
+  }
+
+  /**
+   * Give a robot type another display name (TASK-493) — e.g. the
+   * `unitree_g1_dex3 (action 31, state 31)` an import minted, which reads as a
+   * raw identifier beside the seeded types.
+   *
+   * Only `name` changes. `model` — what an import matches a Hub `robot_type`
+   * against — and the widths stay, so the next import of the same robot still
+   * lands on this row instead of minting the old name again, and every dataset
+   * on it stays valid. Refused with 409 for a standard type (the start-up seed
+   * and `metadata.robotTypeName` on fleet robots find those by name) and when
+   * another type already carries the name, compared without regard to case or
+   * surrounding spaces. Renaming to the name it already has changes nothing.
+   */
+  async renameRobotConfiguration(id: string, newName: unknown, actorId?: string | null): Promise<RobotType> {
+    const name = typeof newName === 'string' ? newName.trim().replace(/\s+/g, ' ') : '';
+    if (!name) throw new DatasetExpectationError('name is required', 400, 'INVALID_ROBOT_TYPE');
+    if (name.length > ROBOT_TYPE_NAME_MAX) {
+      throw new DatasetExpectationError(
+        `name must be at most ${ROBOT_TYPE_NAME_MAX} characters`, 400, 'INVALID_ROBOT_TYPE',
+      );
+    }
+    const robotType = await robotTypeRepository.findById(id);
+    if (!robotType) {
+      throw new DatasetExpectationError(`Robot type not found: ${id}`, 404, 'ROBOT_TYPE_NOT_FOUND');
+    }
+    if (robotType.name === name) return robotType;
+    if (STANDARD_ROBOT_TYPES.some((t) => t.name === robotType.name)) {
+      throw new DatasetExpectationError(
+        `"${robotType.name}" is a standard robot type and cannot be renamed`,
+        409,
+        'ROBOT_TYPE_STANDARD',
+      );
+    }
+    const taken = () => new DatasetExpectationError(
+      `A robot type named "${name}" already exists; pick another name`,
+      409,
+      'ROBOT_TYPE_EXISTS',
+    );
+    const folded = name.toLowerCase();
+    const all = await robotTypeRepository.findAll();
+    if (all.some((t) => t.id !== id && t.name.trim().toLowerCase() === folded)) throw taken();
+    // The unique index is the last word: a type created under this name between
+    // the check and the write makes the update fail, and that is the same 409.
+    const renamed = await robotTypeRepository.update(id, { name });
+    if (!renamed) {
+      if (!(await robotTypeRepository.findById(id))) {
+        throw new DatasetExpectationError(`Robot type not found: ${id}`, 404, 'ROBOT_TYPE_NOT_FOUND');
+      }
+      throw taken();
+    }
+    await this.auditDatasetAction(id, 'robot-type.rename', actorId, {
+      from: robotType.name,
+      to: renamed.name,
+    }, 'robot-type');
+    return renamed;
   }
 
   /**
