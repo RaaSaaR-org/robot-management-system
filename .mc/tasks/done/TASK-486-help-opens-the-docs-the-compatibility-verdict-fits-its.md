@@ -3,7 +3,7 @@ id: "TASK-486"
 aliases: []
 title: "Help opens the docs, the compatibility verdict fits its dialog, and empty states speak to users"
 slug: "help-opens-the-docs-the-compatibility-verdict-fits-its"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
