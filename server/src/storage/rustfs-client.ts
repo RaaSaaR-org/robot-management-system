@@ -28,6 +28,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Upload } from '@aws-sdk/lib-storage';
 import type { Readable } from 'stream';
+import type { IncomingMessage } from 'http';
 
 // ============================================================================
 // TYPES
@@ -54,10 +55,11 @@ export interface RustFSTransport {
   /** Longest a TCP connect may take. `RUSTFS_CONNECT_TIMEOUT_MS`, default 5 s. */
   connectTimeoutMs: number;
   /**
-   * Longest a socket may carry no bytes in either direction before its request
-   * is ended. It bounds a hung store, a stalled upload and a paused player
-   * alike, and never a transfer that is moving — however long that takes.
-   * `RUSTFS_SOCKET_TIMEOUT_MS`, default 120 s.
+   * Longest the store may send or take no bytes before the call is ended: a
+   * stalled upload, a download or stream whose body stops arriving, and a
+   * stream nobody ever read. Never a transfer that is moving, however long
+   * that takes, and never a stream whose reader is the slow side — a paused
+   * player keeps its stream. `RUSTFS_SOCKET_TIMEOUT_MS`, default 120 s.
    */
   socketTimeoutMs: number;
   /**
@@ -210,7 +212,12 @@ export class RustFSClient {
   constructor(config: RustFSConfig) {
     this.config = config;
     this.transport = { ...rustFSTransportFromEnv(), ...config.transport };
-    const build = (maxSockets: number): S3Client =>
+    // `sdkIdleTimeout` is the SDK's own idle timer. It covers a request that
+    // is still being sent — an upload — and nothing after the answer began
+    // unless the answer took over three seconds, when it stays armed for the
+    // body and cuts a paused reader too. Response bodies are timed by
+    // `endWhenStalled` instead, so the stream client goes without it.
+    const build = (maxSockets: number, sdkIdleTimeout: boolean): S3Client =>
       new S3Client({
         endpoint: config.endpoint,
         credentials: {
@@ -224,13 +231,13 @@ export class RustFSClient {
         // own, so uploads never draw on these pools.
         requestHandler: {
           connectionTimeout: this.transport.connectTimeoutMs,
-          socketTimeout: this.transport.socketTimeoutMs,
+          ...(sdkIdleTimeout ? { socketTimeout: this.transport.socketTimeoutMs } : {}),
           httpAgent: { keepAlive: true, maxSockets },
           httpsAgent: { keepAlive: true, maxSockets },
         },
       });
-    this.client = build(this.transport.maxSockets);
-    this.streamClient = build(this.transport.maxStreamSockets);
+    this.client = build(this.transport.maxSockets, true);
+    this.streamClient = build(this.transport.maxStreamSockets, false);
   }
 
   /**
@@ -288,6 +295,55 @@ export class RustFSClient {
       clearTimeout(timer);
       outer?.removeEventListener('abort', forward);
     }
+  }
+
+  /**
+   * End a response body the store has stopped sending, or nobody ever read.
+   *
+   * The SDK's own `socketTimeout` does not do this: it arms its timer three
+   * seconds into a request and cancels it when the answer begins, so a store
+   * that answers at once and stalls halfway through the body was never timed
+   * at all — the read stayed pending for good, with its socket. This watches
+   * the body's socket for as long as the body is open.
+   *
+   * Quiet because the READER is slow is not a stall: bytes it has not taken
+   * yet (`readableLength`), or a body the store has finished sending, mean the
+   * store did its part, and a paused player keeps its stream. What is ended,
+   * with a `TimeoutError`, is a reader waiting on a silent store — and a body
+   * no reader was ever attached to, which is a leak and not a slow client.
+   *
+   * One look cannot tell slow from stalled: a slow reader that asks for more
+   * is, until the next bytes land, a reader with nothing buffered on a socket
+   * that has been quiet for as long as it was slow. So the socket is checked
+   * every half period, and the body is ended when two checks in a row find it
+   * waiting and not one byte arrived in between — `socketTimeoutMs` of silence
+   * at the least.
+   */
+  private endWhenStalled<T extends Readable>(body: T, what: string): T {
+    const idleMs = this.transport.socketTimeoutMs;
+    const checkMs = Math.max(1, Math.ceil(idleMs / 2));
+    const message = body as T & Partial<Pick<IncomingMessage, 'socket' | 'complete'>>;
+    const socket = message.socket;
+    if (!socket || typeof socket.setTimeout !== 'function' || body.destroyed) return body;
+    /** `socket.bytesRead` at the last check that found the body waiting. */
+    let waitingSince: number | undefined;
+    const onQuiet = (): void => {
+      if (body.destroyed) return;
+      const unread = body.readableFlowing === null;
+      const starved = body.readableLength === 0 && message.complete !== true;
+      if ((unread || starved) && waitingSince === socket.bytesRead) {
+        const why = unread ? `Nobody read ${what}` : `RustFS stopped sending ${what}`;
+        body.destroy(Object.assign(new Error(`${why} for ${idleMs} ms`), { name: 'TimeoutError', code: 'ETIMEDOUT' }));
+        return;
+      }
+      waitingSince = unread || starved ? socket.bytesRead : undefined;
+      // The timer does not start again by itself after it fired.
+      socket.setTimeout(checkMs);
+    };
+    socket.setTimeout(checkMs);
+    socket.on('timeout', onQuiet);
+    body.once('close', () => socket.removeListener('timeout', onQuiet));
+    return body;
   }
 
   /**
@@ -546,7 +602,8 @@ export class RustFSClient {
 
     // Convert stream to buffer
     const chunks: Uint8Array[] = [];
-    for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+    const body = this.endWhenStalled(response.Body as Readable, `${bucket}/${key}`);
+    for await (const chunk of body as AsyncIterable<Uint8Array>) {
       chunks.push(chunk);
     }
     return Buffer.concat(chunks);
@@ -583,7 +640,8 @@ export class RustFSClient {
     }
 
     const chunks: Uint8Array[] = [];
-    for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+    const body = this.endWhenStalled(response.Body as Readable, `${bucket}/${key}`);
+    for await (const chunk of body as AsyncIterable<Uint8Array>) {
       chunks.push(chunk);
     }
     const buffer = Buffer.concat(chunks);
@@ -645,6 +703,7 @@ export class RustFSClient {
       body.destroy?.();
       throw new Error(`Store ignored the byte range for ${bucket}/${key}`);
     }
+    this.endWhenStalled(body, `${bucket}/${key}`);
     if (signal) {
       // Fired between the answer and here: nobody is going to read this.
       if (signal.aborted) {

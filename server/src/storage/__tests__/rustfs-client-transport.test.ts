@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import type { AddressInfo, Socket } from 'net';
-import { Readable } from 'stream';
+import { Readable, Writable } from 'stream';
 import {
   RustFSClient,
   classifyS3Error,
@@ -188,14 +188,48 @@ describe('getStream', () => {
       stream.on('end', () => resolve(null));
     });
     stream.resume();
-    expect(await ended).toBeInstanceOf(Error);
+    // Named as a timeout, so a route answers "not now" rather than "broken".
+    expect(await ended).toMatchObject({ name: 'TimeoutError' });
     await until(() => sockets.size === 0);
   });
 
-  it('ends a body nobody reads after the idle timeout — a paused player does not keep a socket for ever', async () => {
+  it('ends a body nobody ever started reading — a stream that was dropped does not keep a socket for ever', async () => {
     const stream = await client({ socketTimeoutMs: 300 }).getStream('b', 'endless', { start: 0, end: 208492162 });
     stream.on('error', () => undefined);
     await until(() => stream.destroyed || stream.errored !== null);
+    await until(() => sockets.size === 0);
+  });
+
+  it('keeps a body whose reader is the slow side: a paused player is not a stalled store', async () => {
+    const stream = await client({ socketTimeoutMs: 200 }).getStream('b', 'endless', { start: 0, end: 208492162 });
+    let failure: Error | null = null;
+    stream.on('error', (error: Error) => {
+      failure = error;
+    });
+    // A reader that takes one chunk and then nothing for six idle periods.
+    const player = { bytes: 0, next: undefined as (() => void) | undefined };
+    stream.pipe(
+      new Writable({
+        highWaterMark: 1,
+        write(chunk: Buffer, _encoding, callback) {
+          player.bytes += chunk.length;
+          player.next = callback;
+        },
+      }),
+    );
+    await until(() => player.next !== undefined);
+    const taken = player.bytes;
+    await sleep(1200);
+    expect(failure).toBeNull();
+    expect(stream.destroyed).toBe(false);
+
+    // It plays on from where it stopped.
+    const next = player.next;
+    player.next = undefined;
+    next?.();
+    await until(() => player.bytes > taken);
+    expect(failure).toBeNull();
+    stream.destroy();
     await until(() => sockets.size === 0);
   });
 
@@ -235,6 +269,27 @@ describe('getStream', () => {
     // Only the short pool's idle keep-alive sockets are left.
     await until(() => sockets.size <= 2);
   });
+});
+
+describe('a store that stops halfway through an answer', () => {
+  it('fails a buffered read after the idle timeout, at a setting where the SDK times nothing', async () => {
+    // From 6 s up — the regime of the 120 s default — the SDK arms its idle
+    // timer three seconds into a request and cancels it when the answer
+    // begins. A store that answered at once and then went quiet left
+    // `download()` pending for good, with its socket and its read slot.
+    const store = client({ socketTimeoutMs: 6000 });
+    const started = Date.now();
+    const results = await Promise.all([
+      store.download('b', 'stall').catch((e: unknown) => e),
+      store.downloadRange('b', 'stall', 0, 100).catch((e: unknown) => e),
+    ]);
+    for (const result of results) {
+      expect(result).toMatchObject({ name: 'TimeoutError' });
+      expect(classifyS3Error(result).kind).toBe('connectivity');
+    }
+    expect(Date.now() - started).toBeLessThan(12_000);
+    await until(() => sockets.size === 0);
+  }, 20_000);
 });
 
 describe('uploads', () => {
