@@ -3,7 +3,7 @@ id: "TASK-481"
 aliases: []
 title: "The Upload dialog sends a dataset folder straight into the instance's storage"
 slug: "the-upload-dialog-sends-a-dataset-folder-straight-into-the"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
