@@ -4,6 +4,7 @@
  * @feature training
  */
 
+import { useEffect, useRef } from 'react';
 import { Flag, GitFork } from 'lucide-react';
 import { Button, Checkbox, EmptyState, Panel, Select, SkeletonRows, StatusTag } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
@@ -32,6 +33,33 @@ export function EpisodeListPanel(props: EpisodeListPanelProps) {
   const { episodes, isLoading, hasError = false, selected, onSelect, checked, onToggleChecked, onSetChecked, flagged, onToggleFlag, scores, onCreateView, className } = props;
   const checkedSet = new Set(checked);
   const allChecked = episodes.length > 0 && checked.length === episodes.length;
+
+  // The selected row is kept in sight: an episode opened from a link, a
+  // suggestion or the address may sit far down the list. Only as far as it
+  // takes (`block: 'nearest'`), and only this list scrolls — never the page —
+  // so a row already in view, clicked or walked to, moves nothing.
+  const scroller = useRef<HTMLDivElement>(null);
+  const listed = !isLoading && episodes.length > 0;
+  useEffect(() => {
+    const box = scroller.current;
+    if (!box || !listed) return;
+    const keepInSight = () => {
+      const row = box.querySelector('[aria-current="true"]');
+      if (!(row instanceof HTMLElement)) return;
+      const frame = box.getBoundingClientRect();
+      const at = row.getBoundingClientRect();
+      if (at.top < frame.top) box.scrollTop -= frame.top - at.top;
+      else if (at.bottom > frame.bottom) box.scrollTop += at.bottom - frame.bottom;
+    };
+    keepInSight();
+    // The list's height is the stage's, and that settles after the episodes
+    // are in when the page header arrives late and wraps: a row brought to
+    // the bottom edge would end up just under it. Checked again on a resize.
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(keepInSight);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [selected, listed]);
 
   return (
     <div className={cn('flex min-w-0 flex-col gap-3 lg:min-h-0', className)}>
@@ -64,7 +92,7 @@ export function EpisodeListPanel(props: EpisodeListPanelProps) {
             )
           }
         />
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div ref={scroller} data-testid="episode-list-scroll" className="min-h-0 flex-1 overflow-y-auto">
           {isLoading ? (
             <div className="p-4"><SkeletonRows rows={6} columns={1} dense /></div>
           ) : hasError ? (

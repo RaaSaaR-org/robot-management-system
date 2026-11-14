@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, MutableRefObject, ReactNode, SyntheticEvent } from 'react';
 import { Pause, Play, VideoOff } from 'lucide-react';
-import { Button, EmptyState, Panel, SegmentedControl } from '@/shared/components/ui';
+import { Button, EmptyState, Panel, SegmentedControl, Spinner } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { beginRateLimitWait, useRateLimitHint } from '@/api/rateLimitStatus';
 import { cameraLabel, formatPlayhead } from './episodeFormat';
@@ -69,6 +69,12 @@ export interface EpisodeViewerProps {
    * next to each other in `stacked`. Default `stacked`.
    */
   layout?: ViewerLayout;
+  /**
+   * The episode on the stage: its index, as the list names it, and where it
+   * stands among the dataset's episodes (1-based). Shown over the picture, so
+   * the player says what it is playing however far the list is scrolled.
+   */
+  episode?: { index: number; position: number; count: number };
   className?: string;
   /** What the viewer asked for: true from Play until Pause, the end, or a failure. */
   isPlaying: boolean;
@@ -94,6 +100,12 @@ const RELOAD_GRACE_MS = 4000;
 
 /** How often a throttled video reloads by itself before the failure is shown. */
 const MAX_THROTTLE_RELOADS = 4;
+
+/** How long a video may be on its way before the cell says it is loading. */
+const LOADING_HINT_MS = 400;
+
+/** How long before "loading" becomes "still loading", with a way to ask again. */
+const STILL_LOADING_MS = 8000;
 
 /** The URL without its ticket: the same video, whichever ticket fetched it. */
 function withoutTicket(src: string): string {
@@ -159,7 +171,10 @@ interface CameraCellProps {
  *   reload with fresh URLs, then "Couldn't load this video" with Retry;
  * - the request was rate limited (429) → the cell waits as long as the server
  *   asked and loads the video again by itself, a few times over, saying so
- *   only once the wait has lasted more than a moment (TASK-482).
+ *   only once the wait has lasted more than a moment (TASK-482);
+ * - the request was sent and nothing has come back → a spinner over the cell,
+ *   and after a while "Still loading" with Retry (TASK-501). It goes when the
+ *   video's metadata or first frame arrives and does not return on a seek.
  */
 function CameraCell(p: CameraCellProps) {
   const { camera, src, codec, onReload, onFailure } = p;
@@ -179,6 +194,10 @@ function CameraCell(p: CameraCellProps) {
   const current = useRef({ src, attempt });
   current.current = { src, attempt };
   const hintVisible = useRateLimitHint();
+  // The URL and attempt whose video has answered: metadata or a first frame.
+  const [arrived, setArrived] = useState<{ src: string; attempt: number } | null>(null);
+  // How long the current one has been awaited: 0 nothing to say yet, 1 loading, 2 still loading.
+  const [waited, setWaited] = useState<0 | 1 | 2>(0);
 
   const playable = useMemo(() => canPlayVideoCodec(codec), [codec]);
   // A failure belongs to the URL and attempt it happened on; a new episode, a
@@ -262,6 +281,24 @@ function CameraCell(p: CameraCellProps) {
 
   const info = codec ? describeVideoCodec(codec) : null;
 
+  // Waiting for the ticket or for the video's first answer — not for a rate
+  // limit, which has its own notice, and not once a notice has taken the cell.
+  const loaded = arrived !== null && arrived.src === src && arrived.attempt === attempt;
+  const awaiting = !broken && !throttled && (!p.ready || !loaded);
+  useEffect(() => {
+    setWaited(0);
+    if (!awaiting) return;
+    const hint = setTimeout(() => setWaited(1), LOADING_HINT_MS);
+    const still = setTimeout(() => setWaited(2), STILL_LOADING_MS);
+    return () => {
+      clearTimeout(hint);
+      clearTimeout(still);
+    };
+  }, [awaiting, src, attempt]);
+  const markArrived = () => {
+    if (!loaded) setArrived({ src, attempt });
+  };
+
   let body: ReactNode;
   if (playable === false || failed === 'codec') {
     body = (
@@ -299,7 +336,9 @@ function CameraCell(p: CameraCellProps) {
         ref={(el) => { p.videoRefs.current[camera] = el; }}
         src={src}
         onTimeUpdate={p.onTimeUpdate}
-        onLoadedMetadata={() => p.onLoadedMetadata(camera)}
+        onLoadedMetadata={() => { markArrived(); p.onLoadedMetadata(camera); }}
+        onLoadedData={markArrived}
+        onCanPlay={markArrived}
         onEnded={p.onEnded}
         onPlay={p.onPlayingChange && (() => p.onPlayingChange?.(true))}
         onPause={p.onPlayingChange && (() => p.onPlayingChange?.(false))}
@@ -317,6 +356,24 @@ function CameraCell(p: CameraCellProps) {
         {cameraLabel(camera)}
       </span>
       {body}
+      {awaiting && waited > 0 && (
+        // Over the cell, never in the way of it: only the Retry button takes clicks.
+        <div
+          data-testid="video-loading"
+          className="pointer-events-none absolute inset-0 z-[5] flex flex-col items-center justify-center gap-2 px-6 text-center"
+        >
+          <Spinner size="md" label="Loading video…" className="text-ink-muted" />
+          {waited === 2 && (
+            <>
+              <p className="text-sm font-medium text-ink-primary">Still loading</p>
+              <p className="max-w-md text-xs text-ink-tertiary">The server has not sent this video yet.</p>
+              <Button variant="secondary" size="sm" onClick={retry} className="pointer-events-auto mt-1">
+                Retry
+              </Button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -359,10 +416,19 @@ export function EpisodeViewer(p: EpisodeViewerProps) {
     <Panel padding="none" data-testid="episode-viewer" className={cn('flex flex-col overflow-hidden lg:min-h-0', p.className)}>
       <div
         className={cn(
-          'grid gap-px bg-line-subtle lg:min-h-0 lg:flex-1 lg:auto-rows-fr',
+          'relative grid gap-px bg-line-subtle lg:min-h-0 lg:flex-1 lg:auto-rows-fr',
           gridColumns(cameras.length, layout),
         )}
       >
+        {p.episode && (
+          <span
+            data-testid="viewer-episode"
+            className="absolute right-2 top-2 z-10 rounded-tag bg-canvas/80 px-1.5 py-0.5 text-xs font-medium text-ink-secondary"
+          >
+            Episode {p.episode.index}
+            <span className="font-normal text-ink-tertiary"> · {p.episode.position} of {p.episode.count}</span>
+          </span>
+        )}
         {cameras.map((cam) => (
           <CameraCell
             key={cam}

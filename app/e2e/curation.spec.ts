@@ -2,8 +2,8 @@
  * @file curation.spec.ts
  * @description Functional tests for the episode curation panel (TASK-168):
  *   trim / delete flows (new-dataset outcome), and the AI-suggest flow
- *   (suggestions render, Apply prefills the trim inputs, delete needs the
- *   kit ConfirmDialog).
+ *   (suggestions render, Apply prefills the trim inputs, trim and delete
+ *   each need the kit ConfirmDialog).
  *   Runs against the demo build (MSW handlers in src/mocks/handlers.ts).
  */
 import { test, expect } from '@playwright/test';
@@ -31,6 +31,11 @@ test.describe('Curation panel', () => {
     await inputs.nth(1).fill('15');
 
     await page.getByTestId('curate-trim').click();
+    // a trim writes a new dataset, so it asks first (TASK-501)
+    const dialog = page.getByRole('alertdialog');
+    await expect(dialog).toContainText('Trim episode 0');
+    await expect(dialog).toContainText('Frames 2 up to 15 are kept');
+    await dialog.getByRole('button', { name: 'Trim' }).click();
 
     const message = page.getByTestId('curation-message');
     await expect(message).toBeVisible({ timeout: 5_000 });
@@ -91,6 +96,7 @@ test.describe('Curation panel', () => {
 
     // the human still triggers the edit explicitly
     await page.getByTestId('curate-trim').click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Trim' }).click();
     await expect(page.getByTestId('curation-message')).toContainText('Trimmed', { timeout: 5_000 });
   });
 
