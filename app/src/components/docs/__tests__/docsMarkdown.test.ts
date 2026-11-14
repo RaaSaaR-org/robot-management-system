@@ -1,11 +1,13 @@
 /**
  * @file docsMarkdown.test.ts
- * @description Tests for the docs renderer's slug, TOC and link helpers
+ * @description Tests for the docs renderer's slug, TOC and link helpers, and
+ *              the rows left out for hidden pages
  * @feature docs
  */
 
 import { describe, it, expect } from 'vitest';
 import {
+  dropRowsLinkingToHiddenDocs,
   extractHeadings,
   headingIdsByLine,
   normalizeCodeLanguage,
@@ -136,5 +138,45 @@ describe('normalizeCodeLanguage', () => {
 
   it('passes through a language Prism already knows', () => {
     expect(normalizeCodeLanguage('bash')).toBe('bash');
+  });
+});
+
+describe('dropRowsLinkingToHiddenDocs (TASK-508)', () => {
+  const hidden = (slug: string) => slug === 'demo-day' || slug.startsWith('records/');
+  const table = [
+    '## Running an instance',
+    '',
+    '| Document | What it covers |',
+    '| -------- | -------------- |',
+    '| [Deployment](deployment.md) | Docker Compose |',
+    '| [Demo day rehearsal](demo-day.md) | The browser demo used as a presentation fallback |',
+    '| [Runbook](runbook.md) | See also [the rehearsal](demo-day.md) |',
+    '',
+  ].join('\n');
+
+  it('drops a row whose first cell links only to a hidden page', () => {
+    const out = dropRowsLinkingToHiddenDocs(table, 'README', hidden);
+
+    expect(out).not.toContain('Demo day rehearsal');
+    expect(out).toContain('| [Deployment](deployment.md) | Docker Compose |');
+    expect(out).toContain('| Document | What it covers |');
+    expect(out).toContain('| -------- | -------------- |');
+  });
+
+  it('keeps a row that only mentions a hidden page in a later cell', () => {
+    expect(dropRowsLinkingToHiddenDocs(table, 'README', hidden)).toContain('| [Runbook](runbook.md) |');
+  });
+
+  it('resolves links against the current page, and leaves code blocks alone', () => {
+    const md = ['| [Record](../records/TASK-1.md) | x |', '```md', '| [Demo](demo-day.md) | y |', '```'].join('\n');
+
+    expect(dropRowsLinkingToHiddenDocs(md, 'planning/prd', hidden)).toBe(
+      ['```md', '| [Demo](demo-day.md) | y |', '```'].join('\n'),
+    );
+  });
+
+  it('returns the text unchanged when nothing points at a hidden page', () => {
+    const md = '# Title\n\n| [API](api.md) | HTTP |\n';
+    expect(dropRowsLinkingToHiddenDocs(md, 'README', hidden)).toBe(md);
   });
 });

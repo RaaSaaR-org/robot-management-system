@@ -659,6 +659,42 @@ describe('sendCommand status follow-up (TASK-504)', () => {
     expect(httpGet).toHaveBeenCalledTimes(reads);
   });
 
+  it('mirrors the battery on every read while the robot charges, not only on the 30 s check (TASK-508)', async () => {
+    const h = await setup(['charging']);
+    const levels = [85, 86.5, 88];
+    let i = 0;
+    httpGet.mockImplementation(async () => ({
+      status: 'healthy',
+      robotStatus: 'charging',
+      batteryLevel: levels[Math.min(i++, levels.length - 1)],
+    }));
+    const batteries: Array<number | null> = [];
+    h.mgr.onRobotEvent((e) => {
+      if (e.type === 'robot_status_changed') batteries.push((e as { robot: Robot }).robot.batteryLevel);
+    });
+
+    await h.mgr.sendCommand('r1', { type: 'charge' });
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_FIRST_READ_MS);
+    expect(h.registered.robot.status).toBe('charging');
+    expect(h.registered.robot.batteryLevel).toBe(85);
+    expect(robotRepository.updateHealthCheck).toHaveBeenCalledWith('r1', true, 'charging', 85);
+
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_READ_INTERVAL_MS);
+    expect(h.registered.robot.batteryLevel).toBe(86.5);
+    // Status unchanged: only the battery is written.
+    expect(robotRepository.updateHealthCheck).toHaveBeenLastCalledWith('r1', true, undefined, 86.5);
+
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_READ_INTERVAL_MS);
+    expect(h.registered.robot.batteryLevel).toBe(88);
+    expect(batteries).toEqual([85, 86.5, 88]);
+
+    // The same level again writes and emits nothing.
+    const writes = robotRepository.updateHealthCheck.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_READ_INTERVAL_MS);
+    expect(robotRepository.updateHealthCheck).toHaveBeenCalledTimes(writes);
+    expect(batteries).toEqual([85, 86.5, 88]);
+  });
+
   it('stops after the cap while the robot stays busy', async () => {
     const h = await setup(['busy']);
     await h.mgr.sendCommand('r1', { type: 'move' });
@@ -983,6 +1019,21 @@ describe('noteRobotAnswered', () => {
     expect(registered.robot.status).toBe('protective_stop');
     expect(robotRepository.updateHealthCheck).toHaveBeenCalledWith('r1', true, 'protective_stop');
     expect(events).toEqual([{ type: 'robot_status_changed', status: 'protective_stop' }]);
+  });
+
+  it('keeps the battery when none is reported, and clears it on null (TASK-508)', async () => {
+    const mgr = new RobotManager();
+    const registered = makeRegistered({ isConnected: true });
+    registered.robot.status = 'online';
+    robotRepository.updateHealthCheck.mockResolvedValue(true as never);
+
+    await mgr.noteRobotAnswered(registered, 'online', undefined);
+    expect(registered.robot.batteryLevel).toBe(90);
+    expect(robotRepository.updateHealthCheck).not.toHaveBeenCalled();
+
+    await mgr.noteRobotAnswered(registered, 'online', null);
+    expect(registered.robot.batteryLevel).toBeNull();
+    expect(robotRepository.updateHealthCheck).toHaveBeenCalledWith('r1', true, undefined, null);
   });
 
   it('writes and emits nothing when a connected robot reports the status it already has', async () => {

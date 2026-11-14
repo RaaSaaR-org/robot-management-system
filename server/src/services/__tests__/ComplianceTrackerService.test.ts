@@ -188,7 +188,11 @@ describe('getDashboardStats', () => {
 
     const nis2 = stats.frameworkScores.find((f) => f.framework === 'nis2')!;
     // Open items: the overdue deadline and the one still ahead (TASK-505).
-    expect(nis2).toEqual({ framework: 'nis2', score: 80, status: 'overdue', openItems: 2, totalItems: 4 });
+    // Requirements: 0 of 1, 2 of 2, the list-less one as 1 of 1, 0 of 1 (TASK-508).
+    expect(nis2).toEqual({
+      framework: 'nis2', score: 80, status: 'overdue', openItems: 2, totalItems: 4,
+      metRequirements: 3, totalRequirements: 5,
+    });
     expect(stats.overallScore).toBe(80);
   });
 
@@ -253,6 +257,41 @@ describe('getDashboardStats', () => {
     const stats = await service.getDashboardStats();
 
     expect(stats.frameworkScores[0]).toMatchObject({ score: 100, status: 'in_progress', openItems: 1 });
+  });
+
+  it('counts the requirements met next to the open items, so a full score is not a full bar (TASK-508)', async () => {
+    prismaMock.complianceGap.findMany.mockResolvedValue([]);
+    prismaMock.regulatoryDeadline.findMany.mockResolvedValue([
+      // The live AI Act case: one deadline, 0 of 8 done, far ahead.
+      { deadline: daysFromNow(261), requirements: JSON.stringify(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']), completedRequirements: '[]' },
+    ]);
+    mockAlertCounts();
+
+    const stats = await service.getDashboardStats();
+
+    // The score and the overall score are unchanged; the bar reads 0 of 8.
+    expect(stats.frameworkScores[0]).toMatchObject({
+      score: 100, status: 'in_progress', openItems: 1, totalItems: 1, metRequirements: 0, totalRequirements: 8,
+    });
+    expect(stats.overallScore).toBe(100);
+  });
+
+  it('counts an open gap as one requirement not met', async () => {
+    let call = 0;
+    prismaMock.complianceGap.findMany.mockImplementation(async () => {
+      call += 1;
+      return call === 1 ? [makeGap({ severity: 'medium' })] : [];
+    });
+    prismaMock.regulatoryDeadline.findMany.mockImplementation(async () =>
+      call === 1 ? [{ deadline: daysFromNow(200), requirements: '["a","b","c"]', completedRequirements: '["a","b","c","x"]' }] : [],
+    );
+    mockAlertCounts();
+
+    const stats = await service.getDashboardStats();
+
+    // Three of three met (an extra completed entry is not a fourth), plus the gap.
+    expect(stats.frameworkScores[0]).toMatchObject({ metRequirements: 3, totalRequirements: 4 });
+    expect(stats.frameworkScores[1]).toMatchObject({ status: 'not_assessed', metRequirements: 0, totalRequirements: 0 });
   });
 
   it('reports critical-gap status as overdue when score is below 50', async () => {

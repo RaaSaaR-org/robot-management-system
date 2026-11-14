@@ -1114,8 +1114,9 @@ export class RobotManager {
   }
 
   /**
-   * Re-read a robot's status after a command it accepted, until it is no longer
-   * `busy` or `charging` (TASK-504) — see {@link COMMAND_STATUS_READ_INTERVAL_MS}.
+   * Re-read a robot's status — and battery (TASK-508) — after a command it
+   * accepted, until it is no longer `busy` or `charging` (TASK-504) — see
+   * {@link COMMAND_STATUS_READ_INTERVAL_MS}.
    * A newer command restarts the schedule; a failed read, an unregistered robot
    * or the cap ends it, and the 30 s health check stays the fallback. It only
    * mirrors what the robot reports: it sends the robot nothing.
@@ -1137,7 +1138,9 @@ export class RobotManager {
       try {
         if (this.robotCache.get(robotId) !== registered) throw new Error('robot no longer registered');
         const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.SHORT);
-        const health = await httpClient.get<{ robotStatus?: RobotStatus }>('/api/v1/health');
+        const health = await httpClient.get<{ robotStatus?: RobotStatus; batteryLevel?: number | null }>(
+          '/api/v1/health'
+        );
         status = health?.robotStatus;
         // Only the everyday states are mirrored here. A move into or out of
         // error / protective stop / offline is the health check's: it raises
@@ -1148,7 +1151,9 @@ export class RobotManager {
           COMMAND_FOLLOWED_STATUSES.has(status) &&
           COMMAND_FOLLOWED_STATUSES.has(registered.robot.status)
         ) {
-          await this.noteRobotAnswered(registered, status);
+          // The battery rides along (TASK-508): while the robot charges, the
+          // record otherwise sat at its old level until the 30 s health check.
+          await this.noteRobotAnswered(registered, status, health?.batteryLevel);
         } else {
           status = undefined;
         }
@@ -1172,10 +1177,16 @@ export class RobotManager {
    * it connected and mirror the status it reported now, persisted and pushed to
    * the fleet view, instead of on the next poll.
    */
-  async noteRobotAnswered(registered: RegisteredRobot, status?: RobotStatus): Promise<void> {
+  async noteRobotAnswered(
+    registered: RegisteredRobot,
+    status?: RobotStatus,
+    batteryLevel?: number | null
+  ): Promise<void> {
     const now = new Date().toISOString();
     const wasConnected = registered.isConnected;
     const statusChanged = status !== undefined && status !== registered.robot.status;
+    // `null` is a robot without a battery, as in the health check; `undefined` is "not reported".
+    const batteryChanged = batteryLevel !== undefined && batteryLevel !== registered.robot.batteryLevel;
 
     registered.isConnected = true;
     registered.robot.lastSeen = now;
@@ -1183,14 +1194,14 @@ export class RobotManager {
       registered.robot.status = status;
       registered.robot.updatedAt = now;
     }
-    if (wasConnected && !statusChanged) return;
+    if (batteryChanged) registered.robot.batteryLevel = batteryLevel;
+    if (wasConnected && !statusChanged && !batteryChanged) return;
 
     try {
-      await robotRepository.updateHealthCheck(
-        registered.robot.id,
-        true,
-        statusChanged ? status : undefined
-      );
+      const statusUpdate = statusChanged ? status : undefined;
+      await (batteryChanged
+        ? robotRepository.updateHealthCheck(registered.robot.id, true, statusUpdate, batteryLevel)
+        : robotRepository.updateHealthCheck(registered.robot.id, true, statusUpdate));
     } catch (error) {
       // The cache already holds the truth; the next health check retries the row.
       console.error(`[RobotManager] Failed to persist status for ${registered.robot.id}:`, error);

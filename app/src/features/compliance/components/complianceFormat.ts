@@ -2,14 +2,15 @@
  * @file complianceFormat.ts
  * @description Shared formatting for the compliance sections: tones for the
  *              compliance-only status words, date and relative-date strings,
- *              and humanised event-type labels. Severities and the shared
+ *              humanised event-type labels, and the share of a framework's
+ *              requirements met (its bar). Severities and the shared
  *              status words (closed, in_progress, overdue …) come from the
  *              kit's statusTone().
  * @feature compliance
  */
 
 import { statusTone, type StatusToneName } from '@/shared/components/ui';
-import type { ComplianceEventType, ComplianceSeverity } from '../types';
+import type { ComplianceEventType, ComplianceSeverity, FrameworkScore } from '../types';
 import { formatDate as formatUiDate, formatDateTime as formatUiDateTime } from '@/shared/utils/format';
 
 /**
@@ -102,4 +103,19 @@ export function formatRelative(iso: string | null | undefined): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+/**
+ * The share of a framework's tracked requirements that are met, 0-100 — what
+ * its bar shows (TASK-508). The score is a penalty score that stays at 100
+ * while nothing is overdue, so a bar drawn from it read "100%" next to
+ * "1 open of 1". A server without the requirement counts falls back to the
+ * share of items that are not open.
+ */
+export function frameworkCompletion(fw: FrameworkScore): number {
+  if (fw.totalRequirements !== undefined && fw.metRequirements !== undefined && fw.totalRequirements > 0) {
+    return Math.round((100 * Math.min(fw.metRequirements, fw.totalRequirements)) / fw.totalRequirements);
+  }
+  if (fw.totalItems <= 0) return 0;
+  return Math.round((100 * (fw.totalItems - Math.min(fw.openItems, fw.totalItems))) / fw.totalItems);
 }

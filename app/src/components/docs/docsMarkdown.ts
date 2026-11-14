@@ -1,7 +1,8 @@
 /**
  * @file docsMarkdown.ts
  * @description Pure helpers behind the /docs renderer — heading slugs, the
- *              table of contents, and link resolution between docs
+ *              table of contents, link resolution between docs, and leaving
+ *              out contents rows that point at hidden pages
  * @feature docs
  */
 
@@ -162,6 +163,45 @@ export function resolveDocLink(href: string | undefined, currentSlug: string): D
   }
 
   return { kind: 'asset', href: raw };
+}
+
+/**
+ * Drop the table rows that exist to point at a page the nav hides (TASK-508):
+ * a row whose first cell links only to such docs. `docs/README.md` lists the
+ * demo-build pages for readers on GitHub; on a real instance those pages are
+ * left out of the nav, and a contents row into one read as stale. Rows that
+ * merely mention such a page in a later cell, and everything inside a fenced
+ * code block, stay.
+ */
+export function dropRowsLinkingToHiddenDocs(
+  markdown: string,
+  currentSlug: string,
+  isHidden: (slug: string) => boolean,
+): string {
+  let fence: string | null = null;
+  const kept: string[] = [];
+
+  for (const line of markdown.split('\n')) {
+    const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0];
+      if (fence === null) fence = marker;
+      else if (fence === marker) fence = null;
+      kept.push(line);
+      continue;
+    }
+
+    const row = fence === null ? /^\s*\|([^|]*)\|/.exec(line) : null;
+    if (row) {
+      const docSlugs = [...row[1].matchAll(/\[[^\]]*\]\(([^)\s]+)[^)]*\)/g)]
+        .map((m) => resolveDocLink(m[1], currentSlug))
+        .flatMap((link) => (link.kind === 'doc' ? [link.slug] : []));
+      if (docSlugs.length > 0 && docSlugs.every(isHidden)) continue;
+    }
+    kept.push(line);
+  }
+
+  return kept.join('\n');
 }
 
 // ============================================================================

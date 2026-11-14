@@ -60,6 +60,10 @@ export interface FrameworkScore {
   status: ComplianceStatus;
   openItems: number;
   totalItems: number;
+  /** Deadline requirements completed (TASK-508). An open gap is one requirement not met. */
+  metRequirements: number;
+  /** Deadline requirements plus open gaps — what the framework's bar is a share of (TASK-508). */
+  totalRequirements: number;
 }
 
 export interface ComplianceAlerts {
@@ -142,6 +146,31 @@ const OVERDUE_DEADLINE_PENALTY = 20;
 /** A deadline closer than this with less than half its requirements done puts its framework at risk. */
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 
+/**
+ * Requirements met out of requirements tracked for one framework (TASK-508):
+ * each deadline's requirement list, plus one unmet requirement per open gap.
+ * A deadline without a requirement list counts as one requirement, met — the
+ * same deadline the score and the open items treat as done.
+ */
+export function requirementCounts(
+  deadlines: Array<{ requirements: string; completedRequirements: string }>,
+  openGaps: number,
+): { metRequirements: number; totalRequirements: number } {
+  let met = 0;
+  let total = openGaps;
+  for (const d of deadlines) {
+    const reqs = parseArr(d.requirements).length;
+    if (reqs === 0) {
+      met += 1;
+      total += 1;
+      continue;
+    }
+    met += Math.min(parseArr(d.completedRequirements).length, reqs);
+    total += reqs;
+  }
+  return { metRequirements: met, totalRequirements: total };
+}
+
 export class ComplianceTrackerService {
   constructor() {
     console.log('[ComplianceTrackerService] Initialized');
@@ -217,7 +246,10 @@ export class ComplianceTrackerService {
 
       // Nothing tracked is not the same as everything met.
       if (totalItems === 0) {
-        scores.push({ framework, score: 0, status: 'not_assessed', openItems: 0, totalItems: 0 });
+        scores.push({
+          framework, score: 0, status: 'not_assessed', openItems: 0, totalItems: 0,
+          metRequirements: 0, totalRequirements: 0,
+        });
         continue;
       }
 
@@ -249,12 +281,18 @@ export class ComplianceTrackerService {
         status = 'in_progress';
       }
 
+      // What the framework's bar shows: the share of its requirements met, so
+      // "1 open of 1" never sits next to a full bar (TASK-508). The score above
+      // stays the penalty score the overall one averages.
+      const requirements = requirementCounts(deadlines, gaps.length);
+
       scores.push({
         framework,
         score,
         status,
         openItems,
         totalItems,
+        ...requirements,
       });
     }
 

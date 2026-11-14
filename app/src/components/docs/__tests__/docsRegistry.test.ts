@@ -118,8 +118,20 @@ describe('pages of the browser-mock demo build (TASK-505)', () => {
       expect(listed.filter(isDemoBuildOnlyDoc)).toEqual([]);
       expect(listed).toContain('demo-fleet');
     }
-    // docs/README.md links to demo-day.md: the link must still open the page.
+    // A link into one must still open the page.
     expect(DOC_CONTENT.has('demo-day')).toBe(true);
     expect(DOC_CONTENT.has('records/TASK-241-comments-and-ratings')).toBe(true);
+  });
+
+  it("leaves the README's contents row for the demo-day page out outside the demo build (TASK-508)", () => {
+    const readme = DOC_CONTENT.get('README') ?? '';
+    if (isDemo) {
+      expect(readme).toContain('(demo-day.md)');
+    } else {
+      expect(readme).not.toContain('(demo-day.md)');
+      expect(readme).not.toContain('Demo day rehearsal');
+      // The rest of that table stays.
+      expect(readme).toContain('[Incident runbook](runbook.md)');
+    }
   });
 });
