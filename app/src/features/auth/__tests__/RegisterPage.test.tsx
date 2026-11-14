@@ -2,12 +2,14 @@
  * @file RegisterPage.test.tsx
  * @description TASK-369: the register page shows a "sign-up is disabled" state
  *   when the server reports self-registration closed, and the form otherwise.
+ *   TASK-503: on a server without sign-in there is no account to create, so
+ *   /register opens the app like /login does.
  * @feature auth
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 vi.mock('@/api', () => ({
   apiClient: { get: vi.fn(), post: vi.fn() },
@@ -20,8 +22,11 @@ const FLAGS = { multiTenancyEnabled: false, signInRequired: true, natsEnabled: f
 
 function renderPage() {
   return render(
-    <MemoryRouter>
-      <RegisterPage />
+    <MemoryRouter initialEntries={['/register']}>
+      <Routes>
+        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/dashboard" element={<h1>Dashboard</h1>} />
+      </Routes>
     </MemoryRouter>
   );
 }
@@ -52,6 +57,15 @@ describe('RegisterPage', () => {
 
     expect(screen.getByText('Create your account')).toBeInTheDocument();
     expect(screen.queryByText('Sign-up is disabled')).not.toBeInTheDocument();
+  });
+
+  it('opens the dashboard on a server without sign-in, even with sign-up open', () => {
+    useFeaturesStore.setState({ flags: { ...FLAGS, signInRequired: false, selfRegistrationEnabled: true } });
+
+    renderPage();
+
+    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
+    expect(screen.queryByText('Create your account')).not.toBeInTheDocument();
   });
 
   it('shows the form while the flags are still loading', () => {

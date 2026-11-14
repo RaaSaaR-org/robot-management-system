@@ -38,7 +38,9 @@ export type ComplianceStatus =
   | 'in_progress'
   | 'at_risk'
   | 'overdue'
-  | 'not_started';
+  | 'not_started'
+  // A framework with nothing tracked — no gap, no deadline. Not a score of 100.
+  | 'not_assessed';
 
 export type GapSeverity = 'critical' | 'high' | 'medium' | 'low';
 export type TrainingType = 'operator_competence' | 'safety_training' | 'emergency_response' | 'first_aid' | 'maintenance_training';
@@ -134,6 +136,9 @@ export interface RegulatoryDeadlineInput {
 // SERVICE
 // ============================================================================
 
+/** Score points a framework loses per deadline that passed with requirements open — as much as a critical gap. */
+const OVERDUE_DEADLINE_PENALTY = 20;
+
 export class ComplianceTrackerService {
   constructor() {
     console.log('[ComplianceTrackerService] Initialized');
@@ -156,9 +161,11 @@ export class ComplianceTrackerService {
     const alerts = await this.calculateAlerts();
 
     // Calculate overall score (weighted average of framework scores)
-    const totalWeight = frameworkScores.length;
+    // A framework with nothing tracked has no score to average in (TASK-503).
+    const assessed = frameworkScores.filter(fs => fs.status !== 'not_assessed');
+    const totalWeight = assessed.length;
     const overallScore = totalWeight > 0
-      ? Math.round(frameworkScores.reduce((sum, fs) => sum + fs.score, 0) / totalWeight)
+      ? Math.round(assessed.reduce((sum, fs) => sum + fs.score, 0) / totalWeight)
       : 100;
 
     return {
@@ -175,6 +182,7 @@ export class ComplianceTrackerService {
     ];
 
     const scores: FrameworkScore[] = [];
+    const now = Date.now();
 
     for (const framework of frameworks) {
       const gaps = await prisma.complianceGap.findMany({
@@ -185,20 +193,38 @@ export class ComplianceTrackerService {
         where: { framework },
       });
 
-      const totalItems = gaps.length + deadlines.length;
-      const openItems = gaps.filter(g => g.status === 'open').length +
-        gaps.filter(g => g.severity === 'critical').length;
+      // Past due with requirements still open — the same rule that marks a
+      // deadline "overdue" in getRegulatoryDeadlines (TASK-503).
+      const overdueDeadlines = deadlines.filter(d => {
+        if (d.deadline.getTime() >= now) return false;
+        const reqs = parseArr(d.requirements);
+        return reqs.length > 0 && parseArr(d.completedRequirements).length < reqs.length;
+      }).length;
 
-      // Calculate score: 100 - (weighted gaps)
+      const totalItems = gaps.length + deadlines.length;
+
+      // Nothing tracked is not the same as everything met.
+      if (totalItems === 0) {
+        scores.push({ framework, score: 0, status: 'not_assessed', openItems: 0, totalItems: 0 });
+        continue;
+      }
+
+      const openItems = gaps.filter(g => g.status === 'open').length +
+        gaps.filter(g => g.severity === 'critical').length +
+        overdueDeadlines;
+
+      // Calculate score: 100 - (weighted gaps and missed deadlines)
       const criticalGaps = gaps.filter(g => g.severity === 'critical').length;
       const highGaps = gaps.filter(g => g.severity === 'high').length;
       const mediumGaps = gaps.filter(g => g.severity === 'medium').length;
 
-      const penaltyPoints = (criticalGaps * 20) + (highGaps * 10) + (mediumGaps * 5);
+      const penaltyPoints = (criticalGaps * 20) + (highGaps * 10) + (mediumGaps * 5) +
+        (overdueDeadlines * OVERDUE_DEADLINE_PENALTY);
       const score = Math.max(0, 100 - penaltyPoints);
 
       let status: ComplianceStatus;
-      if (score >= 90) status = 'compliant';
+      if (overdueDeadlines > 0) status = 'overdue';
+      else if (score >= 90) status = 'compliant';
       else if (score >= 70) status = 'in_progress';
       else if (score >= 50) status = 'at_risk';
       else if (criticalGaps > 0) status = 'overdue';
