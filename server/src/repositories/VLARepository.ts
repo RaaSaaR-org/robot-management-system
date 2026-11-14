@@ -1234,6 +1234,8 @@ export class ModelVersionRepository {
       // it unlinks. Only `undefined` leaves the column untouched.
       if (input.skillId !== undefined) updateData.skillId = input.skillId;
       if (input.name !== undefined) updateData.name = input.name;
+      if (input.version !== undefined) updateData.version = input.version;
+      if (input.notes !== undefined) updateData.notes = input.notes;
       if (input.parentModelVersionId !== undefined)
         updateData.parentModelVersionId = input.parentModelVersionId;
       if (input.artifactUri !== undefined) updateData.artifactUri = input.artifactUri;

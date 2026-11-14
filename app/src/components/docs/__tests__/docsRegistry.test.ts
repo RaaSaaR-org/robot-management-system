@@ -13,6 +13,7 @@ import {
   DOC_CONTENT,
   DOC_ENTRIES,
   ORDERED_CATEGORIES,
+  isDemoBuildOnlyDoc,
 } from '../docsRegistry';
 
 describe('slugFromKey', () => {
@@ -93,5 +94,32 @@ describe('the loaded registry', () => {
     // A new doc with no CATEGORY_MAP entry is easy to miss; it shows up here.
     const stranded = DOC_ENTRIES.filter((e) => e.category === 'Other').map((e) => e.slug);
     expect(stranded).toEqual([]);
+  });
+});
+
+describe('pages of the browser-mock demo build (TASK-505)', () => {
+  const isDemo = import.meta.env.VITE_DEMO_MODE === 'true';
+
+  it('names the demo pages and the task / decision records', () => {
+    expect(isDemoBuildOnlyDoc('demo-day')).toBe(true);
+    expect(isDemoBuildOnlyDoc('demo-intro')).toBe(true);
+    expect(isDemoBuildOnlyDoc('records/TASK-241-comments-and-ratings')).toBe(true);
+    expect(isDemoBuildOnlyDoc('adr/ADR-305-cut-the-landing-page-down-to-an-intro')).toBe(true);
+    expect(isDemoBuildOnlyDoc('demo-fleet')).toBe(false);
+    expect(isDemoBuildOnlyDoc('platform')).toBe(false);
+    expect(isDemoBuildOnlyDoc('README')).toBe(false);
+  });
+
+  it('leaves them out of the nav outside the demo build, but keeps them reachable by link', () => {
+    const listed = DOC_ENTRIES.map((e) => e.slug);
+    if (isDemo) {
+      expect(listed).toContain('demo-day');
+    } else {
+      expect(listed.filter(isDemoBuildOnlyDoc)).toEqual([]);
+      expect(listed).toContain('demo-fleet');
+    }
+    // docs/README.md links to demo-day.md: the link must still open the page.
+    expect(DOC_CONTENT.has('demo-day')).toBe(true);
+    expect(DOC_CONTENT.has('records/TASK-241-comments-and-ratings')).toBe(true);
   });
 });
