@@ -3,7 +3,7 @@ id: "TASK-505"
 aliases: []
 title: "The command bar reads go home and charge as moves, a framework with open deadline requirements is not called compliant, the docs hide the browser-demo pages, and a model's version and notes can be corrected"
 slug: "the-command-bar-reads-go-home-and-charge-as-moves-a"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
