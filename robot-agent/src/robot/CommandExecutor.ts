@@ -18,6 +18,7 @@ import {
   getChargingStationLocation,
   getHomeLocation,
   resolveMoveTarget,
+  simulatedChargerLocation,
 } from '../tools/navigation.js';
 import {
   agentModeController,
@@ -79,6 +80,14 @@ export interface CommandExecutorConfig {
   agentEstop?: AgentEstop;
   /** Real locomotion for `move` on a sidecar-backed robot; absent = kinematic only. */
   locomotion?: MoveLocomotion;
+  /**
+   * True only on an agent explicitly configured as a simulation
+   * (`SIMULATED_ROBOT=true`, TASK-502). It lets `charge` fall back to the
+   * simulation's own charger when the place graph names none — and only while
+   * no real locomotion is engaged. Absent or false = a real robot, which is
+   * refused instead: a made-up charger is a drive to nowhere.
+   */
+  simulated?: boolean;
   /**
    * True while the SafetyMonitor's E-stop is latched (TASK-382). Every command
    * that is not a stop is refused while it is; absent = never latched (tests).
@@ -504,7 +513,15 @@ export class CommandExecutor {
     try {
       chargingStation = await getChargingStationLocation();
     } catch (error) {
-      return { result: { success: false, message: error instanceof Error ? error.message : String(error) } };
+      // TASK-502: a purely simulated robot charges where its own battery logic
+      // does. Both conditions must hold — the explicit simulation flag AND no
+      // real locomotion — so a real robot (or a sim that walks through the
+      // sidecar) is still refused rather than sent to an invented charger.
+      const simulatedOnly = this.config.simulated === true && !this.config.locomotion?.engaged();
+      if (!simulatedOnly) {
+        return { result: { success: false, message: error instanceof Error ? error.message : String(error) } };
+      }
+      chargingStation = simulatedChargerLocation();
     }
     const start = await this.beginMove(chargingStation);
     if (start.result.success) {

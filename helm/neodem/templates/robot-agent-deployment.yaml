@@ -56,6 +56,11 @@ spec:
             - name: ROBOT_TYPE
               value: {{ . | quote }}
             {{- end }}
+            # This chart's robot agent is a pure simulation (TASK-502): "true"
+            # lets Charge use the simulation's own charger when the robot has no
+            # registered place graph. Must stay "false" for an agent on hardware.
+            - name: SIMULATED_ROBOT
+              value: {{ .Values.robotAgent.env.simulated | default "false" | quote }}
             - name: ROBOT_CLASS
               value: {{ .Values.robotAgent.env.robotClass | quote }}
             - name: MAX_PAYLOAD_KG

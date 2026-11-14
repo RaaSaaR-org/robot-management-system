@@ -27,6 +27,13 @@ export interface Config {
   robotModel: string;
   robotClass: RobotClass;
   robotType: RobotType;
+  /**
+   * This agent is a pure simulation with no robot behind it (`SIMULATED_ROBOT`,
+   * TASK-502). Opt-in, default false: only `true` lets a `charge` command fall
+   * back to the simulation's own charger when no charging place is known. Never
+   * set it on an agent that drives real hardware.
+   */
+  simulatedRobot: boolean;
   maxPayloadKg: number;
   robotDescription: string;
   geminiApiKey: string;
@@ -832,6 +839,7 @@ export const config: Config = {
   robotModel: process.env.ROBOT_MODEL || 'SimBot H1',
   robotClass: (process.env.ROBOT_CLASS as RobotClass) || 'standard',
   robotType: (process.env.ROBOT_TYPE as RobotType) || 'h1',
+  simulatedRobot: process.env.SIMULATED_ROBOT === 'true',
   maxPayloadKg: parseFloat(process.env.MAX_PAYLOAD_KG || '10'),
   robotDescription: normalizeRobotDescription(
     process.env.ROBOT_DESCRIPTION || 'A versatile humanoid robot for general tasks'

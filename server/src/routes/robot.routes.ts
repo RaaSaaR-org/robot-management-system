@@ -344,6 +344,42 @@ robotRoutes.post('/:id/command', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /:id/commands - The robot's command history (TASK-502)
+ *
+ * Read-only relay of the agent's own history (`GET /api/v1/robots/:id/commands`,
+ * newest first, kept in agent memory — it empties when the agent restarts).
+ * Query: `page`, `pageSize` (positive integers, passed through).
+ * 404 when the robot is unknown here or to its agent; 502 when the agent
+ * cannot be reached or answers with anything else.
+ */
+robotRoutes.get('/:id/commands', async (req: Request, res: Response) => {
+  try {
+    const registered = await robotManager.getRegisteredRobot(req.params.id);
+    if (!registered) return res.status(404).json({ error: 'Robot not found' });
+
+    const query = new URLSearchParams();
+    for (const key of ['page', 'pageSize'] as const) {
+      const value = Number.parseInt(String(req.query[key] ?? ''), 10);
+      if (Number.isInteger(value) && value > 0) query.set(key, String(value));
+    }
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+
+    const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.SHORT);
+    const data = await httpClient.get(
+      `/api/v1/robots/${encodeURIComponent(req.params.id)}/commands${suffix}`
+    );
+    res.json(data);
+  } catch (error) {
+    if (error instanceof HttpClientError) {
+      if (error.statusCode === 404) return res.status(404).json({ error: 'Robot not found' });
+      return res.status(502).json({ error: 'Unable to communicate with robot agent' });
+    }
+    console.error('Error fetching command history:', error);
+    res.status(500).json({ error: 'Failed to get command history' });
+  }
+});
+
+/**
  * GET /:id/telemetry - Get robot telemetry
  */
 robotRoutes.get('/:id/telemetry', async (req: Request, res: Response) => {

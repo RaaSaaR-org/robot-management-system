@@ -12,6 +12,13 @@ import { normalizeRobotType, type RobotType, type JointState } from '../../types
 import { getFastTelemetry } from '../../store/telemetryLive';
 import { tickMotion, isFollowingRoot } from '../../motion/motionPlayback';
 import { readCssColor } from '../common/readCssColor';
+import {
+  ROBOT_MATERIAL_NAME,
+  applyRobotMaterial,
+  isModelHidden,
+  watchModelLoad,
+  type ModelLoadState,
+} from './modelLoading';
 
 // ============================================================================
 // TYPES
@@ -39,6 +46,13 @@ export interface RobotModelProps {
    * otherwise restyles every mesh in its tree).
    */
   linkOverlay?: { link: string; node: ReactNode };
+  /**
+   * Told how the URDF's mesh load is going (TASK-502), so a viewer can show a
+   * loading indicator: the model stays hidden behind its placeholder until all
+   * meshes have arrived or the reveal timeout passed. Never called for a robot
+   * type drawn procedurally — that one has nothing to load.
+   */
+  onLoadState?: (state: ModelLoadState) => void;
 }
 
 // ============================================================================
@@ -189,17 +203,24 @@ function URDFModel({
   isAnimating,
   robotId,
   linkOverlay,
+  onLoadState,
 }: RobotModelProps) {
   const groupRef = useRef<THREE.Group>(null);
   const [robot, setRobot] = useState<URDFRobot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // TASK-502: the model is hidden until every mesh has landed (or the reveal
+  // timeout passed), so a cold load never shows a robot assembling itself from
+  // floating parts.
+  const [hidden, setHidden] = useState(true);
+  const onLoadStateRef = useRef(onLoadState);
+  onLoadStateRef.current = onLoadState;
   const timeRef = useRef(0);
   // Latest slow-path (props) joint states, read inside useFrame without
   // re-arming any effect — the fast path bypasses props entirely.
   const propJointStatesRef = useRef<JointState[] | undefined>(jointStates);
   propJointStatesRef.current = jointStates;
 
-  // Load URDF model (don't apply materials here - DAE loads async)
+  // Load URDF model (don't apply materials here - meshes load async)
   useEffect(() => {
     const urdfPath = URDF_PATHS[robotType];
     if (!urdfPath) {
@@ -207,23 +228,36 @@ function URDFModel({
       return;
     }
 
-    const loader = new URDFLoader();
-    timeRef.current = 0; // Reset timer to allow material application
+    // The URDF and every mesh it names go through this one manager, so its
+    // "all loaded" is the moment the model is whole.
+    let cancelled = false;
+    const manager = new THREE.LoadingManager();
+    const stopWatching = watchModelLoad(manager, (state) => {
+      // An abandoned load says nothing about what is on screen now.
+      if (state.phase !== 'cancelled') setHidden(isModelHidden(state));
+      onLoadStateRef.current?.(state);
+    });
+    const loader = new URDFLoader(manager);
+    timeRef.current = 0;
 
     loader.load(
       urdfPath,
       (loadedRobot) => {
+        if (cancelled) return;
         setRobot(loadedRobot);
         setLoadError(null);
       },
       undefined,
       (error) => {
+        if (cancelled) return;
         console.error('[RobotModel] Failed to load URDF:', error);
         setLoadError(`Failed to load URDF: ${error}`);
       }
     );
 
     return () => {
+      cancelled = true;
+      stopWatching();
       // Cleanup on unmount
       if (robot) {
         robot.traverse((child) => {
@@ -240,7 +274,7 @@ function URDFModel({
     };
   }, [robotType]);
 
-  // Apply materials in useFrame (keep checking for 3 seconds to catch async DAE loads),
+  // Apply materials in useFrame (every frame: a mesh may land at any time),
   // drive joints toward their telemetry targets with damping, and handle idle animation
   useFrame((_, delta) => {
     timeRef.current += delta;
@@ -292,34 +326,25 @@ function URDFModel({
       }
     }
 
-    // Keep applying materials for first 3 seconds after robot loads (DAE meshes load async)
-    if (robot && time < 3) {
-      robot.traverse((child: THREE.Object3D) => {
-        const mesh = child as THREE.Mesh;
-        // A `linkOverlay` mesh (TASK-414) keeps its own material: it hangs
-        // inside the robot's tree, so this traverse reaches it too.
-        if (mesh.userData?.keepMaterial) return;
-        // Check if mesh needs material update (hasn't been processed yet)
-        if (mesh.isMesh && mesh.material) {
-          const mat = mesh.material as THREE.Material;
-          // Skip if already our custom material (check by name)
-          if (mat.name === 'RobotCustomMaterial') return;
-
-          // Apply bright metallic material with strong glow (visible on dark bg)
-          const newMat = new THREE.MeshStandardMaterial({
-            name: 'RobotCustomMaterial',
+    // Every mesh gets the model's material whenever it arrives (TASK-502). This
+    // used to stop 3 s after the URDF parsed, so a mesh landing later — most of
+    // them on a cold load — kept the loader's default colour. The pass skips
+    // meshes it already restyled, so running it each frame costs a tree walk.
+    if (robot) {
+      applyRobotMaterial(
+        robot,
+        // Bright metallic material with a faint glow (visible on the dark ground)
+        () =>
+          new THREE.MeshStandardMaterial({
+            name: ROBOT_MATERIAL_NAME,
             color: new THREE.Color(readCssColor('--text-secondary', 'silver')),
             metalness: 0.5,
             roughness: 0.4,
             emissive: new THREE.Color(readCssColor('--color-primary', 'white')),
             emissiveIntensity: 0.12,   // A faint mint lift so the body reads on the dark ground
             side: THREE.DoubleSide,
-          });
-          mesh.material = newMat;
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-        }
-      });
+          })
+      );
     }
 
     // Idle animation when no telemetry
@@ -342,24 +367,28 @@ function URDFModel({
     );
   }
 
-  // Show loading state
+  // Loading state: the placeholder stands in until the URDF has parsed AND all
+  // of its meshes have landed. The robot is mounted meanwhile — hidden — so its
+  // meshes are restyled and its joints posed before anyone sees it.
+  const placeholder = (
+    <mesh>
+      <boxGeometry args={[0.5, 1.5, 0.3]} />
+      <meshStandardMaterial color={readCssColor('--text-muted', 'gray')} wireframe />
+    </mesh>
+  );
   if (!robot) {
-    return (
-      <group ref={groupRef}>
-        <mesh>
-          <boxGeometry args={[0.5, 1.5, 0.3]} />
-          <meshStandardMaterial color={readCssColor('--text-muted', 'gray')} wireframe />
-        </mesh>
-      </group>
-    );
+    return <group ref={groupRef}>{placeholder}</group>;
   }
 
   const overlayLink = linkOverlay ? (robot.links?.[linkOverlay.link] as THREE.Object3D | undefined) : undefined;
   return (
-    <group ref={groupRef} rotation={[-Math.PI / 2, 0, 0]}>
-      <primitive object={robot} />
-      {linkOverlay && overlayLink && createPortal(linkOverlay.node, overlayLink)}
-    </group>
+    <>
+      <group ref={groupRef} rotation={[-Math.PI / 2, 0, 0]} visible={!hidden}>
+        <primitive object={robot} />
+        {linkOverlay && overlayLink && createPortal(linkOverlay.node, overlayLink)}
+      </group>
+      {hidden && placeholder}
+    </>
   );
 }
 

@@ -6,7 +6,7 @@
  */
 
 import type { SimulatedRobotState, RobotLocation } from './types.js';
-import { chargingStationLocation } from '../tools/navigation.js';
+import { chargingStationLocation, simulatedChargerLocation } from '../tools/navigation.js';
 
 /**
  * Callback to update robot state
@@ -119,7 +119,7 @@ export class SimulationEngine {
    * frame origin — the one location that needs no graph.
    */
   private get chargingStation(): RobotLocation | null {
-    return chargingStationLocation() ?? { x: 0, y: 0, floor: '1', place: null };
+    return chargingStationLocation() ?? simulatedChargerLocation();
   }
 
   /**

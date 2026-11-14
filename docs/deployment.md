@@ -443,6 +443,7 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `robotAgent.enabled` | Deploy robot agent | `true` |
 | `robotAgent.env.robotType` | Embodiment the simulated robot is (`ROBOT_TYPE`): `g1`, `g1_edu`, `h1`, `so101` | `g1` |
 | `robotAgent.env.robotModel` | Model name shown under the robot's name (`ROBOT_MODEL`) | `Unitree G1 (simulated)` |
+| `robotAgent.env.simulated` | The agent is a pure simulation (`SIMULATED_ROBOT`): Charge falls back to the simulation's own charger when the robot has no registered place graph. Set `"false"` if the agent ever fronts real hardware | `"true"` |
 | `ingress.enabled` | Enable ingress | `true` |
 | `ingress.host` | Ingress hostname | `neodem.local` |
 | `ingress.tls` | Enable TLS | `false` |
@@ -589,6 +590,7 @@ sign-up; a self-registered account is a `viewer`.
 | `OPENROUTER_API_KEY` | No | — | OpenRouter API key (alternative) |
 | `LLM_MODEL` | No | — | Override default LLM model |
 | `CONTROL_LEASE_REQUIRED` | No | `false` | Refuse motion from clients without a bound control lease (see [Control leases](#control-leases)) |
+| `SIMULATED_ROBOT` | No | `false` | `true` only on a pure simulation with no robot behind it: a Charge command then falls back to the simulation's own charger (the frame origin) when no charging place is known, and only while no real locomotion is engaged. A real robot is refused instead — never set it on an agent that drives hardware |
 
 ### App (`app/.env`)
 

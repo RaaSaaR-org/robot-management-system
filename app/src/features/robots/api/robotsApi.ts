@@ -3,10 +3,11 @@
  * @description API calls for robot management endpoints
  * @feature robots
  * @dependencies @/api/client
+ * @apiCalls POST /robots/:id/command, GET /robots/:id/commands
  */
 
 import { apiClient } from '@/api/client';
-import { isNotFoundError } from '@/shared/utils/error';
+import { getErrorStatus, isNotFoundError } from '@/shared/utils/error';
 import type {
   Robot,
   RobotTelemetry,
@@ -33,6 +34,7 @@ const ENDPOINTS = {
   register: '/robots/register',
   get: (id: string) => `/robots/${id}`,
   command: (id: string) => `/robots/${id}/command`,
+  commands: (id: string) => `/robots/${id}/commands`,
   telemetry: (id: string) => `/robots/${id}/telemetry`,
   telemetryHistory: (id: string) => `/robots/${id}/telemetry/history`,
   frameRegistration: (id: string) => `/robots/${id}/frame-registration`,
@@ -40,6 +42,28 @@ const ENDPOINTS = {
   robotType: (id: string) => `/robots/${id}/robot-type`,
 } as const;
 
+// ============================================================================
+// ERRORS
+// ============================================================================
+
+/** What a refused command says when the robot gave no reason. */
+const COMMAND_REJECTED_FALLBACK = 'The robot rejected the command.';
+
+/**
+ * A command the server delivered but the robot refused (TASK-502). The HTTP
+ * call succeeds — the answer is a command whose `status` is `failed` — so
+ * without this every caller would read a refusal as "sent". `message` is the
+ * robot's own `errorMessage`; `command` is the refused command as returned.
+ */
+export class RobotCommandFailedError extends Error {
+  readonly command: RobotCommand;
+
+  constructor(command: RobotCommand) {
+    super(command.errorMessage?.trim() || COMMAND_REJECTED_FALLBACK);
+    this.name = 'RobotCommandFailedError';
+    this.command = command;
+  }
+}
 
 // ============================================================================
 // API FUNCTIONS
@@ -176,34 +200,52 @@ export const robotsApi = {
    * @param robotId - Target robot ID
    * @param command - Command to execute
    * @returns Created command with status
+   * @throws RobotCommandFailedError when the robot refused the command — the
+   *   call itself answers 200 with a `failed` command (TASK-502). `sendToCharge`,
+   *   `returnHome` and `emergencyStop` go through here and throw the same way.
    */
   async sendCommand(robotId: string, command: RobotCommandRequest): Promise<RobotCommand> {
     const response = await apiClient.post<RobotCommand>(ENDPOINTS.command(robotId), command);
+    if (response.data?.status === 'failed') {
+      throw new RobotCommandFailedError(response.data);
+    }
     return response.data;
   },
 
   /**
-   * Get command history for a robot.
-   * Note: This endpoint is served by the robot agent, not the server.
+   * Get command history for a robot, newest first (TASK-502).
+   * The server relays the robot agent's own history, which lives in agent
+   * memory. A robot the server or its agent does not know (404) and an agent
+   * that cannot be reached (502) both read as "no commands", not as a failure.
    * @param robotId - Robot ID
    * @param params - Pagination parameters
    * @returns Paginated list of commands
    */
   async getCommands(
-    _robotId: string,
+    robotId: string,
     params?: { page?: number; pageSize?: number }
   ): Promise<CommandListResponse> {
-    // TODO: This would need to be fetched from the robot's endpoint
-    // For now, return empty list
-    return {
+    const page = params?.page ?? 1;
+    const pageSize = params?.pageSize ?? 10;
+    const empty: CommandListResponse = {
       commands: [],
-      pagination: {
-        page: params?.page ?? 1,
-        pageSize: params?.pageSize ?? 10,
-        total: 0,
-        totalPages: 0,
-      },
+      pagination: { page, pageSize, total: 0, totalPages: 0 },
     };
+    try {
+      const response = await apiClient.get<Partial<CommandListResponse>>(
+        ENDPOINTS.commands(robotId),
+        { params: { page, pageSize } }
+      );
+      const commands = Array.isArray(response.data?.commands) ? response.data.commands : [];
+      return {
+        commands,
+        pagination: response.data?.pagination ?? { ...empty.pagination, total: commands.length },
+      };
+    } catch (error) {
+      const status = getErrorStatus(error);
+      if (status === 404 || status === 502) return empty;
+      throw error;
+    }
   },
 
   /**

@@ -4,10 +4,11 @@
  * @feature robots
  */
 
-import { Suspense, memo, type ReactNode } from 'react';
+import { Suspense, memo, useState, type ReactNode } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Grid, Center } from '@react-three/drei';
 import { RobotModel } from './RobotModel';
+import { modelLoadLabel, type ModelLoadState } from './modelLoading';
 import { normalizeRobotType, type RobotType, type JointState } from '../../types/robots.types';
 import { Skeleton } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
@@ -77,6 +78,11 @@ export const Robot3DViewer = memo(function Robot3DViewer({
     robotType === 'g1' || robotType === 'g1_edu' ? [1.5, 1.0, 1.5] :
     [2, 1.5, 2];
 
+  // TASK-502: the model stays hidden until all of its meshes have arrived, so
+  // say that it is loading instead of leaving an empty stage.
+  const [loadState, setLoadState] = useState<ModelLoadState | null>(null);
+  const loadingLabel = modelLoadLabel(loadState);
+
   return (
     <div
       className={cn('relative h-full min-h-[300px] w-full overflow-hidden rounded-control', className)}
@@ -110,6 +116,7 @@ export const Robot3DViewer = memo(function Robot3DViewer({
                 isAnimating={isAnimating}
                 robotId={robotId}
                 linkOverlay={linkOverlay}
+                onLoadState={setLoadState}
               />
             </Center>
 
@@ -136,6 +143,17 @@ export const Robot3DViewer = memo(function Robot3DViewer({
           </Suspense>
         </Canvas>
       </ViewerGuard>
+      {loadingLabel && (
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center"
+          role="status"
+          data-testid="robot-3d-loading"
+        >
+          <span className="rounded-control bg-surface-raised px-2.5 py-1 text-[13px] tabular-nums text-ink-secondary">
+            {loadingLabel}
+          </span>
+        </div>
+      )}
     </div>
   );
 });

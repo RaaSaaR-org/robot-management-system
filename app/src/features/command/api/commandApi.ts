@@ -8,7 +8,7 @@
 
 import { apiClient } from '@/api/client';
 import { isNotFoundError } from '@/shared/utils/error';
-import { robotsApi } from '@/features/robots/api';
+import { robotsApi, RobotCommandFailedError } from '@/features/robots/api';
 import type { PlaceGraph } from '@/features/digitaltwin/types/twin.types';
 import { placeCentroid, reachablePlaces } from '@/features/digitaltwin/utils/places';
 import type { RobotCommand, CommandType } from '@/features/robots/types';
@@ -115,6 +115,31 @@ function mapCommandType(
   }
 }
 
+/**
+ * The action a target-less phrase means (TASK-502). "Return home" and "Charge"
+ * name no destination, and the keyword interpreter only extracts a target
+ * behind "to/at" — so without this they became a bare `move` the robot refuses
+ * with "No destination provided". A heuristic on the operator's own words, used
+ * only when the interpretation carries no target and no objects, and only for
+ * a navigation or unclassified command: a status question ("is it home?") or an
+ * emergency is never rerouted.
+ */
+export function targetlessAction(
+  interpretation: Pick<CommandInterpretation, 'commandType' | 'parameters' | 'originalText'>
+): 'charge' | 'return_home' | null {
+  // The interpreter's own categories ('navigation', 'custom', …), as `mapCommandType` reads them.
+  const nlType: string = interpretation.commandType;
+  if (nlType !== 'navigation' && nlType !== 'custom') return null;
+  const parameters = interpretation.parameters ?? {};
+  if (parameters.target?.trim() || parameters.destination || parameters.objects?.length) {
+    return null;
+  }
+  const text = (interpretation.originalText ?? '').toLowerCase();
+  if (/\b(re)?charg(e|ing)\b/.test(text)) return 'charge';
+  if (/\bhome\b/.test(text)) return 'return_home';
+  return null;
+}
+
 // ============================================================================
 // ENDPOINTS
 // ============================================================================
@@ -168,32 +193,56 @@ export const commandApi = {
           : 'normal';
 
     let command: RobotCommand;
+    // "Return home" / "Charge" arrive without a target (TASK-502).
+    const targetless = targetlessAction(interpretation);
 
-    // Handle special cases with existing helpers
-    if (robotCommandType === 'move') {
-      const target = interpretation.parameters.target?.toLowerCase() || '';
-
-      // Use existing charge helper for charging station
-      if (target.includes('charging')) {
+    try {
+      if (targetless === 'charge') {
         command = await robotsApi.sendToCharge(robotId);
-      }
-      // Use existing home helper for home
-      else if (target.includes('home')) {
+      } else if (targetless === 'return_home') {
         command = await robotsApi.returnHome(robotId);
       }
-      // Regular move command
-      else {
+      // Handle special cases with existing helpers
+      else if (robotCommandType === 'move') {
+        const target = interpretation.parameters.target?.toLowerCase() || '';
+
+        // Use existing charge helper for charging station
+        if (target.includes('charging')) {
+          command = await robotsApi.sendToCharge(robotId);
+        }
+        // Use existing home helper for home
+        else if (target.includes('home')) {
+          command = await robotsApi.returnHome(robotId);
+        }
+        // Regular move command
+        else {
+          const payload: Record<string, unknown> = {
+            ...interpretation.parameters,
+            nlOriginalText: interpretation.originalText,
+            interpretationId: interpretation.id,
+          };
+
+          // Resolve the place name against the robot's site
+          const destination = await getLocationByName(robotId, interpretation.parameters.target);
+          if (destination) {
+            payload.destination = destination;
+          }
+
+          command = await robotsApi.sendCommand(robotId, {
+            type: robotCommandType,
+            payload,
+            priority,
+          });
+        }
+      } else if (robotCommandType === 'emergency_stop') {
+        command = await robotsApi.emergencyStop(robotId);
+      } else {
+        // Build payload for other command types
         const payload: Record<string, unknown> = {
           ...interpretation.parameters,
           nlOriginalText: interpretation.originalText,
           interpretationId: interpretation.id,
         };
-
-        // Resolve the place name against the robot's site
-        const destination = await getLocationByName(robotId, interpretation.parameters.target);
-        if (destination) {
-          payload.destination = destination;
-        }
 
         command = await robotsApi.sendCommand(robotId, {
           type: robotCommandType,
@@ -201,21 +250,21 @@ export const commandApi = {
           priority,
         });
       }
-    } else if (robotCommandType === 'emergency_stop') {
-      command = await robotsApi.emergencyStop(robotId);
-    } else {
-      // Build payload for other command types
-      const payload: Record<string, unknown> = {
-        ...interpretation.parameters,
-        nlOriginalText: interpretation.originalText,
-        interpretationId: interpretation.id,
-      };
-
-      command = await robotsApi.sendCommand(robotId, {
-        type: robotCommandType,
-        payload,
-        priority,
-      });
+    } catch (error) {
+      // TASK-502: the robot refused the command. The interpretation was not
+      // executed — record it as failed (best effort) and let the caller show
+      // the robot's reason.
+      if (error instanceof RobotCommandFailedError) {
+        try {
+          await apiClient.patch(ENDPOINTS.updateStatus(interpretation.id), {
+            status: 'failed',
+            executedCommandId: error.command.id,
+          });
+        } catch (patchError) {
+          console.error('[commandApi] Failed to update interpretation status:', patchError);
+        }
+      }
+      throw error;
     }
 
     // Update interpretation status to 'executed' after successful command

@@ -301,42 +301,63 @@ export function useRobot(id: string): UseRobotReturn {
     storeUpdateTelemetry(id, data);
   }, [id, storeUpdateTelemetry]);
 
+  // Best-effort (TASK-502): the history is a read-only relay of the agent's
+  // memory, so a failed load keeps the list as it was and never fails the
+  // command that asked for the refresh.
   const refreshCommandHistory = useCallback(async () => {
-    const response = await robotsApi.getCommands(id, { pageSize: 10 });
-    setCommandHistory(response.commands);
+    try {
+      const response = await robotsApi.getCommands(id, { pageSize: 10 });
+      setCommandHistory(response.commands);
+    } catch {
+      // Keep what is shown.
+    }
   }, [id]);
 
-  // Fetch command history on mount
+  // Fetch the history once the robot is known to have a reachable agent, and
+  // again whenever its status changes — a command sent from anywhere (the
+  // command bar, another client) moves the status. An expected or offline robot
+  // has no agent to ask, so it stays quiet (TASK-485).
+  const robotStatus = robot?.status;
   useEffect(() => {
-    refreshCommandHistory();
-  }, [refreshCommandHistory]);
+    if (!robotStatus || robotStatus === 'offline') return;
+    void refreshCommandHistory();
+  }, [refreshCommandHistory, robotStatus]);
 
+  // A refused command throws (TASK-502) and is in the history all the same, so
+  // every action refreshes it whether the command went through or not.
   const sendCommand = useCallback(
     async (command: RobotCommandRequest) => {
-      const result = await storeSendCommand(id, command);
-      // Refresh command history after sending a command
-      await refreshCommandHistory();
-      return result;
+      try {
+        return await storeSendCommand(id, command);
+      } finally {
+        await refreshCommandHistory();
+      }
     },
     [id, storeSendCommand, refreshCommandHistory]
   );
 
   const emergencyStop = useCallback(async () => {
-    const result = await robotsApi.emergencyStop(id);
-    await refreshCommandHistory();
-    return result;
+    try {
+      return await robotsApi.emergencyStop(id);
+    } finally {
+      await refreshCommandHistory();
+    }
   }, [id, refreshCommandHistory]);
 
   const sendToCharge = useCallback(async () => {
-    const result = await robotsApi.sendToCharge(id);
-    await refreshCommandHistory();
-    return result;
+    try {
+      return await robotsApi.sendToCharge(id);
+    } finally {
+      await refreshCommandHistory();
+    }
   }, [id, refreshCommandHistory]);
 
   const returnHome = useCallback(async () => {
-    const result = await robotsApi.returnHome(id);
-    await refreshCommandHistory();
-    return result;
+    try {
+      return await robotsApi.returnHome(id);
+    } finally {
+      await refreshCommandHistory();
+    }
   }, [id, refreshCommandHistory]);
 
   return useMemo(
