@@ -42,12 +42,23 @@ export function EpisodeListPanel(props: EpisodeListPanelProps) {
   const listed = !isLoading && episodes.length > 0;
   useEffect(() => {
     const box = scroller.current;
-    const row = box?.querySelector('[aria-current="true"]');
-    if (!box || !listed || !(row instanceof HTMLElement)) return;
-    const frame = box.getBoundingClientRect();
-    const at = row.getBoundingClientRect();
-    if (at.top < frame.top) box.scrollTop -= frame.top - at.top;
-    else if (at.bottom > frame.bottom) box.scrollTop += at.bottom - frame.bottom;
+    if (!box || !listed) return;
+    const keepInSight = () => {
+      const row = box.querySelector('[aria-current="true"]');
+      if (!(row instanceof HTMLElement)) return;
+      const frame = box.getBoundingClientRect();
+      const at = row.getBoundingClientRect();
+      if (at.top < frame.top) box.scrollTop -= frame.top - at.top;
+      else if (at.bottom > frame.bottom) box.scrollTop += at.bottom - frame.bottom;
+    };
+    keepInSight();
+    // The list's height is the stage's, and that settles after the episodes
+    // are in when the page header arrives late and wraps: a row brought to
+    // the bottom edge would end up just under it. Checked again on a resize.
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(keepInSight);
+    observer.observe(box);
+    return () => observer.disconnect();
   }, [selected, listed]);
 
   return (

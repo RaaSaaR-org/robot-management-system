@@ -114,8 +114,11 @@ export function DatasetEpisodesPage() {
   // The episode the address asks for, per dataset: read when a dataset opens,
   // and kept in step with the selection, so a reload of the list keeps it.
   const requestedEpisodeRef = useRef({ datasetId, episode: searchParams.get('episode') });
+  // The selection still to be written to the address (see `writeEpisodeParam`).
+  const unwrittenEpisodeRef = useRef<number | null>(null);
   if (requestedEpisodeRef.current.datasetId !== datasetId) {
     requestedEpisodeRef.current = { datasetId, episode: searchParams.get('episode') };
+    unwrittenEpisodeRef.current = null;
   }
   // `setSearchParams` changes identity with the address; the callbacks that
   // write `?episode=` stay stable by reaching it through this.
@@ -124,14 +127,16 @@ export function DatasetEpisodesPage() {
   /**
    * The selected episode goes into the address (`?episode=N`), replacing the
    * entry, so a reload or coming back to the page opens the same episode.
+   *
+   * It is noted here and written once the stage has settled on it (the effect
+   * under `stageEpisode`): a held arrow key walks the list some thirty rows a
+   * second, and an address change per row re-renders the whole shell each
+   * time and runs into the browsers' cap on `history.replaceState` — Safari
+   * throws past 100 calls in ten seconds, Chrome drops them.
    */
   const writeEpisodeParam = useCallback((index: number) => {
     requestedEpisodeRef.current = { ...requestedEpisodeRef.current, episode: String(index) };
-    setSearchParamsRef.current((prev) => {
-      const next = new URLSearchParams(prev);
-      next.set('episode', String(index));
-      return next;
-    }, { replace: true });
+    unwrittenEpisodeRef.current = index;
   }, []);
   // The episode whose videos and frames are loaded. A single click moves it
   // at once; through a run of quick clicks or a held arrow key it waits for
@@ -139,6 +144,15 @@ export function DatasetEpisodesPage() {
   // (TASK-492). The list highlight and the Curate panel follow
   // `selectedEpisode` itself.
   const stageEpisode = useSettledValue(selectedEpisode, EPISODE_SETTLE_MS);
+  useEffect(() => {
+    if (stageEpisode === null || unwrittenEpisodeRef.current !== stageEpisode) return;
+    unwrittenEpisodeRef.current = null;
+    setSearchParamsRef.current((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('episode', String(stageEpisode));
+      return next;
+    }, { replace: true });
+  }, [stageEpisode]);
   const [flaggedMap, setFlaggedMap] = useState<Record<number, boolean>>({});
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState<number | ''>('');
@@ -444,7 +458,8 @@ export function DatasetEpisodesPage() {
     // One click writes a whole new dataset: asked first, like the delete (TASK-501).
     const ok = await confirm({
       title: `Trim episode ${selectedEpisode}?`,
-      description: `Frames ${trimStart} to ${trimEnd === '' ? 'the end' : trimEnd} are kept. A new dataset revision is written with the shortened episode; the original is kept.`,
+      // The end frame is exclusive, as the curation tool takes it: [start, end).
+      description: `${trimEnd === '' ? `Frames from ${trimStart} to the end are kept.` : `Frames ${trimStart} up to ${trimEnd} are kept (frame ${trimEnd} itself is not).`} A new dataset revision is written with the shortened episode; the original is kept.`,
       confirmLabel: 'Trim',
     });
     if (!ok) return;

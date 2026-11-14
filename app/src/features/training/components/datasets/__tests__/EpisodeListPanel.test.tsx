@@ -12,7 +12,7 @@ import { EpisodeListPanel, type EpisodeListPanelProps } from '../EpisodeListPane
 import type { EpisodeMeta } from '../../../types';
 
 const ROW_PX = 50;
-const BOX_PX = 200;
+let BOX_PX = 200;
 
 const EPISODES: EpisodeMeta[] = Array.from({ length: 40 }, (_, index) => ({
   index,
@@ -60,6 +60,8 @@ const scroller = () => screen.getByTestId('episode-list-scroll');
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  BOX_PX = 200;
 });
 
 describe('the selected row of the episode list', () => {
@@ -91,5 +93,22 @@ describe('the selected row of the episode list', () => {
     expect(scroller().scrollTop).toBe(0);
     rerender(<EpisodeListPanel {...props({ selected: 30 })} />);
     expect(scroller().scrollTop).toBe(31 * ROW_PX - BOX_PX);
+  });
+
+  it('is kept in view when the list gets shorter after it was scrolled to', () => {
+    // the stage, and the list with it, shrinks when the page header arrives late and wraps
+    const resized: Array<() => void> = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized.push(callback); }
+      observe() {}
+      disconnect() {}
+    });
+    layOut();
+    render(<EpisodeListPanel {...props({ selected: 30 })} />);
+    expect(scroller().scrollTop).toBe(31 * ROW_PX - 200);
+
+    BOX_PX = 150;
+    resized.forEach((notify) => notify());
+    expect(scroller().scrollTop).toBe(31 * ROW_PX - 150);
   });
 });

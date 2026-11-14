@@ -108,6 +108,7 @@ BrowserRouter > ThemeProvider > AuthProvider > App
 | Path                | Page                  | Description                  |
 | ------------------- | --------------------- | ---------------------------- |
 | `/datasets`         | `DatasetsPage`        | VLA dataset management       |
+| `/datasets/:datasetId/episodes` | `DatasetEpisodesPage` | Episode viewer; `?episode=N` names the episode, `/datasets/:datasetId` redirects here |
 | `/training`         | `TrainingPage`        | Training job management      |
 | `/deployments`      | `DeploymentsPage`     | Fleet deployment management  |
 | `/deployments/:id`  | `DeploymentDetailPage`| Deployment detail            |

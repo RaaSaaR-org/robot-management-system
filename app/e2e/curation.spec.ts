@@ -34,7 +34,7 @@ test.describe('Curation panel', () => {
     // a trim writes a new dataset, so it asks first (TASK-501)
     const dialog = page.getByRole('alertdialog');
     await expect(dialog).toContainText('Trim episode 0');
-    await expect(dialog).toContainText('Frames 2 to 15 are kept');
+    await expect(dialog).toContainText('Frames 2 up to 15 are kept');
     await dialog.getByRole('button', { name: 'Trim' }).click();
 
     const message = page.getByTestId('curation-message');

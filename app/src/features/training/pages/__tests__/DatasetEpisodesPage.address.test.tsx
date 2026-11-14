@@ -87,8 +87,13 @@ const EPISODES: EpisodeMeta[] = [0, 1, 5].map((index) => ({
   flagged: false,
 }));
 
+/** Every address the page has been at, in order. */
+const addressesSeen: string[] = [];
+
 function Address() {
   const location = useLocation();
+  const at = location.pathname + location.search;
+  if (addressesSeen[addressesSeen.length - 1] !== at) addressesSeen.push(at);
   return <output data-testid="address">{location.pathname + location.search}</output>;
 }
 
@@ -135,6 +140,24 @@ describe('the selected episode and the address', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Curate' }));
     await waitFor(() => expect(address()).toBe('/datasets/apple/episodes?tab=curate&episode=5'));
+  });
+
+  it('writes only the episode a run of quick picks ends on (a held arrow key)', async () => {
+    renderPage();
+    await waitFor(() => expect(row(0)).toHaveAttribute('aria-current', 'true'));
+    // past the settle window of the page opening its first episode
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    addressesSeen.length = 0;
+
+    fireEvent.click(row(1));
+    fireEvent.click(row(5));
+    fireEvent.click(row(0));
+    fireEvent.click(row(1));
+    fireEvent.click(row(5));
+    expect(row(5)).toHaveAttribute('aria-current', 'true');
+    await waitFor(() => expect(address()).toBe('/datasets/apple/episodes?episode=5'));
+    // the first pick is written at once, the ones passed on the way never
+    expect(addressesSeen).toEqual(['/datasets/apple/episodes?episode=1', '/datasets/apple/episodes?episode=5']);
   });
 
   it('opens the episode the address names', async () => {
@@ -227,7 +250,7 @@ describe('trimming an episode', () => {
     renderPage('?episode=1');
     const dialog = await trim();
     expect(dialog).toHaveTextContent('Trim episode 1?');
-    expect(dialog).toHaveTextContent('Frames 2 to 15 are kept.');
+    expect(dialog).toHaveTextContent('Frames 2 up to 15 are kept (frame 15 itself is not).');
     expect(trainingApiMock.trimEpisode).not.toHaveBeenCalled();
     // The question outlives the page in the kit's queue: answer it.
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
