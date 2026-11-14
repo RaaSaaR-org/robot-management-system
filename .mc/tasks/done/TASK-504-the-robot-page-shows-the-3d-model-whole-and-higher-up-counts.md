@@ -3,7 +3,7 @@ id: "TASK-504"
 aliases: []
 title: "The robot page shows the 3D model whole and higher up, counts and explains its commands, and a simulated robot drives to charge and home"
 slug: "the-robot-page-shows-the-3d-model-whole-and-higher-up-counts"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
@@ -105,3 +105,19 @@ simulated robot. The demo is on 2026-11-16. Each fix is the smallest safe change
 - server: `RobotManager.test.ts` "sendCommand status follow-up (TASK-504)".
 - Typecheck and vitest for app, server and robot-agent, plus the Playwright spec
   `e2e/robot-model-loading.spec.ts`.
+
+## Notes
+
+Measured on the demo build (MSW), with mesh requests held so the loading label
+stays up. Canvas top, before → after:
+
+| Robot | 1280x720 | 1440x900 |
+| ----- | -------- | -------- |
+| online (`demo-h1-001`) | 525 → 374 | 525 → 374 |
+| offline (`demo-generic-001`) | 696 → 545 | 696 → 545 |
+
+The canvas is 439 px tall, so the move is 151 px. The online robot's model is now
+in the first screen at 1280x720. The loading label sits in its centre, at y≈593;
+before, it sat at the canvas bottom at y≈925. For an offline robot at 1280x720 only
+the top of the canvas shows: the offline banner (about 170 px) still sits above the
+model. At 1440x900 the whole model is in view.
