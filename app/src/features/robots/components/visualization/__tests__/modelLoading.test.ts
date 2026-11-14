@@ -90,6 +90,45 @@ describe('watchModelLoad (TASK-502)', () => {
     expect(h.states).toHaveLength(count);
   });
 
+  it('never times out a load that keeps progressing past the timeout (TASK-504)', () => {
+    const h = watch();
+    h.manager.itemStart('g1.urdf');
+    for (let i = 0; i < 6; i += 1) h.manager.itemStart(`mesh-${i}.STL`);
+    h.manager.itemEnd('g1.urdf');
+
+    // A slow link: one mesh lands every 8 s, so the whole load takes 48 s —
+    // well past one timeout — but there is never a 20 s gap.
+    for (let i = 0; i < 5; i += 1) {
+      vi.advanceTimersByTime(8_000);
+      h.manager.itemEnd(`mesh-${i}.STL`);
+      expect(h.last().phase).toBe('loading');
+    }
+    vi.advanceTimersByTime(MODEL_REVEAL_TIMEOUT_MS - 1);
+    expect(h.last().phase).toBe('loading');
+    expect(isModelHidden(h.last())).toBe(true);
+
+    h.manager.itemEnd('mesh-5.STL');
+    expect(h.last()).toEqual({ phase: 'ready', loaded: 7, total: 7 });
+    expect(h.states.some((s) => s.phase === 'timeout')).toBe(false);
+  });
+
+  it('reveals a load that stalls after progressing, once nothing has arrived for the timeout (TASK-504)', () => {
+    const h = watch();
+    h.manager.itemStart('g1.urdf');
+    h.manager.itemStart('pelvis.STL');
+    h.manager.itemStart('hung.STL');
+    h.manager.itemEnd('g1.urdf');
+
+    vi.advanceTimersByTime(15_000);
+    h.manager.itemEnd('pelvis.STL');
+    // 15 s + 19.999 s since the start: past the old fixed deadline, inside the stall window.
+    vi.advanceTimersByTime(MODEL_REVEAL_TIMEOUT_MS - 1);
+    expect(h.last().phase).toBe('loading');
+
+    vi.advanceTimersByTime(1);
+    expect(h.last()).toEqual({ phase: 'timeout', loaded: 2, total: 3 });
+  });
+
   it('the timeout is about 20 seconds', () => {
     expect(MODEL_REVEAL_TIMEOUT_MS).toBe(20_000);
   });

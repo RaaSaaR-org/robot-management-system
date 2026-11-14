@@ -10,6 +10,7 @@ import { useCallback, useId, useState, type FormEvent } from 'react';
 import { Send, Sparkles, X } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { Button, Input, ToggleChip, errorMessage, toast } from '@/shared/components/ui';
+import { commandRefusalTitle } from '@/features/robots/utils/commandRefusal';
 import { useCommand, useSimulation } from '../hooks';
 import { CommandPreview } from './CommandPreview';
 import { CommandConfirmation } from './CommandConfirmation';
@@ -77,9 +78,14 @@ export function CommandBar({ robotId, robotName, className }: CommandBarProps) {
       toast.success('Command sent', { description: `${robotName} received the command.` });
     } catch (err) {
       setShowConfirmation(false);
-      toast.error("Couldn't send command", {
-        description: errorMessage(err),
-      });
+      const refused = commandRefusalTitle(robotName, err);
+      if (refused) {
+        toast.error(refused);
+      } else {
+        toast.error("Couldn't send command", {
+          description: errorMessage(err),
+        });
+      }
     }
   }, [executeCommand, robotId, robotName]);
 

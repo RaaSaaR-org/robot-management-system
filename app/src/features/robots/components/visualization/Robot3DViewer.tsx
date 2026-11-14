@@ -145,7 +145,7 @@ export const Robot3DViewer = memo(function Robot3DViewer({
       </ViewerGuard>
       {loadingLabel && (
         <div
-          className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center"
+          className="pointer-events-none absolute inset-0 flex items-center justify-center"
           role="status"
           data-testid="robot-3d-loading"
         >

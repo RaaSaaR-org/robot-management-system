@@ -24,14 +24,19 @@ let robotStateManager: RobotStateManager;
 const HOME_LOCATION: RobotLocation = { x: 0, y: 0, floor: '1', place: null };
 
 /**
- * Where a simulated robot charges when its place graph names no charger: the
- * frame origin, the one location that needs no graph. The simulation's battery
- * logic and — on an agent explicitly configured as simulated, with no real
- * locomotion engaged — the `charge` command share it (TASK-502). A real robot
- * is never sent here: for it a made-up charger is a drive to nowhere.
+ * Where a simulated robot charges when its place graph names no charger. The
+ * simulation's battery logic and — on an agent explicitly configured as
+ * simulated, with no real locomotion engaged — the `charge` command share it
+ * (TASK-502). A real robot is never sent here by a command: for it a made-up
+ * charger is a drive to nowhere.
+ *
+ * Its own point, a few metres from home (TASK-504): at the frame origin it was
+ * home itself, so Charge drove nowhere and Home "arrived at the charger" and
+ * left the robot charging. Kept more than 1 m from home on both axes — the
+ * engine's arrival radius — so Home never counts as reaching it.
  */
 export function simulatedChargerLocation(): RobotLocation {
-  return { x: 0, y: 0, floor: '1', place: null };
+  return { x: 6, y: 4, floor: '1', place: null };
 }
 
 export function setRobotStateManager(manager: RobotStateManager): void {

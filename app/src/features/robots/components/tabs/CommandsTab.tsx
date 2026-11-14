@@ -1,7 +1,8 @@
 /**
  * @file CommandsTab.tsx
  * @description Command panels of the Activity tab: a natural-language command
- *              bar with quick Charge / Home acts, and the command history table.
+ *              bar with Charge / Home buttons, and the command history table. A
+ *              failed row says why it failed and what was asked (TASK-504).
  * @feature robots
  */
 
@@ -24,13 +25,34 @@ import type { CommandsTabProps } from './types';
 
 const ICON = 'h-4 w-4';
 
+/** The operator's own words behind a command, when it came from the command bar. */
+function originalPhrase(command: RobotCommand): string | null {
+  const text = command.payload?.nlOriginalText;
+  return typeof text === 'string' && text.trim() ? text.trim() : null;
+}
+
+/** Command label; a failed row adds the robot's reason and the phrase it was asked. */
+function CommandCell({ command }: { command: RobotCommand }) {
+  const label = COMMAND_TYPE_LABELS[command.type] || command.type;
+  if (command.status !== 'failed') return <span className="text-ink-primary">{label}</span>;
+  const phrase = originalPhrase(command);
+  const reason = command.errorMessage?.trim();
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <span className="text-ink-primary">{label}</span>
+      {phrase && <span className="text-xs text-ink-tertiary">“{phrase}”</span>}
+      {reason && <span className="text-xs text-signal-stopped">{reason}</span>}
+    </div>
+  );
+}
+
 const COLUMNS: DataTableColumn<RobotCommand>[] = [
   {
     key: 'type',
     header: 'Command',
     sortable: true,
     sortValue: (c) => COMMAND_TYPE_LABELS[c.type] || c.type,
-    cell: (c) => <span className="text-ink-primary">{COMMAND_TYPE_LABELS[c.type] || c.type}</span>,
+    cell: (c) => <CommandCell command={c} />,
   },
   {
     key: 'status',
@@ -79,7 +101,7 @@ export function CommandsTab({
       <Panel>
         <Panel.Header
           title="Send a command"
-          description={`Tell ${robot.name} what to do in plain words, or use a quick act.`}
+          description={`Tell ${robot.name} what to do in plain words, or use the buttons.`}
           actions={
             <>
               {canCharge && (

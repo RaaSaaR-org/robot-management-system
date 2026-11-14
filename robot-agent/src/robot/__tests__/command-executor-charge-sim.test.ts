@@ -4,7 +4,7 @@
  *              refused — a made-up charger is a drive to nowhere — unless the
  *              agent is explicitly configured as a simulation AND no real
  *              locomotion is engaged; only then does it charge at the
- *              simulation's own charger, the frame origin.
+ *              simulation's own charger, a few metres from home (TASK-504).
  * @feature robot
  * @status test
  */
@@ -57,7 +57,8 @@ describe('CommandExecutor — charge without a known charging place (TASK-502)',
     expect(command.status).toBe('completed');
     expect(command.errorMessage).toBeUndefined();
     expect(h.state.targetLocation).toEqual(simulatedChargerLocation());
-    expect(h.state.targetLocation).toMatchObject({ x: 0, y: 0 });
+    // Its own point, away from home (TASK-504): a charge visibly drives.
+    expect(h.state.targetLocation).toMatchObject({ x: 6, y: 4 });
     expect(h.state.status).toBe('busy');
     expect(h.locomotion.walkTo).not.toHaveBeenCalled();
   });

@@ -590,7 +590,7 @@ sign-up; a self-registered account is a `viewer`.
 | `OPENROUTER_API_KEY` | No | — | OpenRouter API key (alternative) |
 | `LLM_MODEL` | No | — | Override default LLM model |
 | `CONTROL_LEASE_REQUIRED` | No | `false` | Refuse motion from clients without a bound control lease (see [Control leases](#control-leases)) |
-| `SIMULATED_ROBOT` | No | `false` | `true` only on a pure simulation with no robot behind it: a Charge command then falls back to the simulation's own charger (the frame origin) when no charging place is known, and only while no real locomotion is engaged. A real robot is refused instead — never set it on an agent that drives hardware |
+| `SIMULATED_ROBOT` | No | `false` | `true` only on a pure simulation with no robot behind it: a Charge command then falls back to the simulation's own charger (a fixed point at (6, 4), a few metres from home) when no charging place is known, and only while no real locomotion is engaged. A real robot is refused instead — never set it on an agent that drives hardware |
 
 ### App (`app/.env`)
 

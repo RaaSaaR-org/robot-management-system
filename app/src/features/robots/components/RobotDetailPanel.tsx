@@ -31,6 +31,7 @@ import { useRobotsStore } from '../store/robotsStore';
 import { useTasksByRobotId } from '@/features/processes/hooks/useTasks';
 import { isRobotAvailable, robotProvisioning } from '../types/robots.types';
 import { robotTraits } from '../utils/robotTraits';
+import { commandRefusalTitle } from '../utils/commandRefusal';
 
 // ============================================================================
 // TYPES
@@ -101,7 +102,9 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
       await executeCommand(sendToCharge);
       toast.success('Sent to charge', { description: name });
     } catch (err) {
-      toast.error("Couldn't send to charge", { description: errorMessage(err) });
+      const refused = commandRefusalTitle(name, err);
+      if (refused) toast.error(refused);
+      else toast.error("Couldn't send to charge", { description: errorMessage(err) });
     }
   }, [executeCommand, sendToCharge, name]);
 
@@ -116,7 +119,9 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
       await executeCommand(returnHome);
       toast.success('Sent home', { description: name });
     } catch (err) {
-      toast.error("Couldn't send home", { description: errorMessage(err) });
+      const refused = commandRefusalTitle(name, err);
+      if (refused) toast.error(refused);
+      else toast.error("Couldn't send home", { description: errorMessage(err) });
     }
   }, [executeCommand, returnHome, name]);
 
