@@ -70,9 +70,15 @@ or data change.
   selected row (`block: 'nearest'` semantics). It moves `scrollTop` of the list
   itself instead of calling `scrollIntoView`, which would also scroll the page
   when the list is partly off screen (for example when a curation suggestion
-  is applied from the panel below).
+  is applied from the panel below). The same check runs again when the list
+  is resized: the stage's height settles after the episodes arrive when the
+  page header comes late, and the row would end up just under the edge.
 - **Address**: `selectEpisode` and `applySuggestion` write `?episode=N` with
-  `replace: true`, keeping the other parameters (`?tab=`). An `?episode=` the
+  `replace: true`, keeping the other parameters (`?tab=`). The write happens
+  once the stage has settled on the episode (the same settle as TASK-492), so
+  a held arrow key writes the address once, not once per row passed — an
+  address change per row re-renders the shell and runs into the browsers' cap
+  on `history.replaceState`. An `?episode=` the
   dataset does not have opens the first episode, rewrites the address to it and
   shows an info toast ("Episode 9999 is not in this dataset"). The requested
   episode is now tracked per dataset, so moving to another dataset inside the
@@ -81,7 +87,8 @@ or data change.
   selection, not the other way round (React Router applies the address in a
   transition, so a two-way sync could undo a click).
 - **Trim** (`handleTrim`): the kit `confirm()` first — "Trim episode N?" with
-  the range that is kept — same shape as delete.
+  the range that is kept, the end frame named as excluded (`[start, end)`, as
+  `server/curation/curate.py` takes it) — same shape as delete.
 - **Slow video** (`CameraCell` in `EpisodeViewer.tsx`): a spinner over the cell
   once a video (or its ticket) has been awaited for 400 ms, and after 8 s
   "Still loading" with the existing Retry handler. The cell counts as loaded on
@@ -148,3 +155,10 @@ Left out on purpose: the episode tag is not shown for a dataset without cameras
 (the "No camera streams" panel is unchanged), and the task text of an episode
 is not shown because the episodes endpoint does not return one (server change,
 after the demo).
+
+Review (2026-11-14) added three things on the branch: the address write waits
+for the settled episode (150 arrow-key presses on the live 402-episode dataset
+made 2 `history.replaceState` calls instead of 150); the list re-checks the
+selected row when it is resized (with `?episode=401&tab=curate` the row sat one
+row under the list's edge on every load); and the trim question says the end
+frame is not kept. `app/AGENTS.md` lists the route.
