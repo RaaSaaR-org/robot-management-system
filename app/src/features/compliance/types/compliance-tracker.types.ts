@@ -492,6 +492,10 @@ export interface FrameworkScore {
   status: ComplianceStatus;
   openItems: number;
   totalItems: number;
+  /** Requirements met, the bar's numerator (TASK-508). Absent from servers before it. */
+  metRequirements?: number;
+  /** Deadline requirements plus open gaps, the bar's denominator (TASK-508). */
+  totalRequirements?: number;
 }
 
 /**

@@ -14,7 +14,7 @@ import {
 import { cn } from '@/shared/utils/cn';
 import { useComplianceTrackerStore } from '../store/complianceTrackerStore';
 import { COMPLIANCE_STATUS_CONFIG, REGULATORY_FRAMEWORK_LABELS } from '../types';
-import { complianceTone, formatDate, formatDays, formatRelative, humanize } from './complianceFormat';
+import { complianceTone, formatDate, formatDays, formatRelative, frameworkCompletion, humanize } from './complianceFormat';
 
 export interface ComplianceDashboardProps {
   className?: string;
@@ -139,6 +139,7 @@ export function ComplianceDashboard({ className }: ComplianceDashboardProps) {
                   const name = REGULATORY_FRAMEWORK_LABELS[fw.framework] ?? fw.framework;
                   const cfg = COMPLIANCE_STATUS_CONFIG[fw.status];
                   const assessed = fw.status !== 'not_assessed';
+                  const completion = frameworkCompletion(fw);
                   return (
                     <li
                       key={fw.framework}
@@ -151,16 +152,18 @@ export function ComplianceDashboard({ className }: ComplianceDashboardProps) {
                         </div>
                       </div>
                       <div className="col-span-2 row-start-2 sm:col-span-1 sm:row-start-auto">
-                        {/* An overdue framework is never a green bar, whatever its score (TASK-503),
-                            and an at-risk one never more than amber (TASK-505). */}
+                        {/* The bar is the share of requirements met (TASK-508). An overdue
+                            framework is never a green bar (TASK-503), an at-risk one never
+                            more than amber (TASK-505), and neither is one with items open. */}
                         {assessed && (
                           <ProgressBar
-                            value={fw.score}
+                            value={completion}
                             size="sm"
                             variant={
                               fw.status === 'overdue'
                                 ? 'error'
-                                : fw.status === 'at_risk' && scoreBar(fw.score) === 'success'
+                                : (fw.status === 'at_risk' || fw.openItems > 0 || completion < 100) &&
+                                    scoreBar(fw.score) === 'success'
                                   ? 'warning'
                                   : scoreBar(fw.score)
                             }

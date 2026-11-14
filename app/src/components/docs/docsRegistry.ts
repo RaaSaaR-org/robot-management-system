@@ -5,6 +5,7 @@
  */
 
 import type { DocEntry } from './DocsSidebar';
+import { dropRowsLinkingToHiddenDocs } from './docsMarkdown';
 
 // ---------------------------------------------------------------------------
 // Source
@@ -154,7 +155,8 @@ function buildDocEntries(): {
   for (const [key, content] of Object.entries(docsRaw)) {
     const slug = slugFromKey(key);
     // Always loaded, so a link into the page still lands; listed only in the demo build.
-    contentMap.set(slug, content);
+    // Outside it, a contents row that only points at such a page goes too (TASK-508).
+    contentMap.set(slug, isDemo ? content : dropRowsLinkingToHiddenDocs(content, slug, isDemoBuildOnlyDoc));
     if (!isDemo && isDemoBuildOnlyDoc(slug)) continue;
     const category = categoryFromSlug(slug);
     entries.push({ slug, title: titleFromSlug(slug), category });
