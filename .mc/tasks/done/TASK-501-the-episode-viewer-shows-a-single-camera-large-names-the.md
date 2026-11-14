@@ -3,7 +3,7 @@ id: "TASK-501"
 aliases: []
 title: "The episode viewer shows a single camera large, names the episode it plays, keeps it in the address and says when a video is slow"
 slug: "the-episode-viewer-shows-a-single-camera-large-names-the"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
