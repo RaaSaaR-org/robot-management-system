@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="__BRAND_DESCRIPTION__" />
     <title>__BRAND_TITLE__</title>
@@ -13,7 +13,9 @@
       (function () {
         try {
           var stored = localStorage.getItem('ThemeStore');
-          var theme = stored ? JSON.parse(stored).state.theme : 'system';
+          // No stored choice: 'dark', the theme store's own default — falling
+          // back to the OS setting painted light first on a light-mode laptop.
+          var theme = stored ? JSON.parse(stored).state.theme : 'dark';
           if (theme === 'system') {
             theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
           }

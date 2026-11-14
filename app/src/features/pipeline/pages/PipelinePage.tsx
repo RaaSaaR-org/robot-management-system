@@ -61,10 +61,21 @@ const pick = (running: number, done: number): StageStatus =>
 // DATA — one fetch per stage, isolated so one failure doesn't break others
 // ============================================================================
 
-async function fetchCollect(): Promise<StageState> {
+/** True once the Dataset stage holds at least one dataset. */
+const hasDatasets = (dataset: StageState): boolean =>
+  !dataset.loadError && dataset.status !== 'empty' && dataset.status !== 'blocked';
+
+async function fetchCollect(dataset: Promise<StageState>): Promise<StageState> {
   try {
     const sessions = (await datacollectionApi.listSessions({ limit: 10 })).sessions ?? [];
-    if (sessions.length === 0) return { ...EMPTY, statLine: 'No sessions yet' };
+    if (sessions.length === 0) {
+      // Datasets that were imported or uploaded did the collecting elsewhere:
+      // the stage is covered, not "not started" (TASK-503).
+      if (hasDatasets(await dataset)) {
+        return { status: 'done', statLine: 'Datasets imported', hintLine: 'No sessions recorded on this instance' };
+      }
+      return { ...EMPTY, statLine: 'No sessions yet' };
+    }
     const completed = sessions.filter((s) => s.status === 'completed').length;
     return {
       status: pick(sessions.filter((s) => s.status === 'recording').length, completed),
@@ -95,7 +106,19 @@ async function fetchDataset(): Promise<StageState> {
 async function fetchTrain(hasUpstream: boolean): Promise<StageState> {
   try {
     const jobs = (await trainingApi.listTrainingJobs({ pageSize: 10 })).jobs ?? [];
-    if (jobs.length === 0) return emptyStage(hasUpstream, 'Ready to train');
+    if (jobs.length === 0) {
+      // A model trained elsewhere and uploaded or registered here counts: the
+      // registry is what Evaluate and Deploy work from (TASK-503).
+      const models = await deploymentApi.listModelVersions().catch(() => []);
+      if (models.length > 0) {
+        return {
+          status: 'done',
+          statLine: `${plural(models.length, 'model')} registered`,
+          hintLine: 'No training jobs run on this instance',
+        };
+      }
+      return emptyStage(hasUpstream, 'Ready to train');
+    }
     const completed = jobs.filter((j) => j.status === 'completed').length;
     return {
       status: pick(jobs.filter((j) => ['running', 'queued'].includes(j.status)).length, completed),
@@ -191,7 +214,8 @@ export function PipelinePage() {
   const [state, setState] = useState<PipelineState | null>(null);
 
   const fetchAll = useCallback(async () => {
-    const [collect, dataset] = await Promise.all([fetchCollect(), fetchDataset()]);
+    const datasetRequest = fetchDataset();
+    const [collect, dataset] = await Promise.all([fetchCollect(datasetRequest), datasetRequest]);
     const train = await fetchTrain(dataset.status !== 'empty' && dataset.status !== 'blocked');
     const evaluate = await fetchEvaluate(train.status === 'done' || train.status === 'active');
     const deploy = await fetchDeploy(evaluate.status === 'done');

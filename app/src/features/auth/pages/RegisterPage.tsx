@@ -4,7 +4,7 @@
  * @feature auth
  */
 
-import { Link } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { UserX } from 'lucide-react';
 import { LinkButton } from '@/shared/components/ui';
 import { useBrand } from '@/brand';
@@ -19,8 +19,12 @@ export interface RegisterPageProps {
 
 export function RegisterPage({ onRegisterSuccess }: RegisterPageProps) {
   const brand = useBrand();
-  const { selfRegistrationEnabled } = useFeatures();
+  const { selfRegistrationEnabled, signInRequired } = useFeatures();
   const flagsLoaded = useFeaturesStore((s) => s.loaded);
+
+  // TASK-503: a server without sign-in has no accounts to create — everyone is
+  // its one shared user — so /register opens the app, as /login does (TASK-483).
+  if (flagsLoaded && !signInRequired) return <Navigate to="/dashboard" replace />;
 
   // TASK-369: the server closes anonymous sign-up unless the operator opted
   // in. Until the flags arrive, show the form — the server still enforces it.

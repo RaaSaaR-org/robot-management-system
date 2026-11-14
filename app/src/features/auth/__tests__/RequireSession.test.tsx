@@ -5,6 +5,9 @@
  *              link it asked for as the server's shared user — no token, no
  *              form — and /login leads into the app. With sign-in, a missing
  *              or rejected session still goes to the sign-in page.
+ *              TASK-503: while the server has not said which mode it is in —
+ *              its feature snapshot failed to load — the deep link stays put
+ *              behind a retry instead of being traded for the sign-in page.
  * @feature auth
  */
 
@@ -212,19 +215,46 @@ describe('a server that does not say', () => {
     expect(api.getCurrentUser).not.toHaveBeenCalled();
   });
 
-  it('is treated as requiring sign-in when the feature snapshot cannot be read', async () => {
+  it('offers a retry, not the sign-in page, when the feature snapshot cannot be read', async () => {
     serverSays(new Error('network down'));
 
     await open(DEEP_LINK);
 
-    await waitFor(() => expect(toSignIn).toHaveBeenCalled());
+    expect(await screen.findByText("Can't reach the server")).toBeInTheDocument();
+    // Nobody knows yet whether this server needs a sign-in: do not claim it does not.
+    expect(screen.queryByText(/No sign-in is needed/)).not.toBeInTheDocument();
+    expect(toSignIn).not.toHaveBeenCalled();
     expect(api.getCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it('opens the deep link from that retry once the server answers', async () => {
+    serverSays(new Error('bad gateway'));
+    await open(DEEP_LINK);
+    expect(await screen.findByText("Can't reach the server")).toBeInTheDocument();
+
+    serverSays({ signInRequired: false });
+    api.getCurrentUser.mockResolvedValue(SHARED_USER);
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByRole('heading', { name: 'Episodes of a549a2b4' })).toBeInTheDocument();
+    expect(toSignIn).not.toHaveBeenCalled();
+  });
+
+  it('keeps a stored session on its deep link while the snapshot cannot be read', async () => {
+    serverSays(new Error('network down'));
+    tokenStorage.setTokens('access', 'refresh');
+    api.getCurrentUser.mockResolvedValue(ADA);
+
+    await open(DEEP_LINK);
+
+    expect(await screen.findByRole('heading', { name: 'Episodes of a549a2b4' })).toBeInTheDocument();
+    expect(toSignIn).not.toHaveBeenCalled();
   });
 
   it('opens the page by itself once a late snapshot says no sign-in is needed', async () => {
     serverSays(new Error('network down'));
     await open(DEEP_LINK);
-    await waitFor(() => expect(toSignIn).toHaveBeenCalled());
+    expect(await screen.findByText("Can't reach the server")).toBeInTheDocument();
 
     // The retry `useFeatures` schedules after a failed request gets through.
     serverSays({ signInRequired: false });
@@ -234,16 +264,19 @@ describe('a server that does not say', () => {
     expect(await screen.findByRole('heading', { name: 'Episodes of a549a2b4' })).toBeInTheDocument();
     expect(screen.queryByText("Can't reach the server")).not.toBeInTheDocument();
     expect(tokenStorage.getAccessToken()).toBeNull();
+    expect(toSignIn).not.toHaveBeenCalled();
   });
 
-  it('stays on sign-in when a late snapshot says sign-in is required', async () => {
+  it('goes to sign-in once a late snapshot says sign-in is required', async () => {
     serverSays(new Error('network down'));
     await open(DEEP_LINK);
-    await waitFor(() => expect(toSignIn).toHaveBeenCalled());
+    expect(await screen.findByText("Can't reach the server")).toBeInTheDocument();
+    expect(toSignIn).not.toHaveBeenCalled();
 
     serverSays({ signInRequired: true });
     await useFeaturesStore.getState().fetch();
 
+    await waitFor(() => expect(toSignIn).toHaveBeenCalled());
     expect(api.getCurrentUser).not.toHaveBeenCalled();
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
   });

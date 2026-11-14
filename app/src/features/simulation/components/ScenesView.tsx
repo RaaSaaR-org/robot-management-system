@@ -4,6 +4,7 @@
  * @feature simulation
  */
 
+import { useState } from 'react';
 import { Boxes, MapPin, Search } from 'lucide-react';
 import { Button, EmptyState, ErrorState, Panel, SkeletonRows, StatusTag } from '@/shared/components/ui';
 import { simulationApi } from '../api/simulationApi';
@@ -59,16 +60,18 @@ export function ScenesView({ scenes, loading, error, onRetry, onPick, query, onC
 function SceneCard({ scene, onPick }: { scene: SimScene; onPick: () => void }) {
   const preview = scene.builtinEnvId ? simulationApi.getPreviewUrl(scene.builtinEnvId) : null;
   const twin = scene.source === 'twin';
+  // A preview the server cannot render answers 404: show the icon, not an empty box (TASK-503).
+  const [previewFailed, setPreviewFailed] = useState(false);
   return (
     <Panel interactive onClick={onPick} padding="none" className="flex flex-col" aria-label={`New sim run in ${scene.name}`}>
       <div className="flex h-32 items-center justify-center border-b border-line-subtle bg-inset">
-        {preview ? (
+        {preview && !previewFailed ? (
           <img
             src={preview}
             alt=""
             className="h-full w-full object-cover"
             loading="lazy"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            onError={() => setPreviewFailed(true)}
           />
         ) : (
           <Boxes className="h-8 w-8 text-ink-muted" strokeWidth={1.5} />

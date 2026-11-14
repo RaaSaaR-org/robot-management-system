@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- NeoDEM app icon: the orbital mark of src/components/common/NeoDEMMark.tsx
+       in its dark-theme colors, on a canvas tile so it reads on any tab strip. -->
+  <rect width="32" height="32" rx="7" fill="#080f18"/>
+  <g transform="translate(2.4 2.4) scale(0.85)">
+    <g stroke="#b2f8df" stroke-width="1.8">
+      <ellipse cx="16" cy="16" rx="12.5" ry="5.8" transform="rotate(-42 16 16)"/>
+      <ellipse cx="16" cy="16" rx="12.5" ry="5.8" transform="rotate(42 16 16)"/>
+    </g>
+    <g stroke="#b2f8df" stroke-width="1" stroke-linecap="round">
+      <path d="M14.5 11V13M17.5 11V13M14.5 19V21M17.5 19V21M11 14.5H13M11 17.5H13M19 14.5H21M19 17.5H21"/>
+      <rect x="12.5" y="12.5" width="7" height="7" rx="1" fill="#080f18"/>
+    </g>
+    <rect x="14.5" y="14.5" width="3" height="3" rx=".4" fill="#b2f8df"/>
+    <circle cx="25.3" cy="7.6" r="2" fill="#f1f5fc"/>
+  </g>
+</svg>
