@@ -3,7 +3,7 @@ id: "TASK-507"
 aliases: []
 title: "The robot page shows the whole robot on the first screen at 1280x720, the joint legend lists every joint and the episode tag covers no camera"
 slug: "the-robot-page-shows-the-whole-robot-on-the-first-screen-at"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
