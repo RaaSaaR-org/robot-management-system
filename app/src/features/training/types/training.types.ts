@@ -214,6 +214,8 @@ export interface Dataset {
   huggingFaceRepoId?: string;
   /** Resolved HF commit SHA the import pinned. Null for non-Hub datasets. */
   sourceRevision?: string | null;
+  /** The license the source declared (Hub card `license`, e.g. `cc-by-4.0`). Null when none was declared. */
+  sourceLicense?: string | null;
   /**
    * `metadata` means only info.json/stats came down — there are no frames on
    * disk, so the row's episode and frame counts describe the Hub repo rather

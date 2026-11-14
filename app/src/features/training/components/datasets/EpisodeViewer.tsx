@@ -12,7 +12,7 @@ import { Button, EmptyState, Panel, SegmentedControl, Spinner } from '@/shared/c
 import { cn } from '@/shared/utils/cn';
 import { beginRateLimitWait, useRateLimitHint } from '@/api/rateLimitStatus';
 import { cameraLabel, formatPlayhead } from './episodeFormat';
-import { canPlayVideoCodec, describeVideoCodec } from './videoCodec';
+import { canPlayVideoCodec, describeVideoCodec, noCameraPlayable } from './videoCodec';
 
 export type PlaybackSpeed = '0.5' | '1' | '2';
 
@@ -104,6 +104,9 @@ const MAX_THROTTLE_RELOADS = 4;
 /** How long a video may be on its way before the cell says it is loading. */
 const LOADING_HINT_MS = 400;
 
+/** How long a playing video may stall before the cell shows it is buffering: a blip is not news. */
+const BUFFERING_HINT_MS = 300;
+
 /** How long before "loading" becomes "still loading", with a way to ask again. */
 const STILL_LOADING_MS = 8000;
 
@@ -156,6 +159,11 @@ interface CameraCellProps {
   /** Playback events, wired on the primary camera only. */
   onTimeUpdate?: () => void;
   onEnded?: () => void;
+  /**
+   * No camera of the episode can play in this browser: Play and Seek drive the
+   * joint chart on a timer instead, and the codec notice says so (TASK-506).
+   */
+  clockOnly?: boolean;
 }
 
 /**
@@ -174,7 +182,9 @@ interface CameraCellProps {
  *   only once the wait has lasted more than a moment (TASK-482);
  * - the request was sent and nothing has come back → a spinner over the cell,
  *   and after a while "Still loading" with Retry (TASK-501). It goes when the
- *   video's metadata or first frame arrives and does not return on a seek.
+ *   video's metadata or first frame arrives and does not return on a seek;
+ * - a playing video runs out of data mid-episode (`waiting`) → a small spinner
+ *   over the picture until it plays again (TASK-506).
  */
 function CameraCell(p: CameraCellProps) {
   const { camera, src, codec, onReload, onFailure } = p;
@@ -198,6 +208,8 @@ function CameraCell(p: CameraCellProps) {
   const [arrived, setArrived] = useState<{ src: string; attempt: number } | null>(null);
   // How long the current one has been awaited: 0 nothing to say yet, 1 loading, 2 still loading.
   const [waited, setWaited] = useState<0 | 1 | 2>(0);
+  // The URL and attempt whose playing video stalled for data (`waiting`), until it plays on.
+  const [stalled, setStalled] = useState<{ src: string; attempt: number } | null>(null);
 
   const playable = useMemo(() => canPlayVideoCodec(codec), [codec]);
   // A failure belongs to the URL and attempt it happened on; a new episode, a
@@ -298,6 +310,21 @@ function CameraCell(p: CameraCellProps) {
   const markArrived = () => {
     if (!loaded) setArrived({ src, attempt });
   };
+  // A stall while playing, not the wait after a seek of a paused video.
+  const markStalled = (e: SyntheticEvent<HTMLVideoElement>) => {
+    if (!e.currentTarget.paused) setStalled({ src, attempt });
+  };
+  const clearStalled = () => {
+    if (stalled) setStalled(null);
+  };
+  const buffering = loaded && !awaiting && stalled !== null && stalled.src === src && stalled.attempt === attempt;
+  const [bufferingShown, setBufferingShown] = useState(false);
+  useEffect(() => {
+    setBufferingShown(false);
+    if (!buffering) return;
+    const timer = setTimeout(() => setBufferingShown(true), BUFFERING_HINT_MS);
+    return () => clearTimeout(timer);
+  }, [buffering]);
 
   let body: ReactNode;
   if (playable === false || failed === 'codec') {
@@ -309,6 +336,7 @@ function CameraCell(p: CameraCellProps) {
         {info
           ? `This camera's video is stored as ${info.label}, which this browser cannot decode. Open this page in ${info.browsers} to watch it.`
           : 'The video arrived, but this browser could not decode it. Open this page in a current Chrome, Edge or Firefox to watch it.'}
+        {p.clockOnly && ' Play and the seek bar still move the cursor on the joint chart.'}
       </PlayerNotice>
     );
   } else if (failed === 'load') {
@@ -338,7 +366,10 @@ function CameraCell(p: CameraCellProps) {
         onTimeUpdate={p.onTimeUpdate}
         onLoadedMetadata={() => { markArrived(); p.onLoadedMetadata(camera); }}
         onLoadedData={markArrived}
-        onCanPlay={markArrived}
+        onCanPlay={() => { markArrived(); clearStalled(); }}
+        onWaiting={markStalled}
+        onPlaying={clearStalled}
+        onSeeked={clearStalled}
         onEnded={p.onEnded}
         onPlay={p.onPlayingChange && (() => p.onPlayingChange?.(true))}
         onPause={p.onPlayingChange && (() => p.onPlayingChange?.(false))}
@@ -374,6 +405,17 @@ function CameraCell(p: CameraCellProps) {
           )}
         </div>
       )}
+      {buffering && bufferingShown && (
+        // Small, over the picture, never in the way of it: clicks go through.
+        <div
+          data-testid="video-buffering"
+          className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center"
+        >
+          <span className="flex rounded-full bg-canvas/70 p-2">
+            <Spinner size="md" label="Buffering video…" className="text-ink-secondary" />
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -388,12 +430,10 @@ function gridColumns(count: number, layout: ViewerLayout): string {
 
 export function EpisodeViewer(p: EpisodeViewerProps) {
   const { cameras, codecFor, layout = 'stacked' } = p;
-  // With every camera in a codec this browser refuses there is nothing to
-  // play, and a Play button that does nothing would be a small lie.
-  const nothingPlayable = useMemo(
-    () => cameras.length > 0 && cameras.every((cam) => canPlayVideoCodec(codecFor?.(cam)) === false),
-    [cameras, codecFor],
-  );
+  // With every camera in a codec this browser refuses there is no video to
+  // play; Play and Seek still drive the joint chart on the page's timer
+  // (TASK-506), and each camera's notice says so.
+  const nothingPlayable = useMemo(() => noCameraPlayable(cameras, codecFor), [cameras, codecFor]);
 
   if (cameras.length === 0) {
     return (
@@ -444,6 +484,7 @@ export function EpisodeViewer(p: EpisodeViewerProps) {
             onFailure={p.onFailure}
             onTimeUpdate={cam === p.primaryCamera ? p.onTimeUpdate : undefined}
             onEnded={cam === p.primaryCamera ? p.onEnded : undefined}
+            clockOnly={nothingPlayable}
           />
         ))}
       </div>
@@ -453,7 +494,6 @@ export function EpisodeViewer(p: EpisodeViewerProps) {
           size="sm"
           iconOnly
           aria-label={p.isPlaying ? 'Pause' : 'Play'}
-          disabled={nothingPlayable}
           onClick={p.onPlayPause}
         >
           {p.isPlaying ? <Pause className="h-4 w-4" strokeWidth={1.75} /> : <Play className="h-4 w-4" strokeWidth={1.75} />}
@@ -468,7 +508,6 @@ export function EpisodeViewer(p: EpisodeViewerProps) {
           max={duration || 1}
           step={0.01}
           value={position}
-          disabled={nothingPlayable}
           onChange={p.onSeek}
           className="mx-1 min-w-16 flex-1 cursor-pointer accent-primary"
         />

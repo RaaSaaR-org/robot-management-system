@@ -36,7 +36,7 @@ import { ViewBanner } from '../components/datasets/ViewBanner';
 import { DatasetExpectationsPanel } from '../components/datasets/DatasetExpectationsPanel';
 import { EpisodeListPanel } from '../components/datasets/EpisodeListPanel';
 import { EpisodeViewer } from '../components/datasets/EpisodeViewer';
-import { featureVideoCodec } from '../components/datasets/videoCodec';
+import { featureVideoCodec, noCameraPlayable } from '../components/datasets/videoCodec';
 import { useDatasetVideoTicket } from '../hooks/useDatasetVideoTicket';
 import { useEpisodeFrames } from '../hooks/useEpisodeFrames';
 import { useEpisodePlayback } from '../hooks/useEpisodePlayback';
@@ -46,7 +46,7 @@ import { useViewportFill } from '../hooks/useViewportFill';
 import { CuratePanel } from '../components/datasets/CuratePanel';
 import { JointChartPanel, RewardCurvePanel } from '../components/datasets/TrajectoryPanels';
 import { AnnotationsPanel } from '../components/datasets/AnnotationsPanel';
-import { formatDuration } from '../components/datasets/datasetFormat';
+import { formatDuration, formatLicense } from '../components/datasets/datasetFormat';
 import { formatLerobotVersion } from '../components/datasets/importFormat';
 import { DatasetProvenance } from '../components/datasets/DatasetProvenance';
 import { DatasetStatsPanel } from '../components/datasets/DatasetStatsPanel';
@@ -248,6 +248,9 @@ export function DatasetEpisodesPage() {
   );
 
   const primaryCamera = cameraNames?.[0];
+  // No camera can play in this browser (AV1 on a Safari without a decoder):
+  // the playback clock runs on a timer, so the chart's cursor still moves (TASK-506).
+  const videoless = useMemo(() => noCameraPlayable(cameraNames ?? [], codecFor), [cameraNames, codecFor]);
   const selectedMeta = useMemo(() => episodes.find((e) => e.index === selectedEpisode) ?? null, [episodes, selectedEpisode]);
   const stageMeta = useMemo(() => episodes.find((e) => e.index === stageEpisode) ?? null, [episodes, stageEpisode]);
   const stagePosition = useMemo(() => episodes.findIndex((e) => e.index === stageEpisode), [episodes, stageEpisode]);
@@ -261,6 +264,7 @@ export function DatasetEpisodesPage() {
     primaryCamera,
     windowFor,
     fallbackDuration: stageMeta?.durationSeconds ?? 0,
+    videoless,
   });
   const { currentTime } = playback;
 
@@ -594,6 +598,7 @@ export function DatasetEpisodesPage() {
     ? `${episodes.length || dataset.demonstrationCount} episodes · ${formatDuration(dataset.totalDuration)} · ${dataset.fps} fps${cameraNames ? ` · ${cameraNames.length} camera${cameraNames.length === 1 ? '' : 's'}` : ''}`
     : undefined;
   const ready = dataset?.status === 'ready';
+  const datasetDescription = dataset?.description?.trim() || null;
 
   // Secondary panels, one at a time, state in ?tab= (TASK-484). The ones about
   // the selected episode come first and exist only while there is one.
@@ -638,6 +643,12 @@ export function DatasetEpisodesPage() {
               {formatLerobotVersion(dataset.lerobotVersion) && (
                 <StatusTag tone="neutral" data-testid="dataset-lerobot-version">{formatLerobotVersion(dataset.lerobotVersion)}</StatusTag>
               )}
+              {/* The license the source declared, beside where it came from (TASK-506) */}
+              {dataset.sourceLicense?.trim() && (
+                <StatusTag tone="neutral" data-testid="dataset-license" title={`License declared by the source: ${dataset.sourceLicense}`}>
+                  License: {formatLicense(dataset.sourceLicense)}
+                </StatusTag>
+              )}
               {/* Said as provenance, the repo linked at its commit (TASK-494) */}
               <DatasetProvenance dataset={dataset} />
             </>
@@ -669,7 +680,18 @@ export function DatasetEpisodesPage() {
             </>
           )
         }
-      />
+      >
+        {/* What the dataset is, as its author wrote it (TASK-506): two lines at most, the rest on hover. */}
+        {datasetDescription && (
+          <p
+            data-testid="dataset-description"
+            title={datasetDescription}
+            className="-mt-1.5 line-clamp-2 max-w-[110ch] text-sm leading-relaxed text-ink-tertiary"
+          >
+            {datasetDescription}
+          </p>
+        )}
+      </PageHeader>
 
       {isView && dataset && (
         <ViewBanner

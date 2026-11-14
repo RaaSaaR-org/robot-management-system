@@ -22,13 +22,43 @@ const G1_GROUPS = [
 ];
 
 describe('channelLabels (TASK-476)', () => {
-  it('labels all 43 channels of a G1 vector by body part and index', () => {
+  it('names all 43 channels of the GR00T G1 layout by joint, in the G1 SDK and Dex3-1 order (TASK-506)', () => {
     const labels = channelLabels(G1_GROUPS, 43);
     expect(labels).toHaveLength(43);
-    expect(labels[0]).toBe('left_leg[0]');
-    expect(labels[18]).toBe('left_arm[3]');
-    expect(labels[42]).toBe('right_hand[6]');
+    expect(labels.slice(0, 6)).toEqual([
+      'left_hip_pitch', 'left_hip_roll', 'left_hip_yaw', 'left_knee', 'left_ankle_pitch', 'left_ankle_roll',
+    ]);
+    expect(labels[6]).toBe('right_hip_pitch');
+    expect(labels.slice(12, 15)).toEqual(['waist_yaw', 'waist_roll', 'waist_pitch']);
+    expect(labels.slice(15, 22)).toEqual([
+      'left_shoulder_pitch', 'left_shoulder_roll', 'left_shoulder_yaw', 'left_elbow',
+      'left_wrist_roll', 'left_wrist_pitch', 'left_wrist_yaw',
+    ]);
+    expect(labels[22]).toBe('right_shoulder_pitch');
+    expect(labels[28]).toBe('right_wrist_yaw');
+    // The Dex3-1 hands are not mirrors: left is thumb, middle, index; right thumb, index, middle.
+    expect(labels.slice(29, 36)).toEqual([
+      'left_hand_thumb_0', 'left_hand_thumb_1', 'left_hand_thumb_2',
+      'left_hand_middle_0', 'left_hand_middle_1', 'left_hand_index_0', 'left_hand_index_1',
+    ]);
+    expect(labels.slice(36, 43)).toEqual([
+      'right_hand_thumb_0', 'right_hand_thumb_1', 'right_hand_thumb_2',
+      'right_hand_index_0', 'right_hand_index_1', 'right_hand_middle_0', 'right_hand_middle_1',
+    ]);
     expect(new Set(labels).size).toBe(43);
+  });
+
+  it('keeps group and index for any layout that is not exactly the G1 one', () => {
+    // One group narrower than the G1 table.
+    const narrow = G1_GROUPS.map((g) => (g.name === 'waist' ? { ...g, end: g.end - 1 } : g));
+    expect(channelLabels(narrow, 43)[0]).toBe('left_leg[0]');
+    // A group missing.
+    expect(channelLabels(G1_GROUPS.slice(0, 6), 43)[18]).toBe('left_arm[3]');
+    // A group of another name.
+    const renamed = G1_GROUPS.map((g) => (g.name === 'left_hand' ? { ...g, name: 'left_gripper' } : g));
+    const labels = channelLabels(renamed, 43);
+    expect(labels[0]).toBe('left_leg[0]');
+    expect(labels[42]).toBe('right_hand[6]');
   });
 
   it('labels a channel no group covers by its position, and ignores a group past the width', () => {
@@ -92,10 +122,10 @@ describe('real channel names inside joint groups (TASK-494)', () => {
     expect(labels).toEqual(G1_DEX3_NAMES);
   });
 
-  it('keeps group and index where the names are placeholders or do not fit', () => {
-    const byIndex = channelLabels(G1_GROUPS, 43);
-    expect(channelLabels(G1_GROUPS, 43, ['observation_to_policy'])).toEqual(byIndex);
-    expect(channelLabels(G1_GROUPS, 43, Array.from({ length: 43 }, (_, i) => `motor_${i}`))).toEqual(byIndex);
+  it('falls back past names that are placeholders or do not fit', () => {
+    const byGroup = channelLabels(G1_GROUPS, 43);
+    expect(channelLabels(G1_GROUPS, 43, ['observation_to_policy'])).toEqual(byGroup);
+    expect(channelLabels(G1_GROUPS, 43, Array.from({ length: 43 }, (_, i) => `motor_${i}`))).toEqual(byGroup);
     expect(channelLabels(G1_DEX3_GROUPS, 31, G1_DEX3_NAMES.slice(0, 30))[8]).toBe('arms[5]');
   });
 

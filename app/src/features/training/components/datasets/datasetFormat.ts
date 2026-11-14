@@ -18,6 +18,26 @@ export function formatDuration(seconds: number): string {
   return restMinutes > 0 ? `${hours}h ${restMinutes}m` : `${hours}h`;
 }
 
+/** Hub license ids whose usual spelling is not all lower or all upper case. */
+const LICENSE_SPELLING: Record<string, string> = {
+  'apache-2.0': 'Apache-2.0',
+  mit: 'MIT',
+  'bsd-2-clause': 'BSD-2-Clause',
+  'bsd-3-clause': 'BSD-3-Clause',
+};
+
+/**
+ * A license as the Hub writes it (`cc-by-4.0`, `apache-2.0`) in its usual
+ * spelling: "CC-BY-4.0", "Apache-2.0". Anything else as written.
+ */
+export function formatLicense(license: string): string {
+  const id = license.trim();
+  const known = LICENSE_SPELLING[id.toLowerCase()];
+  if (known) return known;
+  if (/^(cc|odc|odbl|cdla|gpl|lgpl|agpl)[-\w.]*$/i.test(id)) return id.toUpperCase();
+  return id;
+}
+
 /** 1536 → "1.5 KB"; 0 or junk → "0 B". */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';

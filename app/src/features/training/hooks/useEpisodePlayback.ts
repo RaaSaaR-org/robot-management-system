@@ -2,7 +2,8 @@
  * @file useEpisodePlayback.ts
  * @description Playback state of the episode browser: what the viewer asked
  *              for (play, speed), kept true on every camera's `<video>` across
- *              episode switches, failed loads and the end of the video.
+ *              episode switches, failed loads and the end of the video — and a
+ *              timer clock for an episode no camera of which can play here.
  * @feature training
  */
 
@@ -29,6 +30,13 @@ export interface EpisodePlaybackOptions {
   windowFor: (camera: string) => TimeWindow | undefined;
   /** The episode's length from its metadata, until the video reports its own. */
   fallbackDuration: number;
+  /**
+   * This browser can play none of the cameras (every codec refused), so no
+   * `<video>` is mounted. Play and Seek then run a `requestAnimationFrame`
+   * clock over `fallbackDuration`, so the joint chart's cursor still moves
+   * (TASK-506). Default false: the primary video is the clock.
+   */
+  videoless?: boolean;
 }
 
 export interface EpisodePlayback {
@@ -73,7 +81,7 @@ export interface EpisodePlayback {
  * reloads by itself and is started then, like any newly loaded episode.
  */
 export function useEpisodePlayback(options: EpisodePlaybackOptions): EpisodePlayback {
-  const { episodeKey, datasetKey, primaryCamera, windowFor, fallbackDuration } = options;
+  const { episodeKey, datasetKey, primaryCamera, windowFor, fallbackDuration, videoless = false } = options;
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
   // Time and the video's own duration are stored with the episode they were
@@ -94,6 +102,11 @@ export function useEpisodePlayback(options: EpisodePlaybackOptions): EpisodePlay
     setIsPlaying(next);
   }, []);
   const setTime = useCallback((seconds: number) => setTimeAt({ key: episodeKey, seconds }), [episodeKey]);
+  // The time as the timer clock last left it, read by its frames between renders.
+  const clockTime = useRef(0);
+  useEffect(() => {
+    clockTime.current = currentTime;
+  }, [currentTime]);
 
   const mounted = useCallback(
     () => Object.entries(videoRefs.current).filter((entry): entry is [string, HTMLVideoElement] => Boolean(entry[1])),
@@ -201,14 +214,55 @@ export function useEpisodePlayback(options: EpisodePlaybackOptions): EpisodePlay
   }, [onPlay, onPause]);
 
   const onFailure = useCallback((camera: string) => {
-    // The primary camera drives the clock; without it nothing is playing.
-    if (camera !== primaryCamera) return;
+    // The primary camera drives the clock; without it nothing is playing —
+    // unless no camera could ever play, and the timer is the clock.
+    if (camera !== primaryCamera || videoless) return;
     pauseAll();
     setPlaying(false);
-  }, [primaryCamera, pauseAll, setPlaying]);
+  }, [primaryCamera, videoless, pauseAll, setPlaying]);
+
+  // The timer clock: only without any video, so it and the video clock never
+  // both move the time.
+  useEffect(() => {
+    if (!videoless || !isPlaying) return;
+    let frame = 0;
+    let last: number | null = null;
+    const tick = (now: number) => {
+      if (mounted().length > 0) {
+        last = null;
+      } else {
+        const elapsed = last === null ? 0 : Math.max(0, (now - last) / 1000);
+        last = now;
+        const next = Math.min(duration, clockTime.current + elapsed * rate.current);
+        clockTime.current = next;
+        setTime(next);
+        if (next >= duration) {
+          setPlaying(false);
+          return;
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [videoless, isPlaying, duration, mounted, setTime, setPlaying]);
 
   const togglePlay = useCallback(() => {
     const videos = mounted();
+    if (videoless && videos.length === 0) {
+      if (playing.current) {
+        setPlaying(false);
+        return;
+      }
+      if (!(duration > 0)) return;
+      // Play at the end starts the episode over, as a video does.
+      if (clockTime.current >= duration) {
+        clockTime.current = 0;
+        setTime(0);
+      }
+      setPlaying(true);
+      return;
+    }
     if (videos.length === 0) return;
     if (playing.current) {
       pauseAll();
@@ -227,11 +281,12 @@ export function useEpisodePlayback(options: EpisodePlaybackOptions): EpisodePlay
       applyRate(video);
       start(video, video === primary);
     }
-  }, [mounted, pauseAll, setPlaying, primaryCamera, windowFor, setTime, applyRate, start]);
+  }, [mounted, videoless, duration, pauseAll, setPlaying, primaryCamera, windowFor, setTime, applyRate, start]);
 
   const seek = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const time = parseFloat(e.target.value);
     if (!Number.isFinite(time)) return;
+    clockTime.current = time;
     setTime(time);
     for (const [name, video] of mounted()) video.currentTime = (windowFor(name)?.from ?? 0) + time;
   }, [setTime, mounted, windowFor]);

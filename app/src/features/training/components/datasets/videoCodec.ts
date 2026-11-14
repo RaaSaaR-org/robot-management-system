@@ -99,3 +99,16 @@ export function canPlayVideoCodec(
     return null;
   }
 }
+
+/**
+ * True when the browser refuses every camera's codec: no `<video>` will be
+ * mounted at all, so nothing can drive the playback clock but a timer
+ * (TASK-506). False while one camera might still play, or there is none.
+ */
+export function noCameraPlayable(
+  cameras: readonly string[],
+  codecFor: ((camera: string) => string | undefined) | undefined,
+  probe?: CodecProbe
+): boolean {
+  return cameras.length > 0 && cameras.every((cam) => canPlayVideoCodec(codecFor?.(cam), probe) === false);
+}

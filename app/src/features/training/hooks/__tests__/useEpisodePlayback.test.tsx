@@ -1,11 +1,12 @@
 /**
  * @file useEpisodePlayback.test.tsx
  * @description The transport controls say what the videos are doing: after an
- *              episode switch, a failed load and the end of the video (TASK-484).
+ *              episode switch, a failed load and the end of the video (TASK-484);
+ *              and a timer clock where no camera can play (TASK-506).
  * @feature training
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import type { ChangeEvent } from 'react';
 import { useEpisodePlayback, type EpisodePlaybackOptions } from '../useEpisodePlayback';
@@ -232,5 +233,142 @@ describe('useEpisodePlayback', () => {
     act(() => result.current.togglePlay());
     rerender({ ...options, datasetKey: 'other', episodeKey: null });
     expect(result.current.isPlaying).toBe(false);
+  });
+});
+
+/**
+ * `requestAnimationFrame` under the test's control: `frame(ms)` runs every
+ * callback waiting for the next frame with a clock that has moved on by `ms`.
+ */
+function fakeAnimationFrames() {
+  let now = 1000;
+  let queue = new Map<number, FrameRequestCallback>();
+  let nextId = 1;
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+    const id = nextId++;
+    queue.set(id, cb);
+    return id;
+  });
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => { queue.delete(id); });
+  return {
+    frame(ms: number) {
+      now += ms;
+      const due = queue;
+      queue = new Map();
+      act(() => { for (const cb of due.values()) cb(now); });
+    },
+    pending: () => queue.size,
+  };
+}
+
+describe('useEpisodePlayback without a playable camera (TASK-506)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** As the page mounts it when every codec is refused: no `<video>` at all. */
+  function setupVideoless(initial: Partial<EpisodePlaybackOptions> = {}) {
+    const options: EpisodePlaybackOptions = {
+      episodeKey: 'ds:0',
+      datasetKey: 'ds',
+      primaryCamera: EGO,
+      windowFor: () => undefined,
+      fallbackDuration: 10,
+      videoless: true,
+      ...initial,
+    };
+    const hook = renderHook((p: EpisodePlaybackOptions) => useEpisodePlayback(p), { initialProps: options });
+    return { ...hook, options };
+  }
+
+  it('moves the time on animation frames at the chosen speed, and pauses', () => {
+    const raf = fakeAnimationFrames();
+    const { result } = setupVideoless();
+    act(() => result.current.togglePlay());
+    expect(result.current.isPlaying).toBe(true);
+    raf.frame(16); // the first frame only sets the clock's origin
+    raf.frame(1000);
+    expect(result.current.currentTime).toBeCloseTo(1, 5);
+
+    act(() => result.current.setSpeed('2'));
+    raf.frame(500);
+    expect(result.current.currentTime).toBeCloseTo(2, 5);
+
+    act(() => result.current.togglePlay());
+    expect(result.current.isPlaying).toBe(false);
+    expect(raf.pending()).toBe(0);
+    raf.frame(1000);
+    expect(result.current.currentTime).toBeCloseTo(2, 5);
+  });
+
+  it('stops on the total, and Play there starts the episode over', () => {
+    const raf = fakeAnimationFrames();
+    const { result } = setupVideoless({ fallbackDuration: 3 });
+    act(() => result.current.togglePlay());
+    raf.frame(16);
+    raf.frame(5000);
+    expect(result.current.currentTime).toBe(3);
+    expect(result.current.isPlaying).toBe(false);
+
+    act(() => result.current.togglePlay());
+    expect(result.current.currentTime).toBe(0);
+    expect(result.current.isPlaying).toBe(true);
+  });
+
+  it('seeks without a video, and plays on from there', () => {
+    const raf = fakeAnimationFrames();
+    const { result } = setupVideoless();
+    act(() => result.current.seek({ target: { value: '6' } } as ChangeEvent<HTMLInputElement>));
+    expect(result.current.currentTime).toBe(6);
+    act(() => result.current.togglePlay());
+    raf.frame(16);
+    raf.frame(1000);
+    expect(result.current.currentTime).toBeCloseTo(7, 5);
+  });
+
+  it("does not take the cameras' codec notice for a stop", () => {
+    fakeAnimationFrames();
+    const { result } = setupVideoless();
+    act(() => result.current.togglePlay());
+    act(() => result.current.onFailure(EGO));
+    expect(result.current.isPlaying).toBe(true);
+  });
+
+  it('starts the next episode from zero, still playing', () => {
+    const raf = fakeAnimationFrames();
+    const { result, rerender, options } = setupVideoless();
+    act(() => result.current.togglePlay());
+    raf.frame(16);
+    raf.frame(4000);
+    expect(result.current.currentTime).toBeCloseTo(4, 5);
+    rerender({ ...options, episodeKey: 'ds:1', fallbackDuration: 8 });
+    expect(result.current.currentTime).toBe(0);
+    raf.frame(16);
+    raf.frame(1000);
+    expect(result.current.currentTime).toBeCloseTo(1, 5);
+    expect(result.current.isPlaying).toBe(true);
+  });
+
+  it('never runs while a video is mounted: the video is the clock', () => {
+    const raf = fakeAnimationFrames();
+    const { result } = setupVideoless();
+    const ego = fakeVideo(10);
+    result.current.videoRefs.current[EGO] = ego as unknown as HTMLVideoElement;
+    act(() => result.current.togglePlay());
+    expect(ego.play).toHaveBeenCalled();
+    raf.frame(16);
+    raf.frame(1000);
+    expect(result.current.currentTime).toBe(0);
+  });
+
+  it('does nothing of the kind when a camera can play', () => {
+    const raf = fakeAnimationFrames();
+    const hook = renderHook(() => useEpisodePlayback({
+      episodeKey: 'ds:0', datasetKey: 'ds', primaryCamera: EGO, windowFor: () => undefined, fallbackDuration: 10,
+    }));
+    act(() => hook.result.current.togglePlay());
+    // No video mounted yet and not video-less: Play waits for the video.
+    expect(hook.result.current.isPlaying).toBe(false);
+    expect(raf.pending()).toBe(0);
   });
 });
