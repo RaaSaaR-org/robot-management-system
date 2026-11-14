@@ -204,6 +204,42 @@ describe('CommandInterpreter — fallback keyword interpretation (no API key)', 
     expect(result.suggestedAlternatives.length).toBeGreaterThan(0);
   });
 
+  // TASK-505: home / charge phrases name their own target instead of reading
+  // as a 60% custom command the app then sends home anyway.
+  it.each([
+    ['go home', 'home'],
+    ['return home', 'home'],
+    ['Go home', 'home'],
+    ['charge', 'charging station'],
+    ['go charge', 'charging station'],
+    ['Go to the charging station', 'charging station'],
+  ])('reads "%s" as navigation to %s with no suggestion', async (text, target) => {
+    const result = await service.interpretCommand({ text, robotId: 'robot-1' });
+    expect(result.commandType).toBe('navigation');
+    expect(result.parameters.target).toBe(target);
+    expect(result.confidence).toBe(0.85);
+    expect(result.suggestedAlternatives).toEqual([]);
+    expect(result.safetyClassification).toBe('safe');
+  });
+
+  it.each(["don't go home", 'is it charging?', 'never return home', 'check the battery charge'])(
+    'never turns "%s" into a home / charge drive',
+    async (text) => {
+      const result = await service.interpretCommand({ text, robotId: 'robot-1' });
+      expect(result.parameters.target).not.toBe('home');
+      expect(result.parameters.target).not.toBe('charging station');
+    }
+  );
+
+  it('keeps an explicit other destination over a charge keyword', async () => {
+    const result = await service.interpretCommand({
+      text: 'go to the kitchen and charge',
+      robotId: 'robot-1',
+    });
+    expect(result.commandType).toBe('navigation');
+    expect(result.parameters.target).toBe('kitchen and charge');
+  });
+
   it('persists the interpretation via the repository', async () => {
     await service.interpretCommand({ text: 'get status', robotId: 'robot-42' });
     expect(commandRepository.create).toHaveBeenCalledTimes(1);

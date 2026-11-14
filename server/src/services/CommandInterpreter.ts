@@ -162,7 +162,37 @@ Your task is to interpret natural language commands and convert them into struct
 2. Infer reasonable defaults when not specified (e.g., normal speed)
 3. Add warnings for potentially risky operations
 4. Suggest alternatives when confidence is below 0.7
-5. For location-based commands, try to identify named places of the robot's site (e.g., "warehouse", "charging station", "assembly line")`;
+5. For location-based commands, try to identify named places of the robot's site (e.g., "warehouse", "charging station", "assembly line")
+6. "Go home" / "return home" is navigation with target "home"; "charge" / "go charge" is navigation with target "charging station". A question or a negation ("is it charging?", "don't go home") is not navigation`;
+
+// ============================================================================
+// KEYWORD HELPERS
+// ============================================================================
+
+/** The keyword fallback's "to/at <place>" target extraction. */
+const LOCATION_PATTERN = /(?:to|towards?|at)\s+(?:the\s+)?([a-zA-Z0-9\s]+?)(?:\s*$|\.|\,)/i;
+
+/**
+ * The place a home / charge phrase names, for the keyword fallback (TASK-505).
+ * "Go home" and "charge" carry no "to <place>", so without this they read as a
+ * low-confidence custom command — while the app's `targetlessAction` sends the
+ * robot home anyway. The guards mirror that client heuristic: a question or a
+ * negation never becomes motion, and neither does a status phrase ("check the
+ * battery charge") or a phrase whose own "to <place>" names somewhere else.
+ */
+export function homeOrChargeTarget(text: string): 'home' | 'charging station' | null {
+  const lower = text.toLowerCase();
+  if (/\?|n't|\b(not|no|never|dont|cancel)\b/.test(lower)) return null;
+  if (/^\s*(how|what|when|where|why|is|are|was|does|do|did|can|could|will|has|have)\b/.test(lower)) {
+    return null;
+  }
+  if (/\b(status|battery|position|check|report)\b/.test(lower)) return null;
+  const explicit = text.match(LOCATION_PATTERN)?.[1];
+  if (explicit && !/^(home|(re)?charg)/i.test(explicit.trim())) return null;
+  if (/\b(re)?charg(e|ing)\b/.test(lower)) return 'charging station';
+  if (/\bhome\b/.test(lower)) return 'home';
+  return null;
+}
 
 // ============================================================================
 // SERVICE CLASS
@@ -312,6 +342,7 @@ export class CommandInterpreter {
     const warnings: string[] = [];
     const suggestedAlternatives: string[] = [];
     const parameters: LLMInterpretationResult['parameters'] = {};
+    const homeOrCharge = homeOrChargeTarget(text);
 
     // Emergency commands
     if (
@@ -324,8 +355,9 @@ export class CommandInterpreter {
       safetyClassification = 'dangerous';
       warnings.push('Emergency command detected');
     }
-    // Navigation commands
+    // Navigation commands — a home / charge phrase names its own target
     else if (
+      homeOrCharge ||
       lowerText.includes('move') ||
       lowerText.includes('go to') ||
       lowerText.includes('navigate') ||
@@ -335,10 +367,10 @@ export class CommandInterpreter {
     ) {
       commandType = 'navigation';
       // Extract target location
-      const locationMatch = text.match(
-        /(?:to|towards?|at)\s+(?:the\s+)?([a-zA-Z0-9\s]+?)(?:\s*$|\.|\,)/i
-      );
-      if (locationMatch) {
+      const locationMatch = text.match(LOCATION_PATTERN);
+      if (homeOrCharge) {
+        parameters.target = homeOrCharge;
+      } else if (locationMatch) {
         parameters.target = locationMatch[1].trim();
       }
       // Check for speed modifiers
