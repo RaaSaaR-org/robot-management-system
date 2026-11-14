@@ -88,7 +88,9 @@ export function ModelDetailsModal({ version, skillName, parentName, onClose }: M
       onClose={onClose}
       title={getModelDisplayName(version)}
       description={getVersionLabel(version.version)}
-      size="lg"
+      // Wide, in two columns from `lg` up: metrics and files sit beside the
+      // facts instead of below the fold (TASK-503).
+      size="4xl"
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>Close</Button>
@@ -100,7 +102,8 @@ export function ModelDetailsModal({ version, skillName, parentName, onClose }: M
         </>
       }
     >
-      <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-1 gap-x-8 gap-y-5 lg:grid-cols-2" data-testid="model-details-columns">
+      <div className="flex min-w-0 flex-col gap-5">
         <div className="flex flex-wrap items-center gap-2">
           <StatusTag status={version.deploymentStatus} dot />
           {version.sourceKind && (
@@ -133,6 +136,8 @@ export function ModelDetailsModal({ version, skillName, parentName, onClose }: M
             <p className="whitespace-pre-line text-[13px] text-ink-secondary">{version.notes}</p>
           </div>
         )}
+      </div>
+      <div className="flex min-w-0 flex-col gap-5">
         {metrics.length > 0 && (
           <div className="flex flex-col gap-2">
             <div className="text-sm font-semibold text-ink-primary">Metrics</div>
@@ -151,6 +156,7 @@ export function ModelDetailsModal({ version, skillName, parentName, onClose }: M
         )}
         <ModelExperimentsLink modelVersionId={version.id} />
         <SocialPanel subject={{ subjectType: 'model_version', subjectId: version.id }} />
+      </div>
       </div>
     </Modal>
   );

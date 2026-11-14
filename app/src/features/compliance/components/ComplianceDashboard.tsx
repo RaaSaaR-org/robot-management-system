@@ -72,6 +72,9 @@ export function ComplianceDashboard({ className }: ComplianceDashboardProps) {
   const loading = isLoadingDashboard && !dashboardStats;
   const alerts = dashboardStats?.alerts;
   const frameworks = dashboardStats?.frameworkScores ?? [];
+  // A framework with nothing tracked has no score; the server leaves it out of the overall one (TASK-503).
+  const assessedCount = frameworks.filter((f) => f.status !== 'not_assessed').length;
+  const hasScore = Boolean(dashboardStats) && assessedCount > 0;
   const openItems = frameworks.reduce((n, f) => n + f.openItems, 0);
   const nextDeadlines = [...deadlines]
     .filter((d) => d.status !== 'compliant')
@@ -84,10 +87,14 @@ export function ComplianceDashboard({ className }: ComplianceDashboardProps) {
       <StatRow columns={4}>
         <StatTile
           label="Compliance score"
-          value={dashboardStats?.overallScore ?? '—'}
-          unit="%"
-          tone={dashboardStats ? scoreTone(dashboardStats.overallScore) : 'neutral'}
-          hint={`Across ${frameworks.length} frameworks`}
+          value={hasScore && dashboardStats ? dashboardStats.overallScore : '—'}
+          unit={hasScore ? '%' : undefined}
+          tone={hasScore && dashboardStats ? scoreTone(dashboardStats.overallScore) : 'neutral'}
+          hint={
+            assessedCount === frameworks.length
+              ? `Across ${frameworks.length} frameworks`
+              : `Across ${assessedCount} of ${frameworks.length} frameworks · ${frameworks.length - assessedCount} not assessed`
+          }
           isLoading={loading}
         />
         <StatTile
@@ -131,6 +138,7 @@ export function ComplianceDashboard({ className }: ComplianceDashboardProps) {
                 {frameworks.map((fw) => {
                   const name = REGULATORY_FRAMEWORK_LABELS[fw.framework] ?? fw.framework;
                   const cfg = COMPLIANCE_STATUS_CONFIG[fw.status];
+                  const assessed = fw.status !== 'not_assessed';
                   return (
                     <li
                       key={fw.framework}
@@ -138,10 +146,19 @@ export function ComplianceDashboard({ className }: ComplianceDashboardProps) {
                     >
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium text-ink-primary" title={name}>{name}</div>
-                        <div className="text-[13px] text-ink-tertiary">{fw.openItems} open of {fw.totalItems}</div>
+                        <div className="text-[13px] text-ink-tertiary">
+                          {assessed ? `${fw.openItems} open of ${fw.totalItems}` : 'Nothing tracked yet'}
+                        </div>
                       </div>
                       <div className="col-span-2 row-start-2 sm:col-span-1 sm:row-start-auto">
-                        <ProgressBar value={fw.score} size="sm" variant={scoreBar(fw.score)} />
+                        {/* An overdue framework is never a green bar, whatever its score (TASK-503). */}
+                        {assessed && (
+                          <ProgressBar
+                            value={fw.score}
+                            size="sm"
+                            variant={fw.status === 'overdue' ? 'error' : scoreBar(fw.score)}
+                          />
+                        )}
                       </div>
                       <StatusTag tone={cfg?.tone ?? 'neutral'}>{cfg?.label ?? humanize(fw.status)}</StatusTag>
                     </li>

@@ -111,7 +111,7 @@ beforeEach(() => {
 
 describe('getDashboardStats', () => {
   it('aggregates framework scores and alerts into an overall score', async () => {
-    // No gaps, no deadlines for every framework -> score 100 each.
+    // No gaps, no deadlines for every framework -> nothing assessed.
     prismaMock.complianceGap.findMany.mockResolvedValue([]);
     prismaMock.regulatoryDeadline.findMany.mockResolvedValue([]);
     // Alert counts.
@@ -126,6 +126,7 @@ describe('getDashboardStats', () => {
 
     expect(stats.overallScore).toBe(100);
     expect(stats.frameworkScores).toHaveLength(7);
+    expect(stats.frameworkScores.every((f) => f.status === 'not_assessed' && f.totalItems === 0)).toBe(true);
     expect(stats.alerts).toEqual({
       criticalGaps: 0,
       expiringDocuments: 0,
@@ -161,8 +162,52 @@ describe('getDashboardStats', () => {
     const aiAct = stats.frameworkScores.find((f) => f.framework === 'ai_act')!;
     expect(aiAct.score).toBe(60);
     expect(aiAct.status).toBe('at_risk');
-    // 6 frameworks at 100, one at 60 -> (600+60)/7 = 94.28 -> rounds to 94
-    expect(stats.overallScore).toBe(94);
+    // The six frameworks with nothing tracked are not assessed, so they do
+    // not pull the average up to a near-perfect score (TASK-503).
+    expect(stats.frameworkScores.filter((f) => f.status === 'not_assessed')).toHaveLength(6);
+    expect(stats.overallScore).toBe(60);
+  });
+
+  it('lowers the score for a deadline that passed with requirements open, and calls the framework overdue', async () => {
+    prismaMock.complianceGap.findMany.mockResolvedValue([]);
+    // Every framework gets the same four deadlines; only one is overdue.
+    prismaMock.regulatoryDeadline.findMany.mockResolvedValue([
+      { deadline: daysFromNow(-576), requirements: '["register"]', completedRequirements: '[]' },
+      { deadline: daysFromNow(-30), requirements: '["a","b"]', completedRequirements: '["a","b"]' },
+      { deadline: daysFromNow(-10), requirements: '[]', completedRequirements: '[]' },
+      { deadline: daysFromNow(120), requirements: '["later"]', completedRequirements: '[]' },
+    ]);
+    prismaMock.complianceGap.count.mockResolvedValue(0);
+    prismaMock.providerDocumentation.count.mockResolvedValue(0);
+    prismaMock.trainingRecord.count.mockResolvedValue(0);
+    prismaMock.inspectionSchedule.count.mockResolvedValue(0);
+    prismaMock.regulatoryDeadline.count.mockResolvedValue(0);
+    prismaMock.riskAssessment.count.mockResolvedValue(0);
+
+    const stats = await service.getDashboardStats();
+
+    const nis2 = stats.frameworkScores.find((f) => f.framework === 'nis2')!;
+    expect(nis2).toEqual({ framework: 'nis2', score: 80, status: 'overdue', openItems: 1, totalItems: 4 });
+    expect(stats.overallScore).toBe(80);
+  });
+
+  it('keeps a framework whose deadlines are all met or still ahead at 100 and compliant', async () => {
+    prismaMock.complianceGap.findMany.mockResolvedValue([]);
+    prismaMock.regulatoryDeadline.findMany.mockResolvedValue([
+      { deadline: daysFromNow(-30), requirements: '["a"]', completedRequirements: '["a"]' },
+      { deadline: daysFromNow(200), requirements: '["b"]', completedRequirements: '[]' },
+    ]);
+    prismaMock.complianceGap.count.mockResolvedValue(0);
+    prismaMock.providerDocumentation.count.mockResolvedValue(0);
+    prismaMock.trainingRecord.count.mockResolvedValue(0);
+    prismaMock.inspectionSchedule.count.mockResolvedValue(0);
+    prismaMock.regulatoryDeadline.count.mockResolvedValue(0);
+    prismaMock.riskAssessment.count.mockResolvedValue(0);
+
+    const stats = await service.getDashboardStats();
+
+    expect(stats.frameworkScores[0]).toMatchObject({ score: 100, status: 'compliant', openItems: 0, totalItems: 2 });
+    expect(stats.overallScore).toBe(100);
   });
 
   it('reports critical-gap status as overdue when score is below 50', async () => {
