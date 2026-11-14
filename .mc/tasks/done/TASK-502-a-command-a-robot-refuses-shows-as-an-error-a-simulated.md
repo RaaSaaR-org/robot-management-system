@@ -67,6 +67,9 @@ PATCHed to `executed`.
 target, no destination and no objects to `return_home` (whole word "home") or
 `charge` ("charge", "charging", "recharge"), for a `navigation` or `custom`
 interpretation only — a status question or an emergency is never rerouted.
+A phrase containing a negation or a question mark ("don't return home", "how
+much charge is left?") is not rerouted either: a keyword must never turn it
+into motion, so it stays a command the robot refuses (added in review).
 When the robot refuses the command, the interpretation is PATCHed to `failed`
 (with the refused command's id) instead of `executed`, and the error is
 rethrown so the toast is an error.
@@ -194,3 +197,6 @@ the new `onLoadState` prop of `RobotModel`.
   `SIMULATED_ROBOT=true` on its simulated robot agent.
 - The command history lives in agent memory: it empties when the agent
   restarts, and refused commands are listed as failed.
+- Review of PR #501 (2026-11-14): added the negation/question guard above; the
+  G1 (STL) model was not seen in a browser — the demo build only loads the H1
+  URDF — so check it once on the deployed instance.
