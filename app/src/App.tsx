@@ -6,7 +6,7 @@
  */
 
 import { Suspense, lazy } from 'react';
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
 import { ProtectedRoute, RequireSession } from './features/auth';
 import { useAuthStore, selectMustChangePassword, selectUserRole } from './features/auth/store/authStore';
 import type { UserRole } from './features/auth/types/auth.types';
@@ -135,6 +135,16 @@ function ProtectedAppRoute({
 // ============================================================================
 // APP COMPONENT
 // ============================================================================
+
+/**
+ * `/datasets/<id>` is not a page of its own: a dataset opens on its episodes.
+ * The query string goes along, so `?episode=` and `?tab=` survive.
+ */
+function DatasetIndexRedirect() {
+  const { datasetId = '' } = useParams<{ datasetId: string }>();
+  const { search } = useLocation();
+  return <Navigate to={`/datasets/${encodeURIComponent(datasetId)}/episodes${search}`} replace />;
+}
 
 function App() {
   return (
@@ -455,6 +465,7 @@ function App() {
               </ProtectedAppRoute>
             }
           />
+          <Route path="/datasets/:datasetId" element={<DatasetIndexRedirect />} />
           <Route
             path="/datasets"
             element={

@@ -285,6 +285,116 @@ describe('EpisodeViewer', () => {
     });
   });
 
+  describe('a video that is slow to arrive (TASK-501)', () => {
+    it('says nothing for the first moment, then that it is loading', () => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      render(<EpisodeViewer {...props()} />);
+      expect(screen.queryByTestId('video-loading')).not.toBeInTheDocument();
+
+      act(() => { vi.advanceTimersByTime(500); });
+      expect(screen.getByTestId('video-loading')).toBeInTheDocument();
+      expect(screen.getByRole('status', { name: 'Loading video…' })).toBeInTheDocument();
+      expect(screen.queryByText('Still loading')).not.toBeInTheDocument();
+    });
+
+    it('offers Retry once it has taken long, and Retry requests the video again', () => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      const onReload = vi.fn();
+      const { container } = render(<EpisodeViewer {...props({ onReload })} />);
+      const first = video(container);
+
+      act(() => { vi.advanceTimersByTime(8000); });
+      expect(screen.getByText('Still loading')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+      expect(onReload).toHaveBeenCalledTimes(1);
+      expect(video(container)).not.toBe(first);
+      // The new request starts its own wait.
+      expect(screen.queryByTestId('video-loading')).not.toBeInTheDocument();
+    });
+
+    it('goes when the video answers, and stays away through a seek', () => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      const { container } = render(<EpisodeViewer {...props()} />);
+      act(() => { vi.advanceTimersByTime(500); });
+      expect(screen.getByTestId('video-loading')).toBeInTheDocument();
+
+      fireEvent.loadedMetadata(video(container)!);
+      expect(screen.queryByTestId('video-loading')).not.toBeInTheDocument();
+
+      // A seek makes the element wait for data again: that is not a load.
+      fireEvent.seeking(video(container)!);
+      fireEvent.waiting(video(container)!);
+      act(() => { vi.advanceTimersByTime(20_000); });
+      expect(screen.queryByTestId('video-loading')).not.toBeInTheDocument();
+    });
+
+    it('never shows for a video that answered in time', () => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      const { container } = render(<EpisodeViewer {...props()} />);
+      fireEvent.loadedData(video(container)!);
+      act(() => { vi.advanceTimersByTime(20_000); });
+      expect(screen.queryByTestId('video-loading')).not.toBeInTheDocument();
+    });
+
+    it('lets clicks through to the cell, except on Retry', () => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      render(<EpisodeViewer {...props()} />);
+      act(() => { vi.advanceTimersByTime(8000); });
+
+      expect(screen.getByTestId('video-loading')).toHaveClass('pointer-events-none');
+      expect(screen.getByRole('button', { name: 'Retry' })).toHaveClass('pointer-events-auto');
+    });
+
+    it('covers the wait for the ticket as well, and a new episode starts its own', () => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      const { container, rerender } = render(<EpisodeViewer {...props({ ready: false })} />);
+      act(() => { vi.advanceTimersByTime(500); });
+      expect(screen.getByTestId('video-loading')).toBeInTheDocument();
+
+      rerender(<EpisodeViewer {...props()} />);
+      fireEvent.loadedMetadata(video(container)!);
+      expect(screen.queryByTestId('video-loading')).not.toBeInTheDocument();
+
+      rerender(<EpisodeViewer {...props({ srcFor: (cam) => `/api/datasets/ds-1/episodes/1/video/${cam}?ticket=tkt-1` })} />);
+      expect(screen.queryByTestId('video-loading')).not.toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(500); });
+      expect(screen.getByTestId('video-loading')).toBeInTheDocument();
+    });
+
+    it('leaves a failed video to its own notice', () => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      const { container } = render(<EpisodeViewer {...props()} />);
+      failVideo(video(container)!, 4);
+      act(() => { vi.advanceTimersByTime(20_000); });
+
+      expect(screen.getByTestId('video-load-failed')).toBeInTheDocument();
+      expect(screen.queryByTestId('video-loading')).not.toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+    });
+  });
+
+  describe('which episode is playing (TASK-501)', () => {
+    it('names the episode and where it stands in the dataset', () => {
+      browserPlays('probably');
+      render(<EpisodeViewer {...props({ episode: { index: 401, position: 402, count: 402 } })} />);
+      expect(screen.getByTestId('viewer-episode')).toHaveTextContent('Episode 401 · 402 of 402');
+    });
+
+    it('says nothing when it is not told', () => {
+      browserPlays('probably');
+      render(<EpisodeViewer {...props()} />);
+      expect(screen.queryByTestId('viewer-episode')).not.toBeInTheDocument();
+    });
+  });
+
   it('still says a dataset has no cameras', () => {
     render(<EpisodeViewer {...props({ cameras: [] })} />);
     expect(screen.getByTestId('no-cameras')).toBeInTheDocument();

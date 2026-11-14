@@ -111,7 +111,28 @@ export function DatasetEpisodesPage() {
   const [episodesError, setEpisodesError] = useState<string | null>(null);
   const [selectedEpisode, setSelectedEpisode] = useState<number | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
-  const requestedEpisodeRef = useRef(searchParams.get('episode'));
+  // The episode the address asks for, per dataset: read when a dataset opens,
+  // and kept in step with the selection, so a reload of the list keeps it.
+  const requestedEpisodeRef = useRef({ datasetId, episode: searchParams.get('episode') });
+  if (requestedEpisodeRef.current.datasetId !== datasetId) {
+    requestedEpisodeRef.current = { datasetId, episode: searchParams.get('episode') };
+  }
+  // `setSearchParams` changes identity with the address; the callbacks that
+  // write `?episode=` stay stable by reaching it through this.
+  const setSearchParamsRef = useRef(setSearchParams);
+  setSearchParamsRef.current = setSearchParams;
+  /**
+   * The selected episode goes into the address (`?episode=N`), replacing the
+   * entry, so a reload or coming back to the page opens the same episode.
+   */
+  const writeEpisodeParam = useCallback((index: number) => {
+    requestedEpisodeRef.current = { ...requestedEpisodeRef.current, episode: String(index) };
+    setSearchParamsRef.current((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('episode', String(index));
+      return next;
+    }, { replace: true });
+  }, []);
   // The episode whose videos and frames are loaded. A single click moves it
   // at once; through a run of quick clicks or a held arrow key it waits for
   // the selection to stop, so the episodes passed on the way cost no requests
@@ -215,6 +236,7 @@ export function DatasetEpisodesPage() {
   const primaryCamera = cameraNames?.[0];
   const selectedMeta = useMemo(() => episodes.find((e) => e.index === selectedEpisode) ?? null, [episodes, selectedEpisode]);
   const stageMeta = useMemo(() => episodes.find((e) => e.index === stageEpisode) ?? null, [episodes, stageEpisode]);
+  const stagePosition = useMemo(() => episodes.findIndex((e) => e.index === stageEpisode), [episodes, stageEpisode]);
   // v3.0 chunked datasets: the episode's window inside the chunk video, per camera.
   const videoWindows = stageMeta?.videoWindows;
   const windowFor = useCallback((cam: string) => videoWindows?.[cam], [videoWindows]);
@@ -238,8 +260,13 @@ export function DatasetEpisodesPage() {
   const framesError = stageCurrent ? episodeFrames.error : null;
 
   const stage = useViewportFill<HTMLDivElement>(STAGE_FILL);
+  // One camera in a wide window always sits beside the chart: across the
+  // width a single 4:3 picture would be a stamp in a wide black box (TASK-501).
+  const singleCamera = cameraNames?.length === 1;
   const stageLayout =
-    stage.height !== null && stage.height < STACKED_FROM_PX && stage.viewportWidth >= SIDE_FROM_PX ? 'side' : 'stacked';
+    stage.height !== null && stage.viewportWidth >= SIDE_FROM_PX && (stage.height < STACKED_FROM_PX || singleCamera)
+      ? 'side'
+      : 'stacked';
   const stageHeight =
     stage.height === null
       ? null
@@ -306,8 +333,17 @@ export function DatasetEpisodesPage() {
         for (const ep of eps) if (ep.flagged) flags[ep.index] = true;
         setFlaggedMap(flags);
         // `?episode=N` (an activity-feed link, TASK-241) opens that episode.
-        const requested = eps.find((e) => String(e.index) === requestedEpisodeRef.current);
-        if (eps.length > 0) setSelectedEpisode((requested ?? eps[0]).index);
+        const asked = requestedEpisodeRef.current.episode;
+        const requested = eps.find((e) => String(e.index) === asked);
+        if (eps.length === 0) return;
+        const opened = (requested ?? eps[0]!).index;
+        setSelectedEpisode(opened);
+        // An episode the dataset does not have: open the first one and say so,
+        // in the address too, instead of quietly showing another episode.
+        if (asked !== null && !requested) {
+          writeEpisodeParam(opened);
+          toast.info(`Episode ${asked} is not in this dataset`, { description: `Showing episode ${opened} instead.` });
+        }
       })
       .catch((err) => {
         setEpisodes([]);
@@ -316,7 +352,7 @@ export function DatasetEpisodesPage() {
         setEpisodesError(typeof detail === 'string' ? `${errorMessage(err, 'unknown error')} — ${detail}` : errorMessage(err, 'unknown error'));
       })
       .finally(() => setEpisodesLoading(false));
-  }, [datasetId, reloadKey]);
+  }, [datasetId, reloadKey, writeEpisodeParam]);
 
   // Reward-model scores, newest per episode. Absence is fine (TASK-179).
   useEffect(() => {
@@ -356,7 +392,8 @@ export function DatasetEpisodesPage() {
       }
       return index;
     });
-  }, []);
+    writeEpisodeParam(index);
+  }, [writeEpisodeParam]);
 
   const handleFlagToggle = useCallback(async (index: number) => {
     if (!datasetId) return;
@@ -404,6 +441,13 @@ export function DatasetEpisodesPage() {
 
   const handleTrim = useCallback(async () => {
     if (!datasetId || selectedEpisode === null) return;
+    // One click writes a whole new dataset: asked first, like the delete (TASK-501).
+    const ok = await confirm({
+      title: `Trim episode ${selectedEpisode}?`,
+      description: `Frames ${trimStart} to ${trimEnd === '' ? 'the end' : trimEnd} are kept. A new dataset revision is written with the shortened episode; the original is kept.`,
+      confirmLabel: 'Trim',
+    });
+    if (!ok) return;
     setCurating(true);
     setCurationMsg(null);
     try {
@@ -435,6 +479,7 @@ export function DatasetEpisodesPage() {
 
   const applySuggestion = useCallback((s: CurationSuggestion) => {
     setSelectedEpisode(s.episode);
+    writeEpisodeParam(s.episode);
     if (s.kind === 'trim') {
       setTrimStart(s.start ?? 0);
       setTrimEnd(s.end ?? '');
@@ -445,7 +490,7 @@ export function DatasetEpisodesPage() {
         if (ok) setSuggestions((prev) => prev.filter((x) => x !== s));
       });
     }
-  }, [handleDeleteEpisode]);
+  }, [handleDeleteEpisode, writeEpisodeParam]);
 
   const handleAnnotate = useCallback(async () => {
     if (!datasetId) return;
@@ -686,6 +731,7 @@ export function DatasetEpisodesPage() {
               onPlayingChange={playback.onPlayingChange}
               onFailure={playback.onFailure}
               layout={stageLayout}
+              episode={stagePosition >= 0 ? { index: stageEpisode, position: stagePosition + 1, count: episodes.length } : undefined}
               isPlaying={playback.isPlaying}
               onPlayPause={playback.togglePlay}
               currentTime={currentTime}
