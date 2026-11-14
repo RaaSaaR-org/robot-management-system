@@ -3,7 +3,7 @@ id: "TASK-503"
 aliases: []
 title: "The Skill Training overview counts imported datasets and registered models, the compliance score reflects overdue deadlines, and a failed feature check keeps the deep link"
 slug: "the-skill-training-overview-counts-imported-datasets-and"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
