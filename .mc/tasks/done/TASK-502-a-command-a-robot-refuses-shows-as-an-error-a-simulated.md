@@ -3,7 +3,7 @@ id: "TASK-502"
 aliases: []
 title: "A command a robot refuses shows as an error, a simulated robot can charge, the Activity tab lists its commands, and the 3D model appears whole"
 slug: "a-command-a-robot-refuses-shows-as-an-error-a-simulated"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
