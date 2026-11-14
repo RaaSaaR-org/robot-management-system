@@ -263,3 +263,74 @@ describe('the panels under the stage', () => {
     expect(screen.getByTestId('dataset-expectations')).toBeInTheDocument();
   });
 });
+
+describe('the page header (TASK-506)', () => {
+  it("shows the dataset's description and the license its source declared", async () => {
+    const description = 'NVIDIA reference dataset for GR00T N1.7: Unitree G1 picks an apple and places it on a plate.';
+    trainingApiMock.getDataset.mockResolvedValue({
+      ...APPLE,
+      description,
+      huggingFaceRepoId: 'nvidia/GR00T-N1.7-AppleToPlate',
+      sourceRevision: 'd89c126a0000000000000000000000000000000',
+      sourceLicense: 'cc-by-4.0',
+    });
+    renderPage();
+
+    const shown = await screen.findByTestId('dataset-description');
+    expect(shown).toHaveTextContent(description);
+    // Two lines at most; the whole text on hover.
+    expect(shown).toHaveClass('line-clamp-2');
+    expect(shown).toHaveAttribute('title', description);
+    expect(screen.getByTestId('dataset-license')).toHaveTextContent('License: CC-BY-4.0');
+    expect(screen.getByTestId('dataset-source')).toBeInTheDocument();
+  });
+
+  it('shows neither for a dataset that has none', async () => {
+    renderPage();
+    expect(await screen.findByRole('heading', { name: 'Apple to Plate' })).toBeInTheDocument();
+    expect(screen.queryByTestId('dataset-description')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dataset-license')).not.toBeInTheDocument();
+  });
+});
+
+describe('an episode no camera of which this browser can play (TASK-506)', () => {
+  it('still plays: Play starts the clock and the chart cursor moves', async () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('');
+    // Every frame request, whoever made it; a frame runs all that are waiting.
+    let waiting = new Map<number, FrameRequestCallback>();
+    let nextId = 1;
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { waiting.set(nextId, cb); return nextId++; });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => { waiting.delete(id); });
+    const frame = (now: number) => act(() => {
+      const due = waiting;
+      waiting = new Map();
+      for (const cb of due.values()) cb(now);
+    });
+    try {
+      trainingApiMock.getDataset.mockResolvedValue({
+        ...APPLE,
+        infoJson: {
+          features: {
+            ...(APPLE.infoJson as unknown as { features: Record<string, unknown> }).features,
+            [EGO]: { dtype: 'video', shape: [480, 640, 3], info: { 'video.codec': 'av1' } },
+          },
+        } as unknown as Dataset['infoJson'],
+      });
+      const { container } = renderPage();
+      expect(await screen.findByTestId('video-codec-unsupported')).toBeInTheDocument();
+      expect(container.querySelector('video')).toBeNull();
+
+      const play = screen.getByRole('button', { name: 'Play' });
+      expect(play).toBeEnabled();
+      fireEvent.click(play);
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
+      // A second of frames, however the page re-renders on the way: the clock moves.
+      for (let now = 1000; now <= 2000; now += 100) frame(now);
+      await waitFor(() => expect(screen.getByTestId('transport-clock')).not.toHaveTextContent('0:00.0 /'));
+      expect(screen.getByTestId('transport-clock')).toHaveTextContent(/^0:0[01]\.\d \/ 0:19\.7$/);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+});

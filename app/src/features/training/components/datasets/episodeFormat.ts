@@ -102,19 +102,70 @@ export function channelNamesAgree(names: readonly string[], other: readonly stri
 }
 
 /**
+ * The joints inside each group of the GR00T Unitree G1 43-DOF layout
+ * (`meta/modality.json` of nvidia/GR00T-N1.7-AppleToPlate and recordings in
+ * the same layout). GR00T exports name all 43 channels `observation_to_policy`,
+ * so the names come from here. Legs, waist and arms are the G1 29-DOF SDK
+ * order; the hands are the Dex3-1 SDK order, which is NOT mirrored — left is
+ * thumb, middle, index, right is thumb, index, middle. Same tables as
+ * `robot-agent/hardware/sim_evaluator/envs/g1_apple_env.py`,
+ * `robot-agent/src/vla/action-contracts.ts` and `sim_g1_dds/joints.py`.
+ */
+const G1_GROOT_GROUP_JOINTS: Readonly<Record<string, readonly string[]>> = {
+  left_leg: ['left_hip_pitch', 'left_hip_roll', 'left_hip_yaw', 'left_knee', 'left_ankle_pitch', 'left_ankle_roll'],
+  right_leg: ['right_hip_pitch', 'right_hip_roll', 'right_hip_yaw', 'right_knee', 'right_ankle_pitch', 'right_ankle_roll'],
+  waist: ['waist_yaw', 'waist_roll', 'waist_pitch'],
+  left_arm: [
+    'left_shoulder_pitch', 'left_shoulder_roll', 'left_shoulder_yaw', 'left_elbow',
+    'left_wrist_roll', 'left_wrist_pitch', 'left_wrist_yaw',
+  ],
+  right_arm: [
+    'right_shoulder_pitch', 'right_shoulder_roll', 'right_shoulder_yaw', 'right_elbow',
+    'right_wrist_roll', 'right_wrist_pitch', 'right_wrist_yaw',
+  ],
+  left_hand: [
+    'left_hand_thumb_0', 'left_hand_thumb_1', 'left_hand_thumb_2',
+    'left_hand_middle_0', 'left_hand_middle_1', 'left_hand_index_0', 'left_hand_index_1',
+  ],
+  right_hand: [
+    'right_hand_thumb_0', 'right_hand_thumb_1', 'right_hand_thumb_2',
+    'right_hand_index_0', 'right_hand_index_1', 'right_hand_middle_0', 'right_hand_middle_1',
+  ],
+};
+
+/**
+ * The joint names of the G1 layout above, per group, when `groups` is exactly
+ * that layout: the seven group names, each once, each as wide as its table.
+ * Null for anything else — a near match would put a confident wrong name on a
+ * channel.
+ */
+function g1GrootGroupJoints(groups: ChannelGroup[]): Readonly<Record<string, readonly string[]>> | null {
+  const expected = Object.keys(G1_GROOT_GROUP_JOINTS);
+  if (groups.length !== expected.length) return null;
+  if (new Set(groups.map((g) => g.name)).size !== groups.length) return null;
+  const fits = groups.every((g) => {
+    const joints = G1_GROOT_GROUP_JOINTS[g.name];
+    return joints !== undefined && g.end - g.start === joints.length;
+  });
+  return fits ? G1_GROOT_GROUP_JOINTS : null;
+}
+
+/**
  * One label per channel of a `width`-wide vector that has joint groups. The
  * joint's own name when `names` (out of info.json) really names every channel
- * — "arms[5]" says nothing where the vector alternates left and right — and
+ * — "arms[5]" says nothing where the vector alternates left and right — then
+ * the G1 joint name when the groups are the GR00T G1 43-DOF layout, and
  * otherwise the group name and the index inside it (`left_arm[3]`), a channel
  * no group covers by its position in the vector (`ch[40]`).
  */
 export function channelLabels(groups: ChannelGroup[], width: number, names?: readonly string[]): string[] {
   const real = realChannelNames(names, Math.max(0, width));
   if (real) return real;
+  const g1 = g1GrootGroupJoints(groups);
   const labels = Array.from({ length: Math.max(0, width) }, (_, i) => `ch[${i}]`);
   for (const group of groups) {
     for (let i = Math.max(0, group.start); i < Math.min(group.end, labels.length); i += 1) {
-      labels[i] = `${group.name}[${i - group.start}]`;
+      labels[i] = g1?.[group.name]?.[i - group.start] ?? `${group.name}[${i - group.start}]`;
     }
   }
   return labels;

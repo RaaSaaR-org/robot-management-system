@@ -116,7 +116,7 @@ beforeEach(() => {
 });
 
 describe('the episode page on a GR00T v2.1 dataset', () => {
-  it('labels the joint chart by body part and index, one group at a time', async () => {
+  it('names the joints of the G1 layout in the chart, one group at a time (TASK-506)', async () => {
     renderPage();
 
     const picker = await screen.findByRole('group', { name: 'Joint group' });
@@ -127,12 +127,13 @@ describe('the episode page on a GR00T v2.1 dataset', () => {
     // The arm that moves in this episode is the one on screen.
     expect(within(picker).getByRole('button', { name: 'right arm' })).toHaveAttribute('aria-pressed', 'true');
     const legend = within(screen.getByTestId('joint-chart-legend'));
-    expect(legend.getByText('right_arm[3]')).toBeInTheDocument();
+    expect(legend.getByText('right_elbow')).toBeInTheDocument();
+    expect(legend.queryByText('right_arm[3]')).not.toBeInTheDocument();
     expect(legend.queryByText('action_from_policy')).not.toBeInTheDocument();
 
     await userEvent.click(within(picker).getByRole('button', { name: 'left arm' }));
-    expect(legend.getByText('left_arm[3]')).toBeInTheDocument();
-    expect(legend.queryByText('right_arm[3]')).not.toBeInTheDocument();
+    expect(legend.getByText('left_elbow')).toBeInTheDocument();
+    expect(legend.queryByText('right_elbow')).not.toBeInTheDocument();
   });
 
   it('fills the statistics panel, by joint group', async () => {
@@ -148,7 +149,7 @@ describe('the episode page on a GR00T v2.1 dataset', () => {
 
     await userEvent.click(panel.getByRole('button', { name: 'left arm' }));
     const cells = within(panel.getByTestId('stats-row-18')).getAllByRole('cell').map((c) => c.textContent);
-    expect(cells).toEqual(['left_arm[3]', '17', '19', '18', '0.25']);
+    expect(cells).toEqual(['left_elbow', '17', '19', '18', '0.25']);
   });
 
   it('keeps the info.json names and an empty panel when the dataset has neither file', async () => {

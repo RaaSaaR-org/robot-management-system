@@ -266,11 +266,33 @@ describe('EpisodeViewer', () => {
       expect(onFailure).toHaveBeenCalledWith(EGO);
     });
 
-    it('does not offer Play when the browser can play none of the cameras', () => {
+    it('keeps Play and Seek for the joint chart when the browser can play none of the cameras (TASK-506)', () => {
       browserPlays('');
-      render(<EpisodeViewer {...props({ codecFor: () => 'av1' })} />);
-      expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
-      expect(screen.getByLabelText('Seek')).toBeDisabled();
+      const onPlayPause = vi.fn();
+      const onSeek = vi.fn();
+      render(<EpisodeViewer {...props({ codecFor: () => 'av1', onPlayPause, onSeek })} />);
+      expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+      expect(screen.getByLabelText('Seek')).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+      expect(onPlayPause).toHaveBeenCalledTimes(1);
+      fireEvent.change(screen.getByLabelText('Seek'), { target: { value: '4' } });
+      expect(onSeek).toHaveBeenCalledTimes(1);
+      // The notice names the codec, where it plays, and what still works here.
+      const notice = screen.getByTestId('video-codec-unsupported');
+      expect(notice).toHaveTextContent("This browser can't play AV1 video");
+      expect(notice).toHaveTextContent('a current Chrome or Firefox');
+      expect(notice).toHaveTextContent('still move the cursor on the joint chart');
+    });
+
+    it('does not promise the chart where another camera still plays', () => {
+      browserPlays('');
+      const WRIST = 'observation.images.wrist';
+      render(
+        <EpisodeViewer
+          {...props({ cameras: [EGO, WRIST], codecFor: (cam) => (cam === EGO ? 'av1' : undefined) })}
+        />,
+      );
+      expect(screen.getByTestId('video-codec-unsupported')).not.toHaveTextContent('joint chart');
     });
 
     it('offers Play while one camera can still play', () => {
@@ -282,6 +304,84 @@ describe('EpisodeViewer', () => {
         />,
       );
       expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+    });
+  });
+
+  describe('a playing video that runs out of data (TASK-506)', () => {
+    /** A video that has answered and is playing (or paused). */
+    function playingVideo(container: HTMLElement, paused = false) {
+      const el = video(container)!;
+      fireEvent.loadedMetadata(el);
+      Object.defineProperty(el, 'paused', { configurable: true, value: paused });
+      return el;
+    }
+
+    it('shows a small spinner over the camera while it waits, and lets clicks through', () => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      const { container } = render(<EpisodeViewer {...props()} />);
+      const el = playingVideo(container);
+      expect(screen.queryByTestId('video-buffering')).not.toBeInTheDocument();
+
+      fireEvent.waiting(el);
+      // A blip says nothing; a stall that lasts does.
+      expect(screen.queryByTestId('video-buffering')).not.toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(300); });
+      const spinner = screen.getByTestId('video-buffering');
+      expect(spinner).toHaveClass('pointer-events-none');
+      expect(screen.getByRole('status', { name: 'Buffering video…' })).toBeInTheDocument();
+      // Not the loading overlay: no text, no Retry.
+      expect(screen.queryByTestId('video-loading')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ['playing', (el: HTMLVideoElement) => fireEvent.playing(el)],
+      ['canplay', (el: HTMLVideoElement) => fireEvent.canPlay(el)],
+      ['seeked', (el: HTMLVideoElement) => fireEvent.seeked(el)],
+    ])('goes on %s', (_name, settle) => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      const { container } = render(<EpisodeViewer {...props()} />);
+      const el = playingVideo(container);
+      fireEvent.waiting(el);
+      act(() => { vi.advanceTimersByTime(300); });
+      expect(screen.getByTestId('video-buffering')).toBeInTheDocument();
+      settle(el);
+      expect(screen.queryByTestId('video-buffering')).not.toBeInTheDocument();
+    });
+
+    it('says nothing for a stall that ends at once', () => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      const { container } = render(<EpisodeViewer {...props()} />);
+      const el = playingVideo(container);
+      fireEvent.waiting(el);
+      act(() => { vi.advanceTimersByTime(100); });
+      fireEvent.playing(el);
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(screen.queryByTestId('video-buffering')).not.toBeInTheDocument();
+    });
+
+    it('says nothing for the wait after a seek of a paused video', () => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      const { container } = render(<EpisodeViewer {...props()} />);
+      const el = playingVideo(container, true);
+      fireEvent.waiting(el);
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(screen.queryByTestId('video-buffering')).not.toBeInTheDocument();
+    });
+
+    it('belongs to the episode it happened on', () => {
+      vi.useFakeTimers();
+      browserPlays('probably');
+      const { container, rerender } = render(<EpisodeViewer {...props()} />);
+      fireEvent.waiting(playingVideo(container));
+      act(() => { vi.advanceTimersByTime(300); });
+      expect(screen.getByTestId('video-buffering')).toBeInTheDocument();
+      rerender(<EpisodeViewer {...props({ srcFor: (cam) => `/api/datasets/ds-1/episodes/1/video/${cam}?ticket=tkt-1` })} />);
+      expect(screen.queryByTestId('video-buffering')).not.toBeInTheDocument();
     });
   });
 
