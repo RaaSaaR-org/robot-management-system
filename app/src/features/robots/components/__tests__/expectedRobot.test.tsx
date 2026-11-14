@@ -252,6 +252,23 @@ describe('the detail page banner', () => {
     expect(screen.getByText(/Last seen/)).toBeInTheDocument();
     expect(useRobotReadiness).toHaveBeenCalledWith('sim-robot-001', { enabled: true });
   });
+
+  it('keeps Start robot side in the message row on a wide screen when a supervisor covers the robot (TASK-507)', () => {
+    useRobotReadiness.mockReturnValue({ readiness: { robotId: 'sim-robot-001', bringup: { overall: 'stopped' } } } as never);
+    try {
+      render(<RobotOfflineBanner robotName="Sim G1" robotId="sim-robot-001" />);
+      const banner = screen.getByRole('status');
+      expect(banner).toHaveTextContent('Sim G1 is offline. Start the robot side here.');
+      expect(banner).toHaveClass('flex-col', 'lg:flex-row', 'lg:items-center');
+    } finally {
+      useRobotReadiness.mockReturnValue({ readiness: null });
+    }
+  });
+
+  it('stays a plain line when no supervisor covers the robot', () => {
+    render(<RobotOfflineBanner robotName="Sim G1" robotId="sim-robot-001" />);
+    expect(screen.getByRole('status')).not.toHaveClass('lg:flex-row');
+  });
 });
 
 describe('the Overview tab', () => {
@@ -264,6 +281,23 @@ describe('the Overview tab', () => {
     canExecuteCommands: false,
     onSendToCharge: async () => {},
     onReturnHome: async () => {},
+  });
+
+  it('fits the live model to the first screen, lower for an offline robot under its banner (TASK-507)', async () => {
+    const { unmount } = render(<OverviewTab {...props(makeRobot({ status: 'online', metadata: {} }))} />);
+    await screen.findByTestId('robot-3d-viewer');
+    expect(screen.getByTestId('overview-model-stage')).toHaveClass('lg:h-[clamp(300px,calc(100dvh_-_398px),640px)]');
+    unmount();
+    render(<OverviewTab {...props(g1)} />);
+    await screen.findByTestId('robot-3d-viewer');
+    expect(screen.getByTestId('overview-model-stage')).toHaveClass('lg:h-[clamp(300px,calc(100dvh_-_476px),640px)]');
+    expect(screen.getByTestId('overview-model-stage')).not.toHaveClass('lg:h-[440px]');
+  });
+
+  it('keeps the live model panel as tall as its stage, not stretched to the controls (TASK-507)', async () => {
+    render(<OverviewTab {...props(makeRobot({ status: 'online', metadata: {} }))} />);
+    await screen.findByTestId('robot-3d-viewer');
+    expect(screen.getByTestId('overview-live-model')).toHaveClass('xl:self-start');
   });
 
   it('does not draw the placeholder box for an expected robot it has no model of', () => {

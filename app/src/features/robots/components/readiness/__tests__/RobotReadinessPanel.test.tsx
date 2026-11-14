@@ -103,6 +103,25 @@ describe('RobotReadinessPanel — one reason, the row that explains it', () => {
     expect(screen.queryByTestId('readiness-arm-control')).toBeNull();
   });
 
+  it('the inline compact variant puts the reason and Start in one row on a wide screen, the rows below (TASK-507)', async () => {
+    serve(readinessFor(ROBOT, 'hand_fault'));
+    render(<RobotReadinessPanel robotId={ROBOT} variant="compact" inline />);
+    const list = await screen.findByRole('list', { name: 'Readiness checklist' });
+    const body = screen.getByTestId('robot-readiness-compact').firstElementChild as HTMLElement;
+    expect(body).toHaveClass('flex-col', 'lg:flex-row', 'lg:flex-wrap');
+    expect(list).toHaveClass('lg:basis-full');
+    expect(within(body).getByTestId('readiness-reason')).toBeInTheDocument();
+  });
+
+  it('the compact variant stays a column without inline', async () => {
+    serve(readinessFor(ROBOT, 'hand_fault'));
+    render(<RobotReadinessPanel robotId={ROBOT} variant="compact" />);
+    const list = await screen.findByRole('list', { name: 'Readiness checklist' });
+    const body = screen.getByTestId('robot-readiness-compact').firstElementChild as HTMLElement;
+    expect(body).not.toHaveClass('lg:flex-row');
+    expect(list).not.toHaveClass('lg:basis-full');
+  });
+
   it('the line variant is the reason only', async () => {
     serve(readinessFor(ROBOT, 'mode_not_balance'));
     render(<RobotReadinessPanel robotId={ROBOT} variant="line" />);

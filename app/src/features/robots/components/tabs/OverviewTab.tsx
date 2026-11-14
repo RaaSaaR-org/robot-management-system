@@ -10,6 +10,7 @@ import { Suspense, lazy } from 'react';
 import { BatteryCharging, Home } from 'lucide-react';
 import { Button, Panel, StatusTag } from '@/shared/components/ui';
 import { usePermission } from '@/features/auth/hooks/useAuth';
+import { cn } from '@/shared/utils/cn';
 import { Robot3DViewerFallback } from '../visualization';
 import { VlaControlSection } from '../VlaControlSection';
 import { AwaitingAgentState, ProvenanceTag, Readout, ViewerUnavailable, provenanceOf } from '../common';
@@ -29,6 +30,18 @@ const Robot3DViewer = lazy(() =>
 );
 
 const ICON = 'h-4 w-4';
+
+/**
+ * Height of the live model on a wide screen (TASK-507): what is left of the
+ * first screen below the panel header, so the whole robot shows without
+ * scrolling at 1280×720 — 300 px at least, 640 px at most. An offline robot
+ * carries the offline banner above the panel, so its stage starts lower.
+ * Written out in full, so Tailwind sees both classes.
+ */
+const STAGE_HEIGHT = {
+  online: 'lg:h-[clamp(300px,calc(100dvh_-_398px),640px)]',
+  offline: 'lg:h-[clamp(300px,calc(100dvh_-_476px),640px)]',
+} as const;
 
 /** Ground speed for an odometry frame: |velocity|, falling back to |yawSpeed|. */
 function odometrySpeed(odometry: OdometryState): { value: number; unit: string } | null {
@@ -73,7 +86,9 @@ export function OverviewTab({
 
   return (
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-      <Panel className="xl:col-span-2">
+      {/* As tall as its stage, not as the controls beside it: stretched, it
+          left an empty band under the model (TASK-507). */}
+      <Panel className="xl:col-span-2 xl:self-start" data-testid="overview-live-model">
         <Panel.Header
           title="Live model"
           description={
@@ -92,7 +107,13 @@ export function OverviewTab({
             </>
           }
         />
-        <div className="h-[280px] border-t border-line-subtle sm:h-[340px] lg:h-[440px]">
+        <div
+          data-testid="overview-model-stage"
+          className={cn(
+            'h-[280px] border-t border-line-subtle sm:h-[340px]',
+            robot.status === 'offline' ? STAGE_HEIGHT.offline : STAGE_HEIGHT.online,
+          )}
+        >
           {noModelYet ? (
             <ViewerUnavailable
               className="rounded-none"

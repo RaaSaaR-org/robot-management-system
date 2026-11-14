@@ -443,14 +443,15 @@ export function JointChartPanel({ frames, sampleCount, jointNames, groups, isLoa
               )}
             </div>
             <div
-              // Seven pairs and their key are four lines beside the video; any
-              // other legend keeps to three and scrolls, so the plot stays tall.
-              className={cn('mt-2 flex shrink-0 flex-wrap gap-x-3 gap-y-1 lg:overflow-y-auto', paired ? 'lg:max-h-[5rem]' : 'lg:max-h-[3.75rem]')}
+              // Four short lines beside the video (TASK-507): seven pairs and
+              // their key, or seven joints of a group such as GR00T's left arm,
+              // fit whole; a longer legend scrolls, so the plot stays tall.
+              className="mt-2 flex shrink-0 flex-wrap gap-x-3 gap-y-0.5 lg:max-h-[3.875rem] lg:overflow-y-auto"
               data-testid="joint-chart-legend"
             >
               {paired && (
                 // Which swatch of a pair is which: every entry keeps this order.
-                <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-ink-tertiary" data-testid="joint-chart-side-key">
+                <span className="flex items-center gap-1.5 whitespace-nowrap text-xs leading-[14px] text-ink-tertiary" data-testid="joint-chart-side-key">
                   left
                   <span className="inline-block h-1 w-3.5 rounded-full" style={{ backgroundColor: chartChannelColor(0) }} />
                   <span className="inline-block h-1 w-3.5 rounded-full" style={{ backgroundColor: rightSideColor(chartChannelColor(0)) }} />
@@ -468,7 +469,7 @@ export function JointChartPanel({ frames, sampleCount, jointNames, groups, isLoa
                   onMouseEnter={() => setHovered(key)}
                   onMouseLeave={() => setHovered(null)}
                   className={cn(
-                    'flex items-center gap-1.5 whitespace-nowrap rounded-tag text-xs text-ink-secondary transition-opacity hover:text-ink-primary',
+                    'flex items-center gap-1.5 whitespace-nowrap rounded-tag text-xs leading-[14px] text-ink-secondary transition-opacity hover:text-ink-primary',
                     focused && focused !== key && 'opacity-50',
                     pinned === key && 'font-medium text-ink-primary',
                     focusRing,

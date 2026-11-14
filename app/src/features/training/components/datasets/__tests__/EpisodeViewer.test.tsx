@@ -492,6 +492,24 @@ describe('EpisodeViewer', () => {
       browserPlays('probably');
       render(<EpisodeViewer {...props()} />);
       expect(screen.queryByTestId('viewer-episode')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('viewer-header')).not.toBeInTheDocument();
+    });
+
+    it('names it in a row above the cameras, not over a picture (TASK-507)', () => {
+      browserPlays('probably');
+      const { container } = render(
+        <EpisodeViewer {...props({ cameras: ['head', 'wrist'], episode: { index: 0, position: 1, count: 80 } })} />,
+      );
+      const header = screen.getByTestId('viewer-header');
+      expect(header).toContainElement(screen.getByTestId('viewer-episode'));
+      // No video in the header, and the header comes before every one of them.
+      expect(header.querySelector('video')).toBeNull();
+      const videos = container.querySelectorAll('video');
+      expect(videos.length).toBe(2);
+      videos.forEach((v) => {
+        expect(header.compareDocumentPosition(v) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(header.contains(v)).toBe(false);
+      });
     });
   });
 

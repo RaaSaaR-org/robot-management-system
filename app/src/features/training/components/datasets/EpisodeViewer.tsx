@@ -71,7 +71,7 @@ export interface EpisodeViewerProps {
   layout?: ViewerLayout;
   /**
    * The episode on the stage: its index, as the list names it, and where it
-   * stands among the dataset's episodes (1-based). Shown over the picture, so
+   * stands among the dataset's episodes (1-based). Shown above the cameras, so
    * the player says what it is playing however far the list is scrolled.
    */
   episode?: { index: number; position: number; count: number };
@@ -454,21 +454,22 @@ export function EpisodeViewer(p: EpisodeViewerProps) {
 
   return (
     <Panel padding="none" data-testid="episode-viewer" className={cn('flex flex-col overflow-hidden lg:min-h-0', p.className)}>
+      {p.episode && (
+        // A row of its own above the cameras (TASK-507): laid over the grid it
+        // covered the corner of a camera's picture.
+        <div data-testid="viewer-header" className="flex shrink-0 items-center justify-end border-b border-line px-3 py-1">
+          <span data-testid="viewer-episode" className="text-xs font-medium text-ink-secondary">
+            Episode {p.episode.index}
+            <span className="font-normal text-ink-tertiary"> · {p.episode.position} of {p.episode.count}</span>
+          </span>
+        </div>
+      )}
       <div
         className={cn(
           'relative grid gap-px bg-line-subtle lg:min-h-0 lg:flex-1 lg:auto-rows-fr',
           gridColumns(cameras.length, layout),
         )}
       >
-        {p.episode && (
-          <span
-            data-testid="viewer-episode"
-            className="absolute right-2 top-2 z-10 rounded-tag bg-canvas/80 px-1.5 py-0.5 text-xs font-medium text-ink-secondary"
-          >
-            Episode {p.episode.index}
-            <span className="font-normal text-ink-tertiary"> · {p.episode.position} of {p.episode.count}</span>
-          </span>
-        )}
         {cameras.map((cam) => (
           <CameraCell
             key={cam}
