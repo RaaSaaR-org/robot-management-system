@@ -376,4 +376,91 @@ describe('Robot Routes', () => {
       expect(res.status).toBe(404);
     });
   });
+
+  describe('GET /api/robots/:id/commands (TASK-502)', () => {
+    /** A stand-in agent answering every request with `status` and `body`, recording the paths asked. */
+    async function withAgent(
+      status: number,
+      body: unknown,
+      run: (baseUrl: string, paths: string[]) => Promise<void>
+    ) {
+      const paths: string[] = [];
+      const agent = http.createServer((req, res) => {
+        paths.push(`${req.method} ${req.url}`);
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(body));
+      });
+      await new Promise<void>((resolve) => agent.listen(0, '127.0.0.1', () => resolve()));
+      try {
+        await run(`http://127.0.0.1:${(agent.address() as AddressInfo).port}`, paths);
+      } finally {
+        agent.closeAllConnections();
+        await new Promise<void>((resolve) => agent.close(() => resolve()));
+      }
+    }
+
+    const history = {
+      commands: [
+        { id: 'cmd-2', robotId: 'r1', type: 'charge', status: 'failed', errorMessage: 'No charging place' },
+        { id: 'cmd-1', robotId: 'r1', type: 'return_home', status: 'completed' },
+      ],
+      pagination: { page: 1, pageSize: 10, total: 2, totalPages: 1 },
+    };
+
+    it("relays the agent's command history unchanged, with a GET", async () => {
+      await withAgent(200, history, async (baseUrl, paths) => {
+        mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl });
+
+        const res = await request(app).get('/api/robots/r1/commands?page=1&pageSize=10');
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(history);
+        expect(paths).toEqual(['GET /api/v1/robots/r1/commands?page=1&pageSize=10']);
+        expect(mockRobotManager.sendCommand).not.toHaveBeenCalled();
+      });
+    });
+
+    it('drops paging values that are not positive integers', async () => {
+      await withAgent(200, history, async (baseUrl, paths) => {
+        mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl });
+
+        await request(app).get('/api/robots/r1/commands?page=abc&pageSize=-5');
+
+        expect(paths).toEqual(['GET /api/v1/robots/r1/commands']);
+      });
+    });
+
+    it('404s for a robot that is not registered, without calling any agent', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue(undefined);
+
+      const res = await request(app).get('/api/robots/ghost/commands');
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Robot not found');
+    });
+
+    it('404s when the agent does not serve that robot', async () => {
+      await withAgent(404, { code: 'ROBOT_NOT_FOUND' }, async (baseUrl) => {
+        mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl });
+        const res = await request(app).get('/api/robots/r1/commands');
+        expect(res.status).toBe(404);
+      });
+    });
+
+    it('502s when the agent answers with an error', async () => {
+      await withAgent(500, { error: 'boom' }, async (baseUrl) => {
+        mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl });
+        const res = await request(app).get('/api/robots/r1/commands');
+        expect(res.status).toBe(502);
+        expect(res.body.error).toBe('Unable to communicate with robot agent');
+      });
+    });
+
+    it('502s when the agent cannot be reached', async () => {
+      // Port 9 (discard) on loopback: nothing listens there.
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://127.0.0.1:9' });
+      const res = await request(app).get('/api/robots/r1/commands');
+      expect(res.status).toBe(502);
+    });
+  });
 });

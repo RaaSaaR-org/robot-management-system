@@ -266,6 +266,12 @@ robotAgent:
     # Embodiment the agent simulates: g1 | g1_edu | h1 | so101. Empty leaves
     # ROBOT_TYPE unset and the agent on its own default (h1).
     robotType: "g1"
+    # The agent this chart runs is a pure simulation: "true" lets a Charge
+    # command fall back to the simulation's own charger (the frame origin) when
+    # the robot has no registered place graph. Set "false" if this deployment
+    # ever fronts real hardware — a real robot must never drive to an invented
+    # charger.
+    simulated: "true"
     robotClass: "standard"
     maxPayloadKg: "10"
     robotDescription: "A versatile humanoid robot for general tasks"

@@ -23,6 +23,17 @@ let robotStateManager: RobotStateManager;
 /** The frame origin — the only destination that needs no place graph. */
 const HOME_LOCATION: RobotLocation = { x: 0, y: 0, floor: '1', place: null };
 
+/**
+ * Where a simulated robot charges when its place graph names no charger: the
+ * frame origin, the one location that needs no graph. The simulation's battery
+ * logic and — on an agent explicitly configured as simulated, with no real
+ * locomotion engaged — the `charge` command share it (TASK-502). A real robot
+ * is never sent here: for it a made-up charger is a drive to nowhere.
+ */
+export function simulatedChargerLocation(): RobotLocation {
+  return { x: 0, y: 0, floor: '1', place: null };
+}
+
 export function setRobotStateManager(manager: RobotStateManager): void {
   robotStateManager = manager;
 }
