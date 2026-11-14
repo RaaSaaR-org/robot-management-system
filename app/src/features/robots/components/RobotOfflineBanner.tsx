@@ -3,7 +3,9 @@
  * @description One-line inline hint for an offline robot. Offline is a normal
  *              state, so it is calm and says what to do, not a red error.
  *              Given a `robotId` that a robot supervisor covers, it also shows
- *              the compact readiness panel with Start robot side (TASK-419).
+ *              the compact readiness panel with Start robot side (TASK-419),
+ *              on a wide screen in the same row as the message (TASK-507), so
+ *              the banner does not push the live model under the fold.
  * @feature robots
  */
 
@@ -33,7 +35,7 @@ export interface RobotOfflineBannerProps {
   className?: string;
 }
 
-/** "{name} is offline. Start its robot agent …" — or "Start the robot side below." */
+/** "{name} is offline. Start its robot agent …" — or "Start the robot side here." */
 export const RobotOfflineBanner = memo(function RobotOfflineBanner({
   robotName,
   lastSeen,
@@ -52,17 +54,21 @@ export const RobotOfflineBanner = memo(function RobotOfflineBanner({
     ? `${robotName} has not arrived yet, so there is nothing to connect.`
     : provisioning
       ? supervised
-        ? `${robotName} has not connected yet. Start the robot side below.`
+        ? `${robotName} has not connected yet. Start the robot side here.`
         : `${robotName} has not connected yet. It goes live when its robot agent registers with this server.`
       : supervised
-        ? `${robotName} is offline. Start the robot side below.`
+        ? `${robotName} is offline. Start the robot side here.`
         : `${robotName} is offline. Start its robot agent to see live telemetry and send commands.`;
   return (
     <Panel
       variant="inset"
       padding="sm"
       role="status"
-      className={cn('flex flex-col gap-3 text-sm text-ink-secondary', className)}
+      className={cn(
+        'flex flex-col gap-3 text-sm text-ink-secondary',
+        supervised && 'lg:flex-row lg:flex-wrap lg:items-center lg:gap-x-4 lg:gap-y-2',
+        className,
+      )}
     >
       <div className="flex items-start gap-3">
         <Icon className="mt-0.5 h-4 w-4 shrink-0 text-ink-tertiary" strokeWidth={1.75} aria-hidden="true" />
@@ -74,7 +80,7 @@ export const RobotOfflineBanner = memo(function RobotOfflineBanner({
           )}
         </p>
       </div>
-      {supervised && robotId && <RobotReadinessPanel robotId={robotId} variant="compact" readiness={ready} />}
+      {supervised && robotId && <RobotReadinessPanel robotId={robotId} variant="compact" inline readiness={ready} />}
     </Panel>
   );
 });

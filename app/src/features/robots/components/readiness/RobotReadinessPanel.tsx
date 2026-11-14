@@ -163,6 +163,12 @@ export interface RobotReadinessPanelProps {
   questApi?: QuestControlsApi;
   /** `line` only (TASK-417): the page's own next step while the robot side is ready. */
   pendingStep?: string | null;
+  /**
+   * `compact` only (TASK-507): on a wide screen the reason and the buttons sit
+   * in one row and the failing rows wrap below them, so an offline banner
+   * stays short. Narrow screens keep the column.
+   */
+  inline?: boolean;
   className?: string;
 }
 
@@ -629,6 +635,7 @@ function ReadinessBody({
   logsApi,
   limpWaitMs = LIMP_WAIT_MS,
   questApi,
+  inline = false,
   className,
 }: RobotReadinessPanelProps & { ready: UseRobotReadinessReturn }) {
   const { readiness, stale, readError } = ready;
@@ -653,13 +660,14 @@ function ReadinessBody({
   const shown = rows.filter((r) => (bringup || !r.bringup) && (!compact || isFailing(r)) && (!only || only.includes(r.id)));
   const buttons = rowsOnly ? null : ra.renderButtons({ compact });
 
+  const row = compact && inline;
   const body = (
-    <div className="flex flex-col gap-3">
+    <div className={cn('flex flex-col gap-3', row && 'lg:flex-row lg:flex-wrap lg:items-center lg:gap-x-3 lg:gap-y-2')}>
       <ReadinessReasonLine readiness={readiness} stale={stale} readError={readError} size={compact ? 'sm' : 'lg'} />
       {buttons}
-      {ra.errorNode}
+      {ra.errorNode && (row ? <div className="lg:basis-full">{ra.errorNode}</div> : ra.errorNode)}
       {shown.length > 0 && (
-        <ul className="flex flex-col gap-1.5" aria-label="Readiness checklist">
+        <ul className={cn('flex flex-col gap-1.5', row && 'lg:basis-full')} aria-label="Readiness checklist">
           {shown.map((row) => (
             <ReadinessRow
               key={row.id}

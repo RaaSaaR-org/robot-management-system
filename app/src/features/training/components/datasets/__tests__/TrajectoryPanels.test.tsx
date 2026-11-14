@@ -36,6 +36,14 @@ describe('JointChartPanel', () => {
     expect(within(screen.getByTestId('joint-chart-legend')).getByText('j1')).toBeInTheDocument();
   });
 
+  it('gives an unpaired legend four short lines, so seven joints fit beside the video (TASK-507)', () => {
+    render(<JointChartPanel frames={frames} jointNames={['left_elbow', 'left_wrist_yaw']} isLoading={false} currentTime={0} />);
+    const legend = screen.getByTestId('joint-chart-legend');
+    expect(legend).toHaveClass('lg:max-h-[3.875rem]', 'gap-y-0.5');
+    expect(legend).not.toHaveClass('lg:max-h-[3.75rem]');
+    for (const entry of within(legend).getAllByRole('button')) expect(entry).toHaveClass('leading-[14px]');
+  });
+
   describe('the playback cursor (TASK-484)', () => {
     const cursor = () => screen.getByTestId('joint-chart-cursor');
     const at = (t: number) =>
