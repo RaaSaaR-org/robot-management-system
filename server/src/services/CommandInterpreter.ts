@@ -178,7 +178,8 @@ const LOCATION_PATTERN = /(?:to|towards?|at)\s+(?:the\s+)?([a-zA-Z0-9\s]+?)(?:\s
  * low-confidence custom command — while the app's `targetlessAction` sends the
  * robot home anyway. The guards mirror that client heuristic: a question or a
  * negation never becomes motion, and neither does a status phrase ("check the
- * battery charge") or a phrase whose own "to <place>" names somewhere else.
+ * battery charge"), a manipulation phrase, or a phrase whose own "to <place>"
+ * names somewhere else.
  */
 export function homeOrChargeTarget(text: string): 'home' | 'charging station' | null {
   const lower = text.toLowerCase();
@@ -187,6 +188,9 @@ export function homeOrChargeTarget(text: string): 'home' | 'charging station' | 
     return null;
   }
   if (/\b(status|battery|position|check|report)\b/.test(lower)) return null;
+  // A manipulation phrase ("place the cup on the charging pad") stays what the
+  // fallback read it as before — the same substrings its manipulation branch tests.
+  if (/pick|grab|drop|place|hold|release/.test(lower)) return null;
   const explicit = text.match(LOCATION_PATTERN)?.[1];
   if (explicit && !/^(home|(re)?charg)/i.test(explicit.trim())) return null;
   if (/\b(re)?charg(e|ing)\b/.test(lower)) return 'charging station';

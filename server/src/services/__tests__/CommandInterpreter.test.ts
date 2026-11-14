@@ -231,6 +231,18 @@ describe('CommandInterpreter — fallback keyword interpretation (no API key)', 
     }
   );
 
+  // Review of TASK-505: a manipulation phrase naming the charger or home stays a
+  // manipulation, as before — never a drive the operator did not ask for.
+  it.each([
+    ['place the cup on the charging pad', 'cup on the charging pad'],
+    ['drop the box at home', 'box at home'],
+  ])('keeps "%s" a manipulation', async (text, object) => {
+    const result = await service.interpretCommand({ text, robotId: 'robot-1' });
+    expect(result.commandType).toBe('manipulation');
+    expect(result.parameters.target).toBeUndefined();
+    expect(result.parameters.objects).toEqual([object]);
+  });
+
   it('keeps an explicit other destination over a charge keyword', async () => {
     const result = await service.interpretCommand({
       text: 'go to the kitchen and charge',

@@ -3,7 +3,7 @@ id: "TASK-505"
 aliases: []
 title: "The command bar reads go home and charge as moves, a framework with open deadline requirements is not called compliant, the docs hide the browser-demo pages, and a model's version and notes can be corrected"
 slug: "the-command-bar-reads-go-home-and-charge-as-moves-a"
-status: "done"                # backlog | todo | in-progress | review | done | cancelled
+status: "review"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
@@ -53,8 +53,9 @@ It has no `home` / `charg` keyword: "go home" became `custom` at 0.6 with
 **Change:** a new exported `homeOrChargeTarget(text)` returns `'charging
 station'` for `(re)charge/charging` and `'home'` for `home`, with the same
 question / negation guard as `targetlessAction`, plus a leading question word,
-a status keyword (`status|battery|position|check|report`) or an explicit
-"to <other place>" returning null. The fallback treats a match as `navigation`
+a status keyword (`status|battery|position|check|report`), a manipulation
+keyword (`pick|grab|drop|place|hold|release`, so "place the cup on the charging
+pad" stays a manipulation) or an explicit "to <other place>" returning null. The fallback treats a match as `navigation`
 with that target (confidence 0.85, no suggestion). The Gemini system prompt
 gains the same rule so both paths agree.
 
