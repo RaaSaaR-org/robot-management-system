@@ -3,7 +3,7 @@ id: "TASK-508"
 aliases: []
 title: "The compliance bars show how much of each framework is met, the docs README leaves out the demo-only row, and a charging robot's battery follows on the server"
 slug: "the-compliance-bars-show-how-much-of-each-framework-is-met"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
