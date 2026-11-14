@@ -135,6 +135,10 @@ export function targetlessAction(
     return null;
   }
   const text = (interpretation.originalText ?? '').toLowerCase();
+  // A question or a negation ("don't return home", "how much charge is left?")
+  // names the place without asking for the drive — a keyword must never turn
+  // that into motion. It stays what it was: a command the robot refuses.
+  if (/\?|n't|\b(not|no|never|dont|cancel)\b/.test(text)) return null;
   if (/\b(re)?charg(e|ing)\b/.test(text)) return 'charge';
   if (/\bhome\b/.test(text)) return 'return_home';
   return null;

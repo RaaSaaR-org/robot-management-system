@@ -83,6 +83,16 @@ describe('targetlessAction (TASK-502)', () => {
     expect(targetlessAction(interpretation({ originalText: 'stop charging', commandType: 'emergency' }))).toBeNull();
   });
 
+  it.each([
+    ["don't return home", 'navigation'],
+    ['do not go home', 'custom'],
+    ['never charge', 'custom'],
+    ['how much charge is left?', 'custom'],
+    ['cancel the return home', 'navigation'],
+  ])('a negation or a question never becomes motion: "%s"', (originalText, commandType) => {
+    expect(targetlessAction(interpretation({ originalText, commandType }))).toBeNull();
+  });
+
   it('matches whole words only', () => {
     expect(targetlessAction(interpretation({ originalText: 'move to the homestead' }))).toBeNull();
     expect(targetlessAction(interpretation({ originalText: 'move forward' }))).toBeNull();
