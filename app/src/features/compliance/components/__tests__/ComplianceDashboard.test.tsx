@@ -80,6 +80,11 @@ describe('the framework list', () => {
     expect(nis2.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '80');
   });
 
+  it('does not draw an overdue framework as a green bar, even at a score of 80', () => {
+    expect(row('NIS2 Directive').getByRole('progressbar')).toHaveClass('bg-signal-stopped');
+    expect(row('EU AI Act').getByRole('progressbar')).toHaveClass('bg-signal-measured');
+  });
+
   it('says how many frameworks the overall score covers', () => {
     expect(screen.getByText('Across 2 of 3 frameworks · 1 not assessed')).toBeInTheDocument();
   });

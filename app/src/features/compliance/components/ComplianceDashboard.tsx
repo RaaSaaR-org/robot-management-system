@@ -151,7 +151,14 @@ export function ComplianceDashboard({ className }: ComplianceDashboardProps) {
                         </div>
                       </div>
                       <div className="col-span-2 row-start-2 sm:col-span-1 sm:row-start-auto">
-                        {assessed && <ProgressBar value={fw.score} size="sm" variant={scoreBar(fw.score)} />}
+                        {/* An overdue framework is never a green bar, whatever its score (TASK-503). */}
+                        {assessed && (
+                          <ProgressBar
+                            value={fw.score}
+                            size="sm"
+                            variant={fw.status === 'overdue' ? 'error' : scoreBar(fw.score)}
+                          />
+                        )}
                       </div>
                       <StatusTag tone={cfg?.tone ?? 'neutral'}>{cfg?.label ?? humanize(fw.status)}</StatusTag>
                     </li>

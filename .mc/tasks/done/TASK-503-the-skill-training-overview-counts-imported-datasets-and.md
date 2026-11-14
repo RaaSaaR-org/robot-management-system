@@ -107,7 +107,9 @@ than a year overdue, including frameworks with nothing tracked.
 **Change (app).** `ComplianceStatus` gains `not_assessed` ("Not assessed").
 `app/src/features/compliance/components/ComplianceDashboard.tsx` shows such a
 framework without a bar and with "Nothing tracked yet"; the score tile says how
-many frameworks it covers and shows "—" when none is assessed.
+many frameworks it covers and shows "—" when none is assessed. An overdue
+framework's bar is drawn in the error colour whatever its score (review: at 80
+it was a green bar beside a red "Overdue" tag).
 
 On the demo instance the two frameworks with an overdue deadline drop to 80 and
 read "Overdue"; frameworks without deadlines read "Not assessed".
