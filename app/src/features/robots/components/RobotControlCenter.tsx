@@ -3,7 +3,9 @@
  * @description Tabbed body of the robot detail page. The kit Tabs bar lives in the
  *              URL (?tab=, default overview), sits right under the PageHeader and
  *              every tab renders as a stack of Panels below it. The Overview tab
- *              adds the stat row; offline and error hints sit above the content.
+ *              adds the stat row under the live model, so the model sits in the
+ *              first screen at 1280x720 (TASK-504); offline and error hints sit
+ *              above the content.
  * @feature robots
  */
 
@@ -133,7 +135,9 @@ export const RobotControlCenter = memo(function RobotControlCenter({
         tabs={visibleTabs.map(({ id, label }) => ({
           id,
           label,
-          count: id === 'activity' ? tasks.length : undefined,
+          // Tasks plus command history — both lists the tab shows. No badge at
+          // zero: a grey 0 beside a tab that lists rows reads as a contradiction.
+          count: id === 'activity' ? (tasks.length + commandHistory.length) || undefined : undefined,
         }))}
         activeTab={tab}
         onTabChange={setTab}
@@ -148,14 +152,6 @@ export const RobotControlCenter = memo(function RobotControlCenter({
         />
       )}
 
-      {tab === 'overview' && (
-        <RobotQuickStats
-          robot={robot}
-          telemetry={telemetry}
-          isTelemetryConnected={isTelemetryConnected}
-        />
-      )}
-
       <RobotErrorBanner robot={robot} telemetry={telemetry} />
 
       {tab === 'overview' && (
@@ -167,6 +163,15 @@ export const RobotControlCenter = memo(function RobotControlCenter({
           canExecuteCommands={canExecuteCommands}
           onSendToCharge={onSendToCharge}
           onReturnHome={onReturnHome}
+        />
+      )}
+      {/* Below the live model, not above it: four tiles of "—" on an offline
+          robot would otherwise push the model under the fold (TASK-504). */}
+      {tab === 'overview' && (
+        <RobotQuickStats
+          robot={robot}
+          telemetry={telemetry}
+          isTelemetryConnected={isTelemetryConnected}
         />
       )}
       {tab === 'telemetry' && (

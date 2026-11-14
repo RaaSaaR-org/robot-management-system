@@ -12,6 +12,7 @@ import { cn } from '@/shared/utils/cn';
 import { Badge, Button, Input, StatusTag, confirm, errorMessage, toast, type Tone } from '@/shared/components/ui';
 import { EmergencyStopButton } from '../EmergencyStopButton';
 import { robotsApi } from '../../api/robotsApi';
+import { commandRefusalTitle } from '../../utils/commandRefusal';
 import { useCommand } from '@/features/command/hooks';
 import type { CommandType } from '../../types/robots.types';
 import type { SafetyClassification } from '@/features/command/types';
@@ -97,7 +98,9 @@ export const CockpitCommandDock = memo(function CockpitCommandDock({
         await robotsApi.sendCommand(robotId, { type: act.type, priority: act.type === 'stop' ? 'high' : 'normal' });
         toast.success(act.done, { description: robotName });
       } catch (err) {
-        toast.error(act.failed, { description: errorMessage(err) });
+        const refused = commandRefusalTitle(robotName, err);
+        if (refused) toast.error(refused);
+        else toast.error(act.failed, { description: errorMessage(err) });
       } finally {
         setPending(null);
       }
@@ -125,7 +128,9 @@ export const CockpitCommandDock = memo(function CockpitCommandDock({
       await executeCommand(robotId);
       toast.success('Command sent', { description: robotName });
     } catch (err) {
-      toast.error("Couldn't send the command", { description: errorMessage(err) });
+      const refused = commandRefusalTitle(robotName, err);
+      if (refused) toast.error(refused);
+      else toast.error("Couldn't send the command", { description: errorMessage(err) });
     }
   }, [interpretation, robotName, currentText, executeCommand, robotId]);
 

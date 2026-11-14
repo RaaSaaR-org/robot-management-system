@@ -14,9 +14,12 @@ import * as THREE from 'three';
 // ============================================================================
 
 /**
- * How long a model may stay hidden waiting for its meshes. A hung mesh request
- * must not keep the viewer on the placeholder for good: after this the model
- * is revealed with whatever has loaded, and late meshes still appear.
+ * How long a model may stay hidden with no file arriving. It is a stall
+ * timeout, re-armed on every started or finished file (TASK-504): a load that
+ * keeps progressing — a slow link, a cold cache — is never revealed half-built,
+ * but a hung mesh request must not keep the viewer on the placeholder for good:
+ * once nothing has moved for this long the model is revealed with whatever has
+ * loaded, and late meshes still appear.
  */
 export const MODEL_REVEAL_TIMEOUT_MS = 20_000;
 
@@ -24,8 +27,8 @@ export const MODEL_REVEAL_TIMEOUT_MS = 20_000;
  * Where a model's load stands.
  * - `loading`: meshes are still arriving; the model is hidden.
  * - `ready`: every item the loader started has ended; the model is shown.
- * - `timeout`: {@link MODEL_REVEAL_TIMEOUT_MS} passed first; the model is shown
- *   with whatever has loaded.
+ * - `timeout`: no file started or finished for {@link MODEL_REVEAL_TIMEOUT_MS};
+ *   the model is shown with whatever has loaded.
  * - `cancelled`: this load was abandoned (unmount, another robot type).
  */
 export interface ModelLoadState {
@@ -58,7 +61,8 @@ export function modelLoadLabel(state: ModelLoadState | null): string | null {
  * progress. `onState` is called at once with `loading`, on every started or
  * finished file, and exactly once with the settling phase: `ready` when the
  * manager reports everything loaded (a failed mesh still ends, so it settles
- * too), or `timeout` when that takes longer than `timeoutMs`.
+ * too), or `timeout` when no file starts or finishes for `timeoutMs` — the
+ * timer is re-armed on every progress event, so only a stalled load times out.
  *
  * @returns dispose — stops the timer, detaches from the manager and reports
  *   `cancelled` unless the load had already settled.
@@ -72,6 +76,7 @@ export function watchModelLoad(
   let total = 0;
   let settled = false;
   let disposed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
   const emit = (phase: ModelLoadState['phase']) => onState({ phase, loaded, total });
   const settle = (phase: 'ready' | 'timeout') => {
@@ -83,13 +88,17 @@ export function watchModelLoad(
   const progress = (_url: string, itemsLoaded: number, itemsTotal: number) => {
     loaded = itemsLoaded;
     total = itemsTotal;
-    if (!settled && !disposed) emit('loading');
+    if (settled || disposed) return;
+    // Progress resets the stall clock: the load is still moving.
+    clearTimeout(timer);
+    timer = setTimeout(() => settle('timeout'), timeoutMs);
+    emit('loading');
   };
 
   manager.onStart = progress;
   manager.onProgress = progress;
   manager.onLoad = () => settle('ready');
-  const timer = setTimeout(() => settle('timeout'), timeoutMs);
+  timer = setTimeout(() => settle('timeout'), timeoutMs);
   emit('loading');
 
   return () => {

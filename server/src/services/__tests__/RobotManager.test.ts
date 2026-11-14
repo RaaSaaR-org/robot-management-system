@@ -64,7 +64,13 @@ vi.mock('../../repositories/index.js', () => ({
   },
 }));
 
-import { RobotManager, ROBOT_ALREADY_REGISTERED_MESSAGE } from '../RobotManager.js';
+import {
+  RobotManager,
+  ROBOT_ALREADY_REGISTERED_MESSAGE,
+  COMMAND_STATUS_FIRST_READ_MS,
+  COMMAND_STATUS_READ_INTERVAL_MS,
+  COMMAND_STATUS_MAX_READS,
+} from '../RobotManager.js';
 import { ConflictError } from '../../utils/errors.js';
 import { RobotStatusSchema } from '../../database/schemas.js';
 import type {
@@ -514,6 +520,15 @@ describe('getConnectedAgents', () => {
 // ===========================================================================
 
 describe('sendCommand', () => {
+  // An accepted command schedules status re-reads (TASK-504); keep them on a
+  // fake clock so none fires into another test.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('throws when the robot is not found', async () => {
     const mgr = new RobotManager();
     robotRepository.getRegisteredRobot.mockResolvedValue(null);
@@ -583,6 +598,116 @@ describe('sendCommand', () => {
     await expect(mgr.sendCommand('r1', { type: 'stop' })).rejects.toThrow(
       'Failed to send command: boom'
     );
+  });
+});
+
+// ===========================================================================
+// sendCommand — status follow-up (TASK-504)
+// ===========================================================================
+
+describe('sendCommand status follow-up (TASK-504)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    robotRepository.updateHealthCheck.mockResolvedValue(true as never);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function setup(statuses: string[]) {
+    const mgr = new RobotManager();
+    const registered = makeRegistered();
+    registered.robot.status = 'online';
+    robotRepository.getRegisteredRobot.mockResolvedValue(registered);
+    httpPost.mockResolvedValue({ id: 'cmd1', robotId: 'r1', status: 'completed' });
+    let i = 0;
+    httpGet.mockImplementation(async () => ({
+      status: 'healthy',
+      robotStatus: statuses[Math.min(i++, statuses.length - 1)],
+      batteryLevel: 90,
+    }));
+    const seen: string[] = [];
+    mgr.onRobotEvent((e) => {
+      if (e.type === 'robot_status_changed') seen.push((e as { robot: Robot }).robot.status);
+    });
+    return { mgr, registered, seen };
+  }
+
+  it('mirrors busy, then charging, then online within seconds of a charge — not on the 30 s check', async () => {
+    const h = await setup(['busy', 'busy', 'charging', 'charging', 'online']);
+
+    const result = await h.mgr.sendCommand('r1', { type: 'charge' });
+    // The response does not wait for any of it.
+    expect(result).toMatchObject({ status: 'completed' });
+    expect(httpGet).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_FIRST_READ_MS);
+    expect(httpGet).toHaveBeenCalledWith('/api/v1/health');
+    expect(h.registered.robot.status).toBe('busy');
+
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_READ_INTERVAL_MS * 2);
+    expect(h.registered.robot.status).toBe('charging');
+
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_READ_INTERVAL_MS * 2);
+    expect(h.registered.robot.status).toBe('online');
+    expect(h.seen).toEqual(['busy', 'charging', 'online']);
+    expect(robotRepository.updateHealthCheck).toHaveBeenCalledWith('r1', true, 'charging');
+
+    // Settled: no more reads.
+    const reads = httpGet.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_READ_INTERVAL_MS * 10);
+    expect(httpGet).toHaveBeenCalledTimes(reads);
+  });
+
+  it('stops after the cap while the robot stays busy', async () => {
+    const h = await setup(['busy']);
+    await h.mgr.sendCommand('r1', { type: 'move' });
+    await vi.advanceTimersByTimeAsync(
+      COMMAND_STATUS_FIRST_READ_MS + COMMAND_STATUS_READ_INTERVAL_MS * (COMMAND_STATUS_MAX_READS + 10)
+    );
+    expect(httpGet).toHaveBeenCalledTimes(COMMAND_STATUS_MAX_READS);
+  });
+
+  it('does not follow a command the robot refused', async () => {
+    const h = await setup(['busy']);
+    httpPost.mockResolvedValue({ id: 'cmd1', robotId: 'r1', status: 'failed', errorMessage: 'No destination provided' });
+    await h.mgr.sendCommand('r1', { type: 'move' });
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_FIRST_READ_MS * 10);
+    expect(httpGet).not.toHaveBeenCalled();
+  });
+
+  it('leaves error and protective stop to the health check, which alerts on them', async () => {
+    const h = await setup(['protective_stop']);
+    await h.mgr.sendCommand('r1', { type: 'move' });
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_FIRST_READ_MS + COMMAND_STATUS_READ_INTERVAL_MS * 5);
+    expect(httpGet).toHaveBeenCalledTimes(1);
+    expect(h.registered.robot.status).toBe('online');
+    expect(h.seen).toEqual([]);
+  });
+
+  it('ends quietly when a read fails', async () => {
+    const h = await setup(['busy']);
+    httpGet.mockRejectedValue(new Error('ECONNREFUSED'));
+    await h.mgr.sendCommand('r1', { type: 'charge' });
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_FIRST_READ_MS + COMMAND_STATUS_READ_INTERVAL_MS * 5);
+    expect(httpGet).toHaveBeenCalledTimes(1);
+    expect(h.registered.robot.status).toBe('online');
+  });
+
+  it('a newer command restarts the schedule instead of stacking a second one', async () => {
+    const h = await setup(['busy']);
+    await h.mgr.sendCommand('r1', { type: 'charge' });
+    await h.mgr.sendCommand('r1', { type: 'return_home' });
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_FIRST_READ_MS);
+    expect(httpGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('stopHealthChecks cancels a pending read', async () => {
+    const h = await setup(['busy']);
+    await h.mgr.sendCommand('r1', { type: 'charge' });
+    h.mgr.stopHealthChecks();
+    await vi.advanceTimersByTimeAsync(COMMAND_STATUS_FIRST_READ_MS * 10);
+    expect(httpGet).not.toHaveBeenCalled();
   });
 });
 

@@ -554,7 +554,7 @@ export const COMMAND_TYPE_LABELS: Record<CommandType, string> = {
   stop: 'Stop',
   pickup: 'Pick Up',
   drop: 'Drop',
-  charge: 'Go Charge',
+  charge: 'Charge',
   return_home: 'Return Home',
   emergency_stop: 'Emergency Stop',
   custom: 'Custom Command',

@@ -9,7 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import type { Robot, RobotTelemetry } from '../../types/robots.types';
+import type { Robot, RobotCommand, RobotTelemetry } from '../../types/robots.types';
 import type { RobotControlCenterProps } from '../RobotControlCenter';
 
 // Stub each tab so we can assert which view is mounted without their deps.
@@ -100,6 +100,32 @@ describe('RobotControlCenter', () => {
     expect(screen.getByTestId('tab-overview')).toBeInTheDocument();
     expect(screen.getByTestId('quick-stats')).toBeInTheDocument();
     expect(screen.queryByTestId('tab-telemetry')).not.toBeInTheDocument();
+  });
+
+  it('puts the stat row under the live model, not above it (TASK-504)', () => {
+    renderAt(makeProps());
+    const overview = screen.getByTestId('tab-overview');
+    const stats = screen.getByTestId('quick-stats');
+    expect(overview.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('counts tasks plus command history on the Activity tab (TASK-504)', () => {
+    const command: RobotCommand = {
+      id: 'c1',
+      robotId: 'robot-1',
+      type: 'charge',
+      payload: {},
+      status: 'completed',
+      priority: 'normal',
+      createdAt: '2026-06-22T00:00:00.000Z',
+    };
+    renderAt(makeProps({ commandHistory: [command, { ...command, id: 'c2' }] }));
+    expect(screen.getByRole('tab', { name: /activity/i })).toHaveTextContent(/^Activity\s*2$/);
+  });
+
+  it('shows no Activity badge when there is nothing to list (TASK-504)', () => {
+    renderAt(makeProps({ commandHistory: [], tasks: [] }));
+    expect(screen.getByRole('tab', { name: /activity/i })).toHaveTextContent(/^Activity$/);
   });
 
   it('switches the active view when a tab is selected and writes ?tab=', async () => {

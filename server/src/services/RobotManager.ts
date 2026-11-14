@@ -559,6 +559,22 @@ function rethrowRobotCallError(prefix: string, error: unknown): never {
 }
 
 /**
+ * After a command the robot accepted, its status is re-read on this cadence
+ * until it settles (TASK-504): the first read after
+ * {@link COMMAND_STATUS_FIRST_READ_MS}, then every
+ * {@link COMMAND_STATUS_READ_INTERVAL_MS} while the robot reports `busy` or
+ * `charging`, at most {@link COMMAND_STATUS_MAX_READS} times. Without it the
+ * fleet saw a command's effect only on the 30 s health check — a short charge
+ * was never shown, or a finished one stayed CHARGING (controls locked) for up
+ * to 30 s. Past the cap the health check carries on as before.
+ */
+export const COMMAND_STATUS_FIRST_READ_MS = 1_000;
+export const COMMAND_STATUS_READ_INTERVAL_MS = 2_000;
+export const COMMAND_STATUS_MAX_READS = 30;
+/** The statuses a post-command read mirrors — see {@link COMMAND_STATUS_FIRST_READ_MS}. */
+const COMMAND_FOLLOWED_STATUSES: ReadonlySet<RobotStatus> = new Set<RobotStatus>(['online', 'busy', 'charging']);
+
+/**
  * RobotManager - manages robot registry and A2A connections with database persistence
  */
 export class RobotManager {
@@ -566,6 +582,8 @@ export class RobotManager {
   private robotCache: Map<string, RegisteredRobot> = new Map();
   private eventCallbacks: Set<RobotEventCallback> = new Set();
   private healthCheckInterval: NodeJS.Timeout | null = null;
+  /** The pending status re-read per robot after a command (TASK-504). */
+  private commandStatusReads: Map<string, NodeJS.Timeout> = new Map();
 
   // ============================================================================
   // INITIALIZATION
@@ -1090,7 +1108,62 @@ export class RobotManager {
       rethrowRobotCallError('Failed to send command', error);
     }
     if (!registered.isConnected) await this.noteRobotAnswered(registered);
+    // Fire and forget: the response does not wait for the status to settle.
+    if (result?.status !== 'failed') this.followCommandStatus(registered);
     return result;
+  }
+
+  /**
+   * Re-read a robot's status after a command it accepted, until it is no longer
+   * `busy` or `charging` (TASK-504) — see {@link COMMAND_STATUS_READ_INTERVAL_MS}.
+   * A newer command restarts the schedule; a failed read, an unregistered robot
+   * or the cap ends it, and the 30 s health check stays the fallback. It only
+   * mirrors what the robot reports: it sends the robot nothing.
+   */
+  private followCommandStatus(registered: RegisteredRobot): void {
+    const robotId = registered.robot.id;
+    const pending = this.commandStatusReads.get(robotId);
+    if (pending) clearTimeout(pending);
+
+    let reads = 0;
+    const schedule = (delayMs: number) => {
+      const timer = setTimeout(() => void read(timer), delayMs);
+      timer.unref?.();
+      this.commandStatusReads.set(robotId, timer);
+    };
+    const read = async (timer: NodeJS.Timeout) => {
+      reads += 1;
+      let status: RobotStatus | undefined;
+      try {
+        if (this.robotCache.get(robotId) !== registered) throw new Error('robot no longer registered');
+        const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.SHORT);
+        const health = await httpClient.get<{ robotStatus?: RobotStatus }>('/api/v1/health');
+        status = health?.robotStatus;
+        // Only the everyday states are mirrored here. A move into or out of
+        // error / protective stop / offline is the health check's: it raises
+        // and resolves the alerts for it, and would see no change to alert on
+        // if this read had already written it.
+        if (
+          status &&
+          COMMAND_FOLLOWED_STATUSES.has(status) &&
+          COMMAND_FOLLOWED_STATUSES.has(registered.robot.status)
+        ) {
+          await this.noteRobotAnswered(registered, status);
+        } else {
+          status = undefined;
+        }
+      } catch {
+        status = undefined;
+      }
+      // A newer command took over this robot's schedule.
+      if (this.commandStatusReads.get(robotId) !== timer) return;
+      if ((status === 'busy' || status === 'charging') && reads < COMMAND_STATUS_MAX_READS) {
+        schedule(COMMAND_STATUS_READ_INTERVAL_MS);
+      } else {
+        this.commandStatusReads.delete(robotId);
+      }
+    };
+    schedule(COMMAND_STATUS_FIRST_READ_MS);
   }
 
   /**
@@ -1181,6 +1254,8 @@ export class RobotManager {
    * Stop health checks
    */
   stopHealthChecks(): void {
+    for (const timer of this.commandStatusReads.values()) clearTimeout(timer);
+    this.commandStatusReads.clear();
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
