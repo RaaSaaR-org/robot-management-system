@@ -51,7 +51,9 @@ export type ComplianceStatus =
   | 'at_risk'
   | 'overdue'
   | 'not_started'
-  | 'not_applicable';
+  | 'not_applicable'
+  // A framework with no gap and no deadline tracked: no score to show (TASK-503).
+  | 'not_assessed';
 
 /**
  * Status labels and kit tones (rendered through StatusTag)
@@ -66,6 +68,7 @@ export const ComplianceStatusConfig: Record<
   overdue: { label: 'Overdue', tone: 'danger' },
   not_started: { label: 'Not started', tone: 'neutral' },
   not_applicable: { label: 'N/A', tone: 'neutral' },
+  not_assessed: { label: 'Not assessed', tone: 'neutral' },
 };
 
 // Alias for backwards compatibility

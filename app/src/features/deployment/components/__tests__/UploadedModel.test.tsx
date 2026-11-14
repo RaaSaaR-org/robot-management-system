@@ -155,6 +155,19 @@ describe('the details of an uploaded model', () => {
     await screen.findByRole('list', { name: 'Stored files' });
   });
 
+  it('lays facts and metrics out side by side in a wide dialog, files beside the facts (TASK-503)', async () => {
+    details(g11());
+
+    const columns = await screen.findByTestId('model-details-columns');
+    expect(columns).toHaveClass('lg:grid-cols-2');
+    expect(columns.children).toHaveLength(2);
+    const [facts, results] = Array.from(columns.children) as HTMLElement[];
+    expect(within(facts).getByText('Base model')).toBeInTheDocument();
+    expect(within(results).getByText('Metrics')).toBeInTheDocument();
+    expect(within(facts).queryByText('Metrics')).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toHaveClass('max-w-4xl');
+  });
+
   it('links to the dataset it was trained on', async () => {
     details(g11());
     const link = await screen.findByRole('link', { name: 'NVIDIA AppleToPlate' });
