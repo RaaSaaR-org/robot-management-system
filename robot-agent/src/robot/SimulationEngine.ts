@@ -115,8 +115,8 @@ export class SimulationEngine {
   /**
    * The charger the battery logic drives to: the nearest `charging` place of
    * the robot's registered place graph (TASK-329), read live because the graph
-   * arrives after `start()`. A robot with no such place charges at home, the
-   * frame origin — the one location that needs no graph.
+   * arrives after `start()`. A robot with no such place charges at
+   * {@link simulatedChargerLocation}, a fixed point a few metres from home.
    */
   private get chargingStation(): RobotLocation | null {
     return chargingStationLocation() ?? simulatedChargerLocation();

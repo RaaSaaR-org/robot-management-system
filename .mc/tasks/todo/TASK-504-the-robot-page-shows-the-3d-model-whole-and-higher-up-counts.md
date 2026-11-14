@@ -3,7 +3,7 @@ id: "TASK-504"
 aliases: []
 title: "The robot page shows the 3D model whole and higher up, counts and explains its commands, and a simulated robot drives to charge and home"
 slug: "the-robot-page-shows-the-3d-model-whole-and-higher-up-counts"
-status: "done"                # backlog | todo | in-progress | review | done | cancelled
+status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
@@ -69,7 +69,9 @@ simulated robot. The demo is on 2026-11-16. Each fix is the smallest safe change
   than 1 m from home on both axes (1 m is the arrival radius). It is used only when
   no registered place graph names a charger. The `charge` command still uses it only
   on an agent configured as simulated with no real locomotion (TASK-502 gate,
-  unchanged), so real robots are still refused.
+  unchanged), so real robots are still refused. The comment in
+  `robot-agent/src/robot/SimulationEngine.ts` and the `SIMULATED_ROBOT` row in
+  `docs/deployment.md` no longer call it the frame origin.
 
 ### Server
 
@@ -121,3 +123,8 @@ in the first screen at 1280x720. The loading label sits in its centre, at y≈59
 before, it sat at the canvas bottom at y≈925. For an offline robot at 1280x720 only
 the top of the canvas shows: the offline banner (about 170 px) still sits above the
 model. At 1440x900 the whole model is in view.
+
+After a simulated Charge the robot sits at the charger in `charging` until the
+battery is full (0.5 %/s), and Charge/Home stay disabled until then, as for any
+charging robot. The server now shows that within about 2 s; the follow-up stops
+after about 61 s and the 30 s health check carries on from there.
