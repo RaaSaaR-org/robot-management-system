@@ -3,7 +3,7 @@ id: "TASK-504"
 aliases: []
 title: "The robot page shows the 3D model whole and higher up, counts and explains its commands, and a simulated robot drives to charge and home"
 slug: "the-robot-page-shows-the-3d-model-whole-and-higher-up-counts"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
