@@ -165,11 +165,17 @@ modelsRoutes.post('/versions', async (req: Request, res: Response) => {
   }
 });
 
+/** Longest `notes` a PATCH accepts — the same limit a model upload has. */
+const MAX_NOTES_LENGTH = 4000;
+/** Longest `version` a PATCH accepts — the same limit a model upload has. */
+const MAX_VERSION_LENGTH = 100;
+
 /**
  * PATCH /api/models/versions/:id
- * Amend a registered model: link it to a skill, rename it, or move it along the
- * deployment ladder. An explicit `null` clears `skillId` / `name`; an absent key
- * leaves the column untouched.
+ * Amend a registered model: link it to a skill, rename it, correct its
+ * `version` or `notes` (TASK-505), or move it along the deployment ladder. An
+ * explicit `null` clears `skillId` / `name` / `notes`; an absent key leaves the
+ * column untouched. `version` cannot be cleared.
  */
 modelsRoutes.patch('/versions/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -180,6 +186,26 @@ modelsRoutes.patch('/versions/:id', async (req: Request, res: Response) => {
   }
   if ('name' in body && !isNullableString(body.name)) {
     return res.status(400).json({ error: 'name must be a string or null' });
+  }
+  if (
+    'notes' in body &&
+    !(body.notes === null || (typeof body.notes === 'string' && body.notes.length <= MAX_NOTES_LENGTH))
+  ) {
+    return res
+      .status(400)
+      .json({ error: `notes must be a string of at most ${MAX_NOTES_LENGTH} characters, or null` });
+  }
+  if (
+    'version' in body &&
+    !(
+      typeof body.version === 'string' &&
+      body.version.trim().length > 0 &&
+      body.version.trim().length <= MAX_VERSION_LENGTH
+    )
+  ) {
+    return res
+      .status(400)
+      .json({ error: `version must be a string of 1 to ${MAX_VERSION_LENGTH} characters` });
   }
   if (
     'deploymentStatus' in body &&
@@ -193,6 +219,9 @@ modelsRoutes.patch('/versions/:id', async (req: Request, res: Response) => {
   const input: UpdateModelVersionInput = {};
   if ('skillId' in body) input.skillId = body.skillId as string | null;
   if ('name' in body) input.name = body.name as string | null;
+  if ('version' in body) input.version = (body.version as string).trim();
+  // Blank notes are no notes, as on upload.
+  if ('notes' in body) input.notes = body.notes === null ? null : (body.notes as string).trim() || null;
   if ('deploymentStatus' in body) {
     input.deploymentStatus = body.deploymentStatus as ModelDeploymentStatus;
   }
@@ -221,7 +250,9 @@ modelsRoutes.patch('/versions/:id', async (req: Request, res: Response) => {
 
     const modelVersion = await modelRegistryService.update(id, input);
     if (!modelVersion) {
-      return res.status(400).json({ error: 'Update rejected — check skillId' });
+      return res.status(400).json({
+        error: 'Update rejected — check skillId, and that no other model of that skill has this version',
+      });
     }
 
     res.json({ modelVersion });

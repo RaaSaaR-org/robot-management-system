@@ -65,6 +65,13 @@ vi.mock('../services/buildAudit.js', () => ({ auditBuildAct: mockAudit }));
 vi.mock('../database/index.js', () => ({
   prisma: {
     modelVersion: {
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const row = prismaDouble.modelVersions.get(where.id);
+        if (!row) throw new Error('Record to update not found');
+        const updated = { ...row, ...data };
+        prismaDouble.modelVersions.set(where.id, updated);
+        return updated;
+      }),
       findUnique: vi.fn(
         async ({
           where,
@@ -352,6 +359,59 @@ describe('PATCH /api/models/versions/:id', () => {
     expect(mockSkillDefinitionRepository.update).not.toHaveBeenCalled();
   });
 
+  // TASK-505: version and notes can be corrected after registration.
+  it('sets version and notes, trimmed', async () => {
+    const res = await request(createApp())
+      .patch('/api/models/versions/mv-1')
+      .send({ version: ' 1.0.0 ', notes: '  5000 steps, lr 1e-4 ' });
+
+    expect(res.status).toBe(200);
+    expect(mockModelVersionRepository.update).toHaveBeenCalledWith('mv-1', {
+      version: '1.0.0',
+      notes: '5000 steps, lr 1e-4',
+    });
+  });
+
+  it('clears notes on null or blank', async () => {
+    await request(createApp()).patch('/api/models/versions/mv-1').send({ notes: null });
+    await request(createApp()).patch('/api/models/versions/mv-1').send({ notes: '   ' });
+
+    expect(mockModelVersionRepository.update).toHaveBeenNthCalledWith(1, 'mv-1', { notes: null });
+    expect(mockModelVersionRepository.update).toHaveBeenNthCalledWith(2, 'mv-1', { notes: null });
+  });
+
+  it.each([
+    ['a version that is not text', { version: 5 }, /version must be a string/],
+    ['a null version', { version: null }, /version must be a string/],
+    ['a blank version', { version: '   ' }, /version must be a string/],
+    ['a version over 100 characters', { version: 'v'.repeat(101) }, /version must be a string/],
+    ['notes that are not text', { notes: 5 }, /notes must be a string/],
+    ['notes over 4000 characters', { notes: 'n'.repeat(4001) }, /notes must be a string/],
+  ])('refuses %s with a 400', async (_label, body, error) => {
+    const res = await request(createApp()).patch('/api/models/versions/mv-1').send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(error);
+    expect(mockModelVersionRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('accepts a version of exactly 100 characters and notes of exactly 4000', async () => {
+    const res = await request(createApp())
+      .patch('/api/models/versions/mv-1')
+      .send({ version: 'v'.repeat(100), notes: 'n'.repeat(4000) });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('answers 400 when the write is rejected, e.g. a version another model of the skill has', async () => {
+    mockModelVersionRepository.update.mockResolvedValue(null);
+
+    const res = await request(createApp()).patch('/api/models/versions/mv-1').send({ version: 'taken' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/version/);
+  });
+
   it('404s for a model that does not exist', async () => {
     mockModelVersionRepository.findById.mockResolvedValue(null);
 
@@ -617,5 +677,27 @@ describe('ModelVersionRepository.getLineage (cycle guard)', () => {
 
   it('returns null for a model that does not exist', async () => {
     expect(await repository.getLineage('ghost')).toBeNull();
+  });
+});
+
+describe('ModelVersionRepository.update (TASK-505: version and notes)', () => {
+  const repository = new ModelVersionRepository();
+
+  beforeEach(() => {
+    prismaDouble.modelVersions.clear();
+    prismaDouble.modelVersions.set('mv-1', { ...MODEL_ROW, notes: 'old notes' });
+  });
+
+  it('writes version and notes, leaving other columns untouched', async () => {
+    const updated = await repository.update('mv-1', { version: '2.0.0', notes: 'retrained' });
+
+    expect(updated?.version).toBe('2.0.0');
+    expect(updated?.notes).toBe('retrained');
+    expect(updated?.name).toBe(MODEL_ROW.name);
+  });
+
+  it('clears notes with null, and leaves them alone when absent', async () => {
+    expect((await repository.update('mv-1', { name: 'renamed' }))?.notes).toBe('old notes');
+    expect((await repository.update('mv-1', { notes: null }))?.notes).toBeNull();
   });
 });

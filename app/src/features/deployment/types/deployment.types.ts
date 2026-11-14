@@ -365,6 +365,10 @@ export interface UpdateModelVersionInput {
   skillId?: string | null;
   deploymentStatus?: ModelDeploymentStatus;
   name?: string | null;
+  /** 1–100 characters, unique per skill (TASK-505) */
+  version?: string;
+  /** At most 4000 characters; null clears them (TASK-505) */
+  notes?: string | null;
 }
 
 // ============================================================================

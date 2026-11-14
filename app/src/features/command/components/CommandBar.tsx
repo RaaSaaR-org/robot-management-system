@@ -24,7 +24,8 @@ export interface CommandBarProps {
   className?: string;
 }
 
-const EXAMPLES = ['Go to DOCK-1', 'Go to the charging station', 'Return home'];
+// Only phrases that succeed on a robot without a site or places (TASK-505).
+const EXAMPLES = ['Go to the charging station', 'Return home'];
 
 /**
  * Natural language command bar: text → VLA interpretation → preview → confirm → execute.

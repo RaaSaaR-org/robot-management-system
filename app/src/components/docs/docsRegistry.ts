@@ -120,6 +120,25 @@ const CATEGORY_ORDER = [
 ];
 
 // ---------------------------------------------------------------------------
+// Visibility
+// ---------------------------------------------------------------------------
+
+/**
+ * Pages written for the browser-mock demo build (simulated API, MSW fixtures)
+ * and the task / decision records. On a real instance they read as stale or
+ * internal, so the nav leaves them out there (TASK-505); a link into one still
+ * opens it.
+ */
+export function isDemoBuildOnlyDoc(slug: string): boolean {
+  return (
+    slug === 'demo-day' ||
+    slug === 'demo-intro' ||
+    slug.startsWith('records/') ||
+    slug.startsWith('adr/')
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Build the registry
 // ---------------------------------------------------------------------------
 
@@ -130,16 +149,18 @@ function buildDocEntries(): {
 } {
   const entries: DocEntry[] = [];
   const contentMap = new Map<string, string>();
+  const isDemo = import.meta.env.VITE_DEMO_MODE === 'true';
 
   for (const [key, content] of Object.entries(docsRaw)) {
     const slug = slugFromKey(key);
+    // Always loaded, so a link into the page still lands; listed only in the demo build.
+    contentMap.set(slug, content);
+    if (!isDemo && isDemoBuildOnlyDoc(slug)) continue;
     const category = categoryFromSlug(slug);
     entries.push({ slug, title: titleFromSlug(slug), category });
-    contentMap.set(slug, content);
   }
 
   // Sort: demo-intro first (in demo mode), then README, then alphabetical
-  const isDemo = import.meta.env.VITE_DEMO_MODE === 'true';
   entries.sort((a, b) => {
     const aIsDemoIntro = a.slug === 'demo-intro';
     const bIsDemoIntro = b.slug === 'demo-intro';

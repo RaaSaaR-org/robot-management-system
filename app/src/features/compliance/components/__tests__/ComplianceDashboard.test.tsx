@@ -2,7 +2,8 @@
  * @file ComplianceDashboard.test.tsx
  * @description TASK-503: a framework with nothing tracked reads "Not assessed"
  *              with no score bar, an overdue one reads "Overdue", and the
- *              overall score says how many frameworks it covers.
+ *              overall score says how many frameworks it covers. TASK-505: a
+ *              framework with a deadline still open is not shown as compliant.
  * @feature compliance
  */
 
@@ -87,6 +88,29 @@ describe('the framework list', () => {
 
   it('says how many frameworks the overall score covers', () => {
     expect(screen.getByText('Across 2 of 3 frameworks · 1 not assessed')).toBeInTheDocument();
+  });
+});
+
+describe('a framework with a deadline still open (TASK-505)', () => {
+  beforeEach(() =>
+    show(100, [
+      { framework: 'ai_act', score: 100, status: 'in_progress', openItems: 1, totalItems: 1 },
+      { framework: 'machinery_regulation', score: 100, status: 'at_risk', openItems: 1, totalItems: 1 },
+    ]),
+  );
+
+  it('reads "In progress", not "Compliant", while a deadline ahead has requirements open', () => {
+    const aiAct = row('EU AI Act');
+
+    expect(aiAct.getByText('In progress')).toBeInTheDocument();
+    expect(aiAct.queryByText('Compliant')).not.toBeInTheDocument();
+    expect(aiAct.getByText('1 open of 1')).toBeInTheDocument();
+  });
+
+  it('draws an at-risk framework amber, even at a score of 100', () => {
+    const machinery = within(screen.getByText('At risk').closest('li')!);
+
+    expect(machinery.getByRole('progressbar')).toHaveClass('bg-signal-unknown');
   });
 });
 

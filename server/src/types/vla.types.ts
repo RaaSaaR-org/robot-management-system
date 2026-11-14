@@ -751,6 +751,10 @@ export interface CreateModelVersionInput {
 export interface UpdateModelVersionInput {
   skillId?: string | null;
   name?: string | null;
+  /** The machine version ("1.0.0", "step-5000"); unique per skill. */
+  version?: string;
+  /** Free text about the model; null clears it (TASK-505). */
+  notes?: string | null;
   parentModelVersionId?: string | null;
   artifactUri?: string;
   checkpointUri?: string;

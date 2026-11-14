@@ -555,7 +555,7 @@ export const deploymentApi = {
   },
 
   /**
-   * Update a model version's skill link, deployment status or name
+   * Update a model version's skill link, deployment status, name, version or notes
    */
   async updateModelVersion(id: string, input: UpdateModelVersionInput): Promise<ModelVersion> {
     const response = await apiClient.patch<{ modelVersion: ModelVersion } | ModelVersion>(

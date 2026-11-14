@@ -187,27 +187,72 @@ describe('getDashboardStats', () => {
     const stats = await service.getDashboardStats();
 
     const nis2 = stats.frameworkScores.find((f) => f.framework === 'nis2')!;
-    expect(nis2).toEqual({ framework: 'nis2', score: 80, status: 'overdue', openItems: 1, totalItems: 4 });
+    // Open items: the overdue deadline and the one still ahead (TASK-505).
+    expect(nis2).toEqual({ framework: 'nis2', score: 80, status: 'overdue', openItems: 2, totalItems: 4 });
     expect(stats.overallScore).toBe(80);
   });
 
-  it('keeps a framework whose deadlines are all met or still ahead at 100 and compliant', async () => {
-    prismaMock.complianceGap.findMany.mockResolvedValue([]);
-    prismaMock.regulatoryDeadline.findMany.mockResolvedValue([
-      { deadline: daysFromNow(-30), requirements: '["a"]', completedRequirements: '["a"]' },
-      { deadline: daysFromNow(200), requirements: '["b"]', completedRequirements: '[]' },
-    ]);
+  function mockAlertCounts() {
     prismaMock.complianceGap.count.mockResolvedValue(0);
     prismaMock.providerDocumentation.count.mockResolvedValue(0);
     prismaMock.trainingRecord.count.mockResolvedValue(0);
     prismaMock.inspectionSchedule.count.mockResolvedValue(0);
     prismaMock.regulatoryDeadline.count.mockResolvedValue(0);
     prismaMock.riskAssessment.count.mockResolvedValue(0);
+  }
+
+  it('keeps a framework at 100 but in progress while a deadline still ahead has requirements open', async () => {
+    prismaMock.complianceGap.findMany.mockResolvedValue([]);
+    prismaMock.regulatoryDeadline.findMany.mockResolvedValue([
+      { deadline: daysFromNow(-30), requirements: '["a"]', completedRequirements: '["a"]' },
+      { deadline: daysFromNow(200), requirements: '["b"]', completedRequirements: '[]' },
+    ]);
+    mockAlertCounts();
 
     const stats = await service.getDashboardStats();
 
-    expect(stats.frameworkScores[0]).toMatchObject({ score: 100, status: 'compliant', openItems: 0, totalItems: 2 });
+    // The live AI Act case: 0 of 8 done, deadline far ahead — no longer "100% compliant" (TASK-505).
+    expect(stats.frameworkScores[0]).toMatchObject({ score: 100, status: 'in_progress', openItems: 1, totalItems: 2 });
     expect(stats.overallScore).toBe(100);
+  });
+
+  it('calls a framework compliant only when every deadline is met', async () => {
+    prismaMock.complianceGap.findMany.mockResolvedValue([]);
+    prismaMock.regulatoryDeadline.findMany.mockResolvedValue([
+      { deadline: daysFromNow(-30), requirements: '["a"]', completedRequirements: '["a"]' },
+      { deadline: daysFromNow(200), requirements: '["b","c"]', completedRequirements: '["b","c"]' },
+      { deadline: daysFromNow(40), requirements: '[]', completedRequirements: '[]' },
+    ]);
+    mockAlertCounts();
+
+    const stats = await service.getDashboardStats();
+
+    expect(stats.frameworkScores[0]).toMatchObject({ score: 100, status: 'compliant', openItems: 0, totalItems: 3 });
+  });
+
+  it('puts a framework at risk when a deadline under 90 days away is less than half done', async () => {
+    prismaMock.complianceGap.findMany.mockResolvedValue([]);
+    prismaMock.regulatoryDeadline.findMany.mockResolvedValue([
+      // The live machinery-regulation case: 0 of 5 done, about 67 days ahead.
+      { deadline: daysFromNow(67), requirements: '["a","b","c","d","e"]', completedRequirements: '[]' },
+    ]);
+    mockAlertCounts();
+
+    const stats = await service.getDashboardStats();
+
+    expect(stats.frameworkScores[0]).toMatchObject({ score: 100, status: 'at_risk', openItems: 1, totalItems: 1 });
+  });
+
+  it('keeps a near deadline that is half done in progress, not at risk', async () => {
+    prismaMock.complianceGap.findMany.mockResolvedValue([]);
+    prismaMock.regulatoryDeadline.findMany.mockResolvedValue([
+      { deadline: daysFromNow(30), requirements: '["a","b"]', completedRequirements: '["a"]' },
+    ]);
+    mockAlertCounts();
+
+    const stats = await service.getDashboardStats();
+
+    expect(stats.frameworkScores[0]).toMatchObject({ score: 100, status: 'in_progress', openItems: 1 });
   });
 
   it('reports critical-gap status as overdue when score is below 50', async () => {

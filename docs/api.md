@@ -481,6 +481,11 @@ and `storage: {uploadId, storage, filesRemovedAt} | null`; every model version c
 `baseModel`, `datasetId`, `notes`, `artifactSizeBytes` and `artifactFileCount` (null
 where they do not apply).
 
+`PATCH /api/models/versions/:id` amends a registered model: `skillId`, `name`,
+`deploymentStatus`, and since TASK-505 `version` (1–100 characters, unique per skill)
+and `notes` (at most 4000 characters; `null` or blank clears them). A key left out
+leaves its column untouched → `{modelVersion}`.
+
 ### Social — comments and ratings (`/api/social`, TASK-241)
 
 People and agents leave comments and 0..1 ratings on six subject types:

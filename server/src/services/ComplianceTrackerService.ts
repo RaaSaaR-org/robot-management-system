@@ -139,6 +139,9 @@ export interface RegulatoryDeadlineInput {
 /** Score points a framework loses per deadline that passed with requirements open — as much as a critical gap. */
 const OVERDUE_DEADLINE_PENALTY = 20;
 
+/** A deadline closer than this with less than half its requirements done puts its framework at risk. */
+const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+
 export class ComplianceTrackerService {
   constructor() {
     console.log('[ComplianceTrackerService] Initialized');
@@ -193,12 +196,21 @@ export class ComplianceTrackerService {
         where: { framework },
       });
 
-      // Past due with requirements still open — the same rule that marks a
-      // deadline "overdue" in getRegulatoryDeadlines (TASK-503).
-      const overdueDeadlines = deadlines.filter(d => {
-        if (d.deadline.getTime() >= now) return false;
+      // Requirements still open, whatever the date: each one is an open item,
+      // so a framework is not "compliant" while its deadline is 0 of 8 done
+      // (TASK-505).
+      const incompleteDeadlines = deadlines.filter(d => {
         const reqs = parseArr(d.requirements);
         return reqs.length > 0 && parseArr(d.completedRequirements).length < reqs.length;
+      });
+      // Past due with requirements still open — the same rule that marks a
+      // deadline "overdue" in getRegulatoryDeadlines (TASK-503).
+      const overdueDeadlines = incompleteDeadlines.filter(d => d.deadline.getTime() < now).length;
+      // Under 90 days and less than half done — getRegulatoryDeadlines' "at_risk".
+      const atRiskDeadlines = incompleteDeadlines.filter(d => {
+        const msLeft = d.deadline.getTime() - now;
+        const rate = parseArr(d.completedRequirements).length / parseArr(d.requirements).length;
+        return msLeft >= 0 && msLeft < NINETY_DAYS_MS && rate < 0.5;
       }).length;
 
       const totalItems = gaps.length + deadlines.length;
@@ -211,7 +223,7 @@ export class ComplianceTrackerService {
 
       const openItems = gaps.filter(g => g.status === 'open').length +
         gaps.filter(g => g.severity === 'critical').length +
-        overdueDeadlines;
+        incompleteDeadlines.length;
 
       // Calculate score: 100 - (weighted gaps and missed deadlines)
       const criticalGaps = gaps.filter(g => g.severity === 'critical').length;
@@ -229,6 +241,13 @@ export class ComplianceTrackerService {
       else if (score >= 50) status = 'at_risk';
       else if (criticalGaps > 0) status = 'overdue';
       else status = 'not_started';
+      // The score stays as it is; the status no longer claims more than the
+      // open items allow (TASK-505).
+      if (atRiskDeadlines > 0 && (status === 'compliant' || status === 'in_progress')) {
+        status = 'at_risk';
+      } else if (status === 'compliant' && openItems > 0) {
+        status = 'in_progress';
+      }
 
       scores.push({
         framework,
