@@ -330,6 +330,29 @@ body > :not(#root) *::after {
     --tw-prose-th-borders: currentColor;
     --tw-prose-td-borders: currentColor;
   }
+
+  /* Markdown on an ordinary panel (research findings and the like). The plugin's
+     own greys are tuned for a white page: in the dark theme they paint headings,
+     bold text and links almost black on the dark panel. Theme tokens follow
+     ThemeProvider in both themes, as docs-prose.css does for /docs. */
+  .prose-theme {
+    --tw-prose-body: var(--text-secondary);
+    --tw-prose-headings: var(--text-primary);
+    --tw-prose-lead: var(--text-secondary);
+    --tw-prose-links: var(--color-primary);
+    --tw-prose-bold: var(--text-primary);
+    --tw-prose-counters: var(--text-tertiary);
+    --tw-prose-bullets: var(--border-color-strong);
+    --tw-prose-hr: var(--border-color);
+    --tw-prose-quotes: var(--text-primary);
+    --tw-prose-quote-borders: var(--border-color-strong);
+    --tw-prose-captions: var(--text-tertiary);
+    --tw-prose-code: var(--text-primary);
+    --tw-prose-pre-code: var(--text-secondary);
+    --tw-prose-pre-bg: var(--bg-tertiary);
+    --tw-prose-th-borders: var(--border-color-strong);
+    --tw-prose-td-borders: var(--border-color);
+  }
 }
 
 /* ==========================================================================
