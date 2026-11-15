@@ -3,6 +3,7 @@ import { memo } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { KeyValueList, Panel, StatusTag, focusRing } from '@/shared/components/ui';
 import { ResearchOutcome } from './ResearchOutcome';
 import { campaignLink, kindLabel, narrative, number, object, readable, recordLink, strings, text } from '../utils/presentation';
@@ -37,7 +38,7 @@ export const ResearchDetail = memo(function ResearchDetail({ record, query }: { 
         {(markdown || summary || sections.length > 0) && <Panel as="article">
           <Panel.Header title={record.kind === 'idea' ? 'Research hypothesis' : 'Findings'} />
           <Panel.Body className="space-y-5">
-            {markdown ? <div className="prose prose-sm max-w-none break-words text-ink-primary"><ReactMarkdown skipHtml components={{ h1: ({ children }) => <h3>{children}</h3>, h2: ({ children }) => <h3>{children}</h3> }}>{markdown}</ReactMarkdown></div>
+            {markdown ? <div className="prose prose-sm prose-theme max-w-none break-words text-ink-primary"><ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} components={{ h1: ({ children }) => <h3>{children}</h3>, h2: ({ children }) => <h3>{children}</h3> }}>{markdown}</ReactMarkdown></div>
               : summary && <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink-primary">{summary}</p>}
             {sections.map(([title, content]) => <section key={title}><h3 className="mb-2 text-sm font-semibold text-ink-primary">{title}</h3><p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink-secondary">{content}</p></section>)}
           </Panel.Body>

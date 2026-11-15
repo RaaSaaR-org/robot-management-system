@@ -63,6 +63,15 @@ describe('ResearchPage', () => {
     expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
   });
 
+  it('renders Markdown tables in findings and themes the prose', async () => {
+    vi.mocked(researchApi.get).mockResolvedValue({ ...publication, kind: 'external-job', body: { markdown: '**Verdict: FAIL**\n\n| Run | Sorted |\n|---|---|\n| v5 | 18/40 |' } });
+    const { container } = page('/research/report-1');
+    const table = await screen.findByRole('table');
+    expect(table).toHaveTextContent('18/40');
+    expect(screen.getByRole('columnheader', { name: 'Sorted' })).toBeInTheDocument();
+    expect(container.querySelector('.prose-theme')).not.toBeNull();
+  });
+
   it('reads nested pilot predictions and preserves the filtered list on return', async () => {
     vi.mocked(researchApi.get).mockResolvedValue({ ...publication, kind: 'idea', body: {
       scope: 'training-integration-pilot', simulatorEvaluation: 'deferred', robotPerformance: 'unknown',
