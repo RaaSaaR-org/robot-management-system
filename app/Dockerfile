@@ -79,9 +79,10 @@ ENV API_UPSTREAM=server:3001
 # Expose port (non-root nginx binds 8080)
 EXPOSE 8080
 
-# Health check
+# Health check. 127.0.0.1, not localhost: busybox wget tries ::1 first and nginx
+# listens on IPv4 only, so a localhost probe always failed.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/health || exit 1
 
 # Base image entrypoint renders templates then starts nginx.
 CMD ["nginx", "-g", "daemon off;"]
