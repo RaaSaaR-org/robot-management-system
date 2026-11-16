@@ -54,6 +54,26 @@ describe('ResearchPage', () => {
     await waitFor(() => expect(screen.queryByText('Research service unavailable')).not.toBeInTheDocument());
   });
 
+  it('shows related http(s) links and drops any other scheme', async () => {
+    vi.mocked(researchApi.get).mockResolvedValue({ ...publication, kind: 'idea', body: { summary: 'A field finding', links: [
+      { label: 'app finding', url: 'http://app.local:18430/findings/fnd-1' },
+      { label: 'app compare', url: 'http://app.local:18430/compare?a=gt&b=cand' },
+      { label: 'bad', url: 'javascript:alert(1)' }, { label: 'relative', url: '/models' }, 'not an object',
+    ] } });
+    page('/research/report-1');
+    expect(await screen.findByRole('link', { name: 'http://app.local:18430/findings/fnd-1' })).toHaveAttribute('rel', 'noreferrer');
+    expect(screen.getByRole('link', { name: 'http://app.local:18430/compare?a=gt&b=cand' })).toHaveAttribute('href', 'http://app.local:18430/compare?a=gt&b=cand');
+    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href') ?? '');
+    expect(hrefs.some((href) => href.startsWith('javascript:'))).toBe(false);
+    expect(screen.queryByText('relative:')).not.toBeInTheDocument();
+  });
+
+  it('links a model version to its own page in the model registry', async () => {
+    vi.mocked(researchApi.get).mockResolvedValue({ ...publication, kind: 'report', body: { modelVersionId: 'mv-1' } });
+    page('/research/report-1');
+    expect(await screen.findByRole('link', { name: 'mv-1' })).toHaveAttribute('href', '/models?model=mv-1');
+  });
+
   it('renders report Markdown without executable links or raw HTML', async () => {
     vi.mocked(researchApi.get).mockResolvedValue({ ...publication, kind: 'report', body: { markdown: '# Findings\n\n[unsafe](javascript:alert(1))\n\n<script>alert(1)</script>' } });
     const { container } = page('/research/report-1');
