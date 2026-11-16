@@ -9,6 +9,28 @@ import { campaignLink, kindLabel, narrative, number, object, readable, recordLin
 import type { ResearchRecord } from '../types/research.types';
 import { formatDateTime } from '@/shared/utils/format';
 
+/** Most related links a record shows; a publisher sending more is cut, not refused. */
+const MAX_LINKS = 20;
+
+/**
+ * `body.links` — `{ label, url }` pairs a publisher attaches to point at pages outside this record
+ * (an app's finding page, a compare view, a model page). Only absolute http(s) URLs pass, so a
+ * `javascript:` or relative URL in the record can never become a live link here.
+ */
+function relatedLinks(value: unknown): { label: string; url: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const item = object(entry);
+    const url = text(item.url);
+    if (!url) return [];
+    try {
+      const parsed = new URL(url);
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) return [];
+    } catch { return []; }
+    return [{ label: text(item.label) ?? url, url }];
+  }).slice(0, MAX_LINKS);
+}
+
 export const ResearchDetail = memo(function ResearchDetail({ record, query }: { record: ResearchRecord; query: string }) {
   const body = record.body;
   const proposal = object(body.proposal);
@@ -21,6 +43,8 @@ export const ResearchDetail = memo(function ResearchDetail({ record, query }: { 
   const limitations = [...new Set([...strings(body.limitations), ...strings(proposal.limitations)])];
   const dimensions = Object.entries(object(body.dimensions));
   const linkClass = `break-all text-primary hover:underline ${focusRing}`;
+  const links = relatedLinks(body.links);
+  const modelVersionId = text(body.modelVersionId);
   const sections = [
     ['Why this could work', text(body.mechanism) ?? text(proposal.mechanism)],
     ['Rationale', text(body.rationale) ?? text(proposal.rationale)],
@@ -63,6 +87,12 @@ export const ResearchDetail = memo(function ResearchDetail({ record, query }: { 
           <Panel.Header title="Limitations" description="Boundaries recorded by the researcher." />
           <Panel.Body><ul className="list-disc space-y-2 pl-4 text-sm leading-relaxed text-ink-secondary">{limitations.map((item) => <li key={item}>{item}</li>)}</ul></Panel.Body>
         </Panel>}
+        {links.length > 0 && <Panel>
+          <Panel.Header title="Links" description="Pages the publisher points to, inside and outside this RMS." />
+          <Panel.Body><ul className="space-y-2 text-sm">{links.map((item) => <li key={`${item.label}-${item.url}`}>
+            <span className="text-ink-secondary">{item.label}: </span><a href={item.url} target="_blank" rel="noreferrer" className={linkClass}>{item.url}</a>
+          </li>)}</ul></Panel.Body>
+        </Panel>}
         <Panel>
           <Panel.Header title={`Evidence · ${record.evidence.length}`} description="Locations and checksums supplied by the publisher; not independently verified by this page." />
           <Panel.Body className="space-y-2">{record.evidence.length === 0 ? <p className="text-sm text-ink-muted">No artifacts attached.</p> : record.evidence.map((item, index) => <details key={`${item.uri}-${index}`} className="rounded-control border border-line-subtle bg-inset px-3 py-2">
@@ -87,7 +117,7 @@ export const ResearchDetail = memo(function ResearchDetail({ record, query }: { 
           ...(record.datasetVersion ? [{ label: 'Dataset version', value: record.datasetVersion, mono: true }] : []),
           ...(record.sourceRunId ? [{ label: 'Source run', value: record.sourceRunId, mono: true }] : []),
           ...(strings(body.jobIds).length ? [{ label: 'Cluster jobs', value: strings(body.jobIds).join(', '), mono: true }] : []),
-          ...(text(body.modelVersionId) ? [{ label: 'Model version', value: <Link className={linkClass} to="/models">{text(body.modelVersionId)}</Link> }] : []),
+          ...(modelVersionId ? [{ label: 'Model version', value: <Link className={linkClass} to={`/models?model=${encodeURIComponent(modelVersionId)}`}>{modelVersionId}</Link> }] : []),
         ]} /></Panel.Body>
       </Panel>
     </div>
