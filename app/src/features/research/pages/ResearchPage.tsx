@@ -25,6 +25,11 @@ export const ResearchPage = memo(function ResearchPage() {
   const query = params.toString();
   const apiParams = new URLSearchParams(params);
   apiParams.delete('q');
+  // Corrected records are hidden unless asked for (TASK-513); the list then shows one line per claim.
+  const showCorrected = params.get('corrected') === 'show';
+  apiParams.delete('corrected');
+  if (!showCorrected) apiParams.set('current', 'true');
+  const toggleCorrected = () => { const next = new URLSearchParams(params); next.delete('page'); if (showCorrected) next.delete('corrected'); else next.set('corrected', 'show'); setParams(next); };
   const search = params.get('q') ?? '';
   const { list, record, loading, error } = useResearch(id, apiParams.toString(), revision);
   const retry = () => setRevision((value) => value + 1);
@@ -63,10 +68,10 @@ export const ResearchPage = memo(function ResearchPage() {
         <FormField label="Publication type"><Select name="kind" defaultValue={params.get('kind') ?? ''} placeholder="All types" options={kinds} /></FormField>
         <FormField label="Campaign"><Input name="campaignId" defaultValue={params.get('campaignId') ?? ''} placeholder="Campaign ID" /></FormField>
         <FormField label="Dataset"><Input name="datasetId" defaultValue={params.get('datasetId') ?? ''} placeholder="Dataset ID" /></FormField>
-        <div className="flex flex-wrap gap-2"><Button type="submit" variant="secondary">Apply filters</Button>{params.size > 0 && <Button variant="ghost" onClick={() => setParams({})}>Clear filters</Button>}</div>
+        <div className="flex flex-wrap gap-2"><Button type="submit" variant="secondary">Apply filters</Button><Button variant="ghost" aria-pressed={showCorrected} onClick={toggleCorrected}>{showCorrected ? 'Hide corrected records' : 'Show corrected records'}</Button>{params.size > 0 && <Button variant="ghost" onClick={() => setParams({})}>Clear filters</Button>}</div>
       </form></Panel>
       <Panel padding="none">
-        <Panel.Header title="Publications" description={list ? `${list.pagination.total} matching publications · newest first · immutable history` : 'Ideas, experiments, reports and dataset assessments.'}
+        <Panel.Header title="Publications" description={list ? `${list.pagination.total} matching publications · newest first · immutable history${showCorrected ? '' : ' · corrected records hidden'}` : 'Ideas, experiments, reports and dataset assessments.'}
           actions={<SearchInput value={search} placeholder="Search this page" className="sm:w-64" onChange={(value) => { const next = new URLSearchParams(params); if (value) next.set('q', value); else next.delete('q'); setParams(next, { replace: true }); }} />} />
         {search && list && <p role="status" className="px-5 pt-3 text-xs text-ink-tertiary">{rows.length} of {list.records.length} publications on this page match. Search applies to the current page only.</p>}
         <DataTable columns={columns} rows={rows} getRowId={(row) => row.id} isLoading={loading}

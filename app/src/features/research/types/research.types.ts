@@ -17,6 +17,8 @@ export interface ResearchRecord {
   author: { id: string; name: string; kind: 'human' | 'service' };
   createdAt: string;
   contentHash: string;
+  /** The newest record that corrects this one (single read only). */
+  supersededBy?: string;
 }
 export interface ResearchList {
   records: ResearchRecord[];

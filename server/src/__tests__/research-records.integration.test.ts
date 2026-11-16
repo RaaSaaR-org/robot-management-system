@@ -139,6 +139,14 @@ describe('immutable research publication', () => {
     await post('a', idea({ id: 'correction-1', idempotencyKey: 'correction-1', supersedesId: 'idea-1', title: 'Corrected claim' })).expect(201);
     expect((await get('a', '/idea-1')).body.record.title).toBe('Change table appearance');
     expect((await get('a', '/correction-1')).body.record.supersedesId).toBe('idea-1');
+    expect((await get('a', '/idea-1')).body.record.supersededBy).toBe('correction-1');
+    expect((await get('a', '/correction-1')).body.record.supersededBy).toBeUndefined();
+    const ids = async (path: string) => (await get('a', path)).body.records.map((r: { id: string }) => r.id);
+    expect(await ids('?campaignId=apple')).toEqual(expect.arrayContaining(['idea-1', 'correction-1']));
+    expect(await ids('?campaignId=apple&current=true')).not.toContain('idea-1');
+    expect(await ids('?campaignId=apple&current=true')).toContain('correction-1');
+    expect((await get('b', '?current=true')).body.records).toEqual([]);
+    await get('a', '?current=yes').expect(400);
     await post('b', idea({ id: 'b-child', parentId: 'correction-1' })).expect(400);
     await post('a', idea({ id: 'self', parentId: 'self' })).expect(400);
     await request(app).patch('/api/research/records/idea-1').set('x-test-user', 'a').send({ title: 'Mutated' }).expect(404);

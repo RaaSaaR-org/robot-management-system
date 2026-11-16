@@ -115,6 +115,8 @@ export const listResearchSchema = z.object({
   datasetId: identifier.optional(),
   sourceRunId: identifier.optional(),
   idempotencyKey: z.string().min(1).max(200).optional(),
+  // 'true' leaves out every record a later correction supersedes (TASK-513).
+  current: z.enum(['true', 'false']).optional(),
 }).strict();
 
 export type PublishResearchInput = z.infer<typeof publishResearchSchema>;
@@ -125,4 +127,6 @@ export interface ResearchRecord extends PublishResearchInput {
   tenantId: string;
   createdAt: string;
   contentHash: string;
+  /** The newest record that corrects this one; set on a single read only (TASK-513). */
+  supersededBy?: string;
 }

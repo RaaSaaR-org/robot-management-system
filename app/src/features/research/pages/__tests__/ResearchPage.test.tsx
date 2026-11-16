@@ -49,9 +49,26 @@ describe('ResearchPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
     expect(await screen.findByText('Research service unavailable')).toBeInTheDocument();
     const calls = vi.mocked(researchApi.list).mock.calls;
-    expect(calls[calls.length - 1]?.[0]).toBe('kind=experiment&campaignId=new-campaign');
+    expect(calls[calls.length - 1]?.[0]).toBe('kind=experiment&campaignId=new-campaign&current=true');
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.queryByText('Research service unavailable')).not.toBeInTheDocument());
+  });
+
+  it('hides corrected records by default and shows them on request', async () => {
+    page();
+    await screen.findByRole('link', { name: 'Apple data assessment' });
+    expect(vi.mocked(researchApi.list).mock.calls[0]?.[0]).toBe('current=true');
+    expect(screen.getByText(/corrected records hidden/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show corrected records' }));
+    await waitFor(() => { const calls = vi.mocked(researchApi.list).mock.calls; expect(calls[calls.length - 1]?.[0]).toBe(''); });
+    expect(screen.getByRole('button', { name: 'Hide corrected records' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('says when a later record corrects the open one', async () => {
+    vi.mocked(researchApi.get).mockResolvedValue({ ...publication, supersededBy: 'report-2' });
+    page('/research/report-1');
+    expect(await screen.findByText('Corrected')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'report-2' })).toHaveAttribute('href', '/research/report-2');
   });
 
   it('renders report Markdown without executable links or raw HTML', async () => {
