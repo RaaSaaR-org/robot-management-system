@@ -27,6 +27,10 @@ export const ResearchDetail = memo(function ResearchDetail({ record, query }: { 
     ['What would disprove it', text(body.falsification) ?? text(proposal.falsification)],
   ].filter((entry) => entry[1]);
   return <>
+    {record.supersededBy && <div role="status" className="flex flex-wrap items-center gap-3 rounded-control border border-line bg-inset px-4 py-3">
+      <StatusTag tone="neutral">Corrected</StatusTag>
+      <p className="text-sm text-ink-secondary">A later record corrects this one: <Link className={linkClass} to={recordLink(record.supersededBy, query)}>{record.supersededBy}</Link></p>
+    </div>}
     {body.scope === 'training-integration-pilot' && <div className="flex flex-wrap items-center gap-3 rounded-control border border-line bg-inset px-4 py-3">
       <StatusTag tone="neutral">Training integration pilot</StatusTag>
       <p className="text-sm text-ink-secondary">{body.simulatorEvaluation === 'deferred' ? 'Simulation deferred. Robot performance remains unknown.' : 'Training integration evidence; see evaluation records for robot performance.'}</p>

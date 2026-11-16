@@ -123,11 +123,19 @@ export class ResearchService {
   }
 
   async list(actor: ResearchActor, query: ListResearchQuery) {
-    const { page, pageSize, idempotencyKey, ...filters } = query;
+    const { page, pageSize, idempotencyKey, current, ...filters } = query;
     const where: Prisma.ResearchRecordWhereInput = {
       ...filters, tenantId: actor.tenantId,
       ...(idempotencyKey ? { idempotencyKey, authorId: actor.id } : {}),
     };
+    if (current === 'true') {
+      // A correction names what it supersedes, so the superseded set is read off the corrections.
+      const corrections = await prisma.researchRecord.findMany({
+        where: { tenantId: actor.tenantId, supersedesId: { not: null } }, select: { supersedesId: true },
+      });
+      const superseded = [...new Set(corrections.map((row) => row.supersedesId!))];
+      if (superseded.length) where.id = { notIn: superseded };
+    }
     const [rows, total] = await Promise.all([
       prisma.researchRecord.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], skip: (page - 1) * pageSize, take: pageSize }),
       prisma.researchRecord.count({ where }),
@@ -138,7 +146,10 @@ export class ResearchService {
   async get(actor: ResearchActor, id: string) {
     const row = await prisma.researchRecord.findFirst({ where: { id, tenantId: actor.tenantId } });
     if (!row) throw new AppError('Research record not found', 404, 'RESEARCH_NOT_FOUND');
-    return record(row);
+    const newer = await prisma.researchRecord.findFirst({
+      where: { tenantId: actor.tenantId, supersedesId: id }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], select: { id: true },
+    });
+    return { ...record(row), ...(newer ? { supersededBy: newer.id } : {}) };
   }
 
   async publish(actor: ResearchActor, input: PublishResearchInput) {
